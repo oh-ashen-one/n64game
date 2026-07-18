@@ -1,0 +1,56 @@
+# macOS and editor state
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials*
+
+# Reference downloads must never enter the public repository
+reference-downloads/
+references/private/
+
+# libdragon / Tiny3D build outputs
+build/
+filesystem/
+*.o
+*.a
+*.d
+*.elf
+*.map
+*.dfs
+*.sprite
+*.font64
+*.t3dm
+*.wav64
+*.xm64
+*.z64
+*.n64
+*.v64
+*.eep
+
+# Tool and asset caches
+.cache/
+.tmp/
+tmp/
+tools/.venv/
+__pycache__/
+*.pyc
+
+# Blender recovery and backups
+*.blend1
+*.blend2
+*.blend@
+
+# Render/test artifacts generated locally
+captures/local/
+art/reviews/local/
+test-results/local/
