@@ -1,0 +1,1313 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "pathname"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+GRAPH_PATH = ROOT.join("docs/DIALOGUE_GRAPH.md")
+DATA_PATH = ROOT.join("docs/DATA_SCHEMAS.md")
+STORY_PATH = ROOT.join("docs/STORY_AND_TIMING.md")
+TECH_PATH = ROOT.join("docs/TECHNICAL_ARCHITECTURE.md")
+INVENTORY_PATH = ROOT.join("docs/ASSET_INVENTORY.md")
+LEDGER_PATH = ROOT.join("docs/ASSET_LEDGER.md")
+ERRORS = []
+
+def error(message)
+  ERRORS << message
+end
+
+def parse_integer(text, context)
+  Integer(text, 0)
+rescue ArgumentError
+  error("#{context}: expected an integer, got #{text.inspect}")
+  0
+end
+
+def split_drow(source, line_number)
+  unless source.start_with?("DROW(") && source.end_with?(")")
+    error("DIALOGUE_GRAPH.md:#{line_number}: malformed DROW wrapper")
+    return []
+  end
+
+  body = source[5...-1]
+  fields = []
+  field = +""
+  quoted = false
+  escaped = false
+
+  body.each_char do |character|
+    if escaped
+      field << character
+      escaped = false
+    elsif character == "\\" && quoted
+      field << character
+      escaped = true
+    elsif character == '"'
+      quoted = !quoted
+      field << character
+    elsif character == "," && !quoted
+      fields << field.strip
+      field = +""
+    else
+      field << character
+    end
+  end
+  fields << field.strip
+  error("DIALOGUE_GRAPH.md:#{line_number}: unterminated quoted field") if quoted
+  fields
+end
+
+def enum_rows(text, name_pattern)
+  text.scan(/typedef enum\s+([A-Za-z0-9_]+)\s*\{(.*?)\}\s*[A-Za-z0-9_]+\s*;/m).flat_map do |name, body|
+    next [] unless name.match?(name_pattern)
+
+    body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/).map do |symbol, value|
+      [symbol, Integer(value, 0), name]
+    end
+  end
+end
+
+def extract_c_array(text, declaration)
+  start_index = text.index(declaration)
+  unless start_index
+    error("DATA_SCHEMAS.md: missing #{declaration}")
+    return ""
+  end
+
+  brace_index = text.index("{", start_index)
+  unless brace_index
+    error("DATA_SCHEMAS.md: missing opening brace for #{declaration}")
+    return ""
+  end
+
+  depth = 0
+  text[brace_index..].each_char.with_index do |character, offset|
+    depth += 1 if character == "{"
+    depth -= 1 if character == "}"
+    return text[(brace_index + 1)...(brace_index + offset)] if depth.zero?
+  end
+
+  error("DATA_SCHEMAS.md: unterminated #{declaration}")
+  ""
+end
+
+def markdown_table(text, header_pattern, context)
+  lines = text.lines
+  header_index = lines.index { |line| line.match?(header_pattern) }
+  unless header_index
+    error("#{context}: missing Markdown table header")
+    return ""
+  end
+
+  separator = lines[header_index + 1]
+  unless separator&.match?(/^\|(?:\s*:?-+:?\s*\|)+\s*$/)
+    error("#{context}: malformed Markdown table separator")
+    return ""
+  end
+
+  end_index = header_index + 2
+  end_index += 1 while end_index < lines.length && lines[end_index].start_with?("|")
+  lines[header_index...end_index].join
+end
+
+def c_array_rows(text, declaration, expected_rows, expected_fields, context)
+  body = extract_c_array(text, declaration)
+  initializers = body.scan(/\{\s*([^{}]+?)\s*\}/m).flatten
+  unless initializers.length == expected_rows
+    error("#{context}: expected #{expected_rows} initializers, got #{initializers.length}")
+  end
+
+  initializers.each_with_index.each_with_object([]) do |(initializer, index), rows|
+    fields = initializer.split(",").map(&:strip)
+    unless fields.length == expected_fields
+      error("#{context} row #{index}: expected #{expected_fields} fields, got #{fields.length}")
+      next
+    end
+    rows << fields
+  end
+end
+
+unless GRAPH_PATH.file? && DATA_PATH.file? && STORY_PATH.file? && TECH_PATH.file? && INVENTORY_PATH.file? && LEDGER_PATH.file?
+  [GRAPH_PATH, DATA_PATH, STORY_PATH, TECH_PATH, INVENTORY_PATH, LEDGER_PATH].each do |path|
+    error("missing required file: #{path.relative_path_from(ROOT)}") unless path.file?
+  end
+end
+
+graph = GRAPH_PATH.file? ? GRAPH_PATH.read : ""
+data = DATA_PATH.file? ? DATA_PATH.read : ""
+story = STORY_PATH.file? ? STORY_PATH.read : ""
+technical = TECH_PATH.file? ? TECH_PATH.read : ""
+inventory = INVENTORY_PATH.file? ? INVENTORY_PATH.read : ""
+ledger = LEDGER_PATH.file? ? LEDGER_PATH.read : ""
+
+actual_graph_hash = Digest::SHA256.hexdigest(graph)
+graph_snapshot = data.match(/frozen Gate 2 input SHA-256 is `([0-9a-f]{64})`/)
+if graph_snapshot
+  unless graph_snapshot[1] == actual_graph_hash
+    error("DATA_SCHEMAS.md dialogue graph hash is stale: documented #{graph_snapshot[1]}, actual #{actual_graph_hash}")
+  end
+else
+  error("DATA_SCHEMAS.md: missing frozen DIALOGUE_GRAPH SHA-256")
+end
+
+technical_graph_snapshot = technical.match(/frozen dialogue input is exactly SHA-256 `([0-9a-f]{64})`/)
+if technical_graph_snapshot
+  unless technical_graph_snapshot[1] == actual_graph_hash
+    error("TECHNICAL_ARCHITECTURE.md dialogue graph hash is stale: documented #{technical_graph_snapshot[1]}, actual #{actual_graph_hash}")
+  end
+else
+  error("TECHNICAL_ARCHITECTURE.md: missing frozen DIALOGUE_GRAPH SHA-256")
+end
+
+rows = []
+graph.lines.each_with_index do |line, index|
+  next unless line.match?(/^DROW\([A-Z][A-Z0-9_]+,/)
+
+  fields = split_drow(line.strip, index + 1)
+  unless fields.length == 16
+    error("DIALOGUE_GRAPH.md:#{index + 1}: DROW has #{fields.length} fields; expected 16")
+    next
+  end
+
+  unless fields.first.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    error("DIALOGUE_GRAPH.md:#{index + 1}: invalid symbol #{fields.first.inspect}")
+  end
+  unless fields.last.start_with?('"') && fields.last.end_with?('"')
+    error("DIALOGUE_GRAPH.md:#{index + 1}: exact text must be a quoted final field")
+  end
+
+  text = fields.last[1...-1]
+  if text.include?("\\\"") || text.include?("\\n")
+    error("DIALOGUE_GRAPH.md:#{index + 1}: exact text may not hide quotes/newlines behind escapes")
+  end
+
+  rows << {
+    symbol: fields[0],
+    dialogue_id: parse_integer(fields[1], "DIALOGUE_GRAPH.md:#{index + 1} dialogue_hex"),
+    dialogue_decimal: parse_integer(fields[2], "DIALOGUE_GRAPH.md:#{index + 1} dialogue_decimal"),
+    string_id: parse_integer(fields[3], "DIALOGUE_GRAPH.md:#{index + 1} string_hex"),
+    string_decimal: parse_integer(fields[4], "DIALOGUE_GRAPH.md:#{index + 1} string_decimal"),
+    speaker_id: parse_integer(fields[5], "DIALOGUE_GRAPH.md:#{index + 1} speaker_id"),
+    next_id: parse_integer(fields[6], "DIALOGUE_GRAPH.md:#{index + 1} next_dialogue_id"),
+    alternate_id: parse_integer(fields[7], "DIALOGUE_GRAPH.md:#{index + 1} alternate_dialogue_id"),
+    condition_id: parse_integer(fields[8], "DIALOGUE_GRAPH.md:#{index + 1} condition_id"),
+    action_xref: parse_integer(fields[9], "DIALOGUE_GRAPH.md:#{index + 1} action_list_xref"),
+    camera_id: parse_integer(fields[10], "DIALOGUE_GRAPH.md:#{index + 1} camera_cue_id"),
+    emote_id: parse_integer(fields[11], "DIALOGUE_GRAPH.md:#{index + 1} emote_id"),
+    flags: parse_integer(fields[12], "DIALOGUE_GRAPH.md:#{index + 1} flags"),
+    ticks: parse_integer(fields[13], "DIALOGUE_GRAPH.md:#{index + 1} auto_advance_ticks"),
+    owner: fields[14],
+    text: text,
+    line: index + 1
+  }
+end
+
+error("DIALOGUE_GRAPH.md: expected 223 canonical DROW rows, got #{rows.length}") unless rows.length == 223
+
+{
+  "symbol" => :symbol,
+  "DialogueId" => :dialogue_id,
+  "StringId" => :string_id
+}.each do |label, key|
+  rows.group_by { |row| row.fetch(key) }.each do |value, collisions|
+    next if collisions.length == 1
+
+    rendered = value.is_a?(Integer) ? format("0x%04X", value) : value
+    error("duplicate #{label} #{rendered}: #{collisions.map { |row| row[:symbol] }.join(', ')}")
+  end
+end
+
+owners = %w[
+  ROOT_STORY ROOT_INTERACTION ROOT_RESULT ROOT_TUTORIAL ROOT_UI ROOT_HELP
+  ROOT_OPTIONAL ROOT_EXAMINE CHAIN CHOICE_TARGET
+]
+bridge_string_ids = (0x6F01..0x6F10).to_a.freeze
+dialogue_by_id = rows.to_h { |row| [row[:dialogue_id], row] }
+
+rows.each do |row|
+  context = "DIALOGUE_GRAPH.md:#{row[:line]} #{row[:symbol]}"
+  error("#{context}: dialogue hex/decimal mirrors disagree") unless row[:dialogue_id] == row[:dialogue_decimal]
+  error("#{context}: string hex/decimal mirrors disagree") unless row[:string_id] == row[:string_decimal]
+  unless bridge_string_ids.include?(row[:string_id]) || row[:string_id] == row[:dialogue_id] + 0x4000
+    error("#{context}: StringId must equal DialogueId + 0x4000 outside the 16 bridge rows")
+  end
+  error("#{context}: speaker_id outside 0..9") unless (0..9).cover?(row[:speaker_id])
+  error("#{context}: emote_id outside 0..11") unless (0..11).cover?(row[:emote_id])
+  unless row[:camera_id].zero? || (0x8600..0x860E).cover?(row[:camera_id])
+    error("#{context}: camera cue #{format('0x%04X', row[:camera_id])} is outside 0x8600..0x860E")
+  end
+  error("#{context}: flags use bits outside 0x1F") unless (row[:flags] & ~0x1F).zero?
+  error("#{context}: negative auto-advance ticks") if row[:ticks].negative?
+  error("#{context}: unknown owner class #{row[:owner]}") unless owners.include?(row[:owner])
+  error("#{context}: empty exact text") if row[:text].empty?
+
+  [[:next_id, row[:next_id]], [:alternate_id, row[:alternate_id]]].each do |label, value|
+    next if value.zero?
+
+    error("#{context}: #{label} #{format('0x%04X', value)} does not resolve") unless dialogue_by_id.key?(value)
+  end
+
+  choice = (row[:flags] & 0x02) != 0
+  close_after = (row[:flags] & 0x08) != 0
+  if choice
+    error("#{context}: choice requires two nonzero targets") if row[:next_id].zero? || row[:alternate_id].zero?
+  elsif !row[:alternate_id].zero?
+    error("#{context}: non-choice row has an alternate target")
+  end
+  if !choice && row[:next_id].zero? && !close_after
+    error("#{context}: terminal non-choice row lacks CLOSE_AFTER")
+  end
+end
+
+inbound_counts = Hash.new(0)
+rows.each do |row|
+  [row[:next_id], row[:alternate_id]].each do |target|
+    inbound_counts[target] += 1 unless target.zero?
+  end
+end
+rows.select { |row| row[:owner] == "CHAIN" && inbound_counts[row[:dialogue_id]].zero? }.each do |row|
+  error("#{row[:symbol]} is annotated CHAIN but has no inbound DialogueNode edge")
+end
+
+rows.each do |origin|
+  stack = [[origin[:dialogue_id], [], 0]]
+  until stack.empty?
+    current_id, ancestors, advances = stack.pop
+    if ancestors.include?(current_id)
+      cycle = (ancestors.drop_while { |id| id != current_id } + [current_id]).map do |id|
+        dialogue_by_id.fetch(id)[:symbol]
+      end
+      error("dialogue cycle reachable from #{origin[:symbol]}: #{cycle.join(' -> ')}")
+      next
+    end
+    if advances > 48
+      error("dialogue chain from #{origin[:symbol]} exceeds 48 advances")
+      next
+    end
+
+    current = dialogue_by_id.fetch(current_id)
+    [current[:next_id], current[:alternate_id]].each do |target|
+      stack << [target, ancestors + [current_id], advances + 1] unless target.zero?
+    end
+  end
+end
+
+if rows.length > 256
+  error("DialogueNode table exceeds DIALOGUE_NODE_TABLE_MAX=256: #{rows.length}")
+end
+
+# Every player-facing row in Story sections 5 and 6 must be present, and its
+# exact UTF-8 copy must agree. This deliberately treats Story as the copy owner.
+story_script = story[/^## 5\..*?(?=^## 7\.)/m]
+unless story_script
+  error("STORY_AND_TIMING.md: cannot isolate sections 5 and 6")
+else
+  story_rows = {}
+  story_script.lines.each_with_index do |line, index|
+    match = line.match(/^\|\s*`([A-Z][A-Z0-9_]+)`\s*\|/)
+    next unless match
+
+    symbol = match[1]
+    if story_rows.key?(symbol)
+      error("STORY_AND_TIMING.md sections 5-6 duplicate first-column ID #{symbol}")
+    else
+      story_rows[symbol] = [line, index + 1]
+    end
+  end
+
+  graph_by_symbol = rows.to_h { |row| [row[:symbol], row] }
+  story_rows.each do |symbol, (line, relative_line)|
+    row = graph_by_symbol[symbol]
+    unless row
+      error("STORY_AND_TIMING.md sections 5-6: missing DROW for #{symbol}")
+      next
+    end
+    unless line.include?("`#{row[:text]}`")
+      error("story/graph exact-copy mismatch for #{symbol} (story section-relative line #{relative_line}, graph line #{row[:line]})")
+    end
+  end
+
+  speaker_ids = {
+    "Dr. Sera Venn" => 3,
+    "Dr. Sera Venn — Relay" => 3,
+    "Dr. Sera Venn — intercom" => 3,
+    "Tavi" => 2,
+    "Tavi — recorded" => 2,
+    "Tavi — behind door" => 2,
+    "Director Oren Saye" => 4,
+    "Ivo Veyra" => 5,
+    "Ivo Veyra — recorded" => 5,
+    "Rusk" => 6,
+    "Mara Ovelle" => 7,
+    "Jo Renn" => 8,
+    "Pell Anwar" => 9,
+    "Field Relay" => 0
+  }
+  story_rows.each do |symbol, (line, _relative_line)|
+    row = graph_by_symbol[symbol]
+    next unless row
+
+    cells = line.split("|").map(&:strip)
+    rendered_speaker = cells[2]&.sub(/\A`/, "")&.sub(/`\z/, "")
+    expected_speaker = speaker_ids[rendered_speaker]
+    next if expected_speaker.nil?
+
+    if row[:speaker_id] != expected_speaker
+      error("story/graph speaker mismatch for #{symbol}: story #{rendered_speaker}=#{expected_speaker}, graph #{row[:speaker_id]}")
+    end
+  end
+end
+
+# All numeric DialogueId declarations in Data must resolve to graph rows. The
+# tutorial constants are explicit aliases; every other shared symbol must match.
+data_dialogue_rows = enum_rows(data, /DialogueIdValue\z/)
+tutorial_aliases = {
+  "TUTORIAL_GATE1_INSTRUCTION" => "SIM_G1_HP",
+  "TUTORIAL_GATE1_REPEAT" => "SIM_G1_REPEAT",
+  "TUTORIAL_GATE2_INSTRUCTION" => "SIM_G2_001",
+  "TUTORIAL_GATE2_REPEAT" => "SIM_G2_REPEAT",
+  "TUTORIAL_GATE3_INSTRUCTION" => "SIM_G3_001",
+  "TUTORIAL_GATE3_REPEAT" => "SIM_G3_REPEAT",
+  "TUTORIAL_GATE4_INSTRUCTION" => "SIM_G4_001",
+  "TUTORIAL_GATE4_REPEAT" => "SIM_G4_REPEAT",
+  "TUTORIAL_GATE5_INSTRUCTION" => "SIM_G5_001",
+  "TUTORIAL_GATE5_REPEAT" => "SIM_G5_REPEAT"
+}
+graph_by_symbol = rows.to_h { |row| [row[:symbol], row] }
+data_dialogue_rows.each do |symbol, value, enum_name|
+  graph_symbol = tutorial_aliases.fetch(symbol, symbol)
+  row = graph_by_symbol[graph_symbol]
+  if row.nil?
+    error("DATA_SCHEMAS.md #{enum_name}: #{symbol} lacks DROW #{graph_symbol}")
+  elsif row[:dialogue_id] != value
+    error("DATA_SCHEMAS.md #{enum_name}: #{symbol}=#{format('0x%04X', value)} but #{graph_symbol}=#{format('0x%04X', row[:dialogue_id])}")
+  end
+end
+
+# TutorialOwnerEventValue, TutorialEventRouteDef, and Graph section 3.2 are
+# three representations of one registry. Compare exact event/root sets so a
+# newly authored tutorial branch cannot exist in only one representation.
+tutorial_graph_section = graph[/^### 3\.2 Tutorial-owned roots\s*$(.*?)(?=^### 3\.3\b)/m]
+if tutorial_graph_section.nil?
+  error("DIALOGUE_GRAPH.md: missing tutorial-owned roots section 3.2")
+else
+  tutorial_graph_table = markdown_table(
+    tutorial_graph_section,
+    /^\|\s*Tutorial owner event\s*\|\s*Root\s*\|\s*Completion\/repeat\s*\|\s*$/,
+    "DIALOGUE_GRAPH.md section 3.2 tutorial-owned roots"
+  )
+  tutorial_graph_pairs = {}
+  tutorial_graph_data_lines = tutorial_graph_table.lines.drop(2)
+  unless tutorial_graph_data_lines.length == 17
+    error("DIALOGUE_GRAPH.md section 3.2: expected 17 tutorial-owned event rows, got #{tutorial_graph_data_lines.length}")
+  end
+  tutorial_graph_data_lines.each_with_index do |line, index|
+    match = line.match(/^\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*`([A-Z][A-Z0-9_]+|0)`\s*\|/)
+    unless match
+      error("DIALOGUE_GRAPH.md section 3.2 tutorial row #{index}: malformed event/root cells")
+      next
+    end
+
+    graph_event = match[1]
+    event_symbol = if graph_event == "TUTORIAL_IMPOSSIBLE_STATE"
+                     "TUTORIAL_EVENT_IMPOSSIBLE_STATE"
+                   else
+                     "TUTORIAL_EVENT_#{graph_event}"
+                   end
+    if tutorial_graph_pairs.key?(event_symbol)
+      error("DIALOGUE_GRAPH.md section 3.2 duplicates tutorial event #{graph_event}")
+      next
+    end
+    root_symbol = match[2]
+    unless root_symbol == "0" || graph_by_symbol.key?(root_symbol)
+      error("DIALOGUE_GRAPH.md section 3.2 root #{root_symbol} has no DROW")
+    end
+    tutorial_graph_pairs[event_symbol] = root_symbol
+  end
+
+  tutorial_event_rows = enum_rows(data, /TutorialOwnerEventValue\z/)
+  tutorial_event_symbols = tutorial_event_rows.map(&:first)
+  unless tutorial_event_rows.length == 17 && tutorial_event_symbols.uniq.length == 17
+    error("DATA_SCHEMAS.md TutorialOwnerEventValue must contain 17 unique symbols")
+  end
+  tutorial_event_values = tutorial_event_rows.map { |_symbol, value, _enum| value }
+  unless tutorial_event_values.sort == (1..17).to_a
+    error("DATA_SCHEMAS.md TutorialOwnerEventValue must use each numeric value 1..17 exactly once")
+  end
+  unless tutorial_event_symbols.sort == tutorial_graph_pairs.keys.sort
+    missing = tutorial_graph_pairs.keys - tutorial_event_symbols
+    extra = tutorial_event_symbols - tutorial_graph_pairs.keys
+    error("tutorial event enum/Graph section 3.2 set mismatch: missing=#{missing.sort.join(',')} extra=#{extra.sort.join(',')}")
+  end
+
+  tutorial_route_declaration = data.match(/static const TutorialEventRouteDef TUTORIAL_EVENT_ROUTES\[(\d+)\]\s*=/)
+  if tutorial_route_declaration.nil?
+    error("DATA_SCHEMAS.md: missing TUTORIAL_EVENT_ROUTES declaration")
+  else
+    declared_tutorial_routes = tutorial_route_declaration[1].to_i
+    unless declared_tutorial_routes == 17
+      error("DATA_SCHEMAS.md: TUTORIAL_EVENT_ROUTES declares #{declared_tutorial_routes} rows; expected 17")
+    end
+    tutorial_route_body = extract_c_array(
+      data,
+      "static const TutorialEventRouteDef TUTORIAL_EVENT_ROUTES[#{declared_tutorial_routes}]"
+    )
+    tutorial_route_initializers = tutorial_route_body.scan(/\{\s*([^{}]+?)\s*\}/m).flatten
+    unless tutorial_route_initializers.length == 17
+      error("DATA_SCHEMAS.md: expected 17 TutorialEventRouteDef initializers, got #{tutorial_route_initializers.length}")
+    end
+
+    tutorial_route_pairs = {}
+    tutorial_route_initializers.each_with_index do |initializer, index|
+      fields = initializer.split(",").map(&:strip)
+      unless fields.length == 8
+        error("DATA_SCHEMAS.md TutorialEventRouteDef row #{index}: expected 8 fields, got #{fields.length}")
+        next
+      end
+
+      event_symbol = fields[0]
+      if tutorial_route_pairs.key?(event_symbol)
+        error("DATA_SCHEMAS.md TUTORIAL_EVENT_ROUTES duplicates #{event_symbol}")
+        next
+      end
+      error("DATA_SCHEMAS.md TutorialEventRouteDef row #{index}: reserved field must be literal zero") unless fields[7] == "0"
+
+      root_token = fields[3]
+      root_symbol = if root_token == "0"
+                      "0"
+                    else
+                      tutorial_aliases.fetch(root_token, root_token)
+                    end
+      unless root_symbol == "0" || graph_by_symbol.key?(root_symbol)
+        error("DATA_SCHEMAS.md TutorialEventRouteDef row #{index}: root #{root_token} does not resolve to a DROW")
+      end
+      tutorial_route_pairs[event_symbol] = root_symbol
+    end
+
+    unless tutorial_route_pairs.keys.sort == tutorial_event_symbols.sort
+      missing = tutorial_event_symbols - tutorial_route_pairs.keys
+      extra = tutorial_route_pairs.keys - tutorial_event_symbols
+      error("TutorialEventRouteDef/event enum set mismatch: missing=#{missing.sort.join(',')} extra=#{extra.sort.join(',')}")
+    end
+    unless tutorial_route_pairs == tutorial_graph_pairs
+      missing_pairs = tutorial_graph_pairs.to_a - tutorial_route_pairs.to_a
+      extra_pairs = tutorial_route_pairs.to_a - tutorial_graph_pairs.to_a
+      error("TutorialEventRouteDef/Graph section 3.2 event-root set mismatch: missing=#{missing_pairs.sort.inspect} extra=#{extra_pairs.sort.inspect}")
+    end
+  end
+end
+
+# Data owns the six HelpPromptDef display copies while Graph owns their DROW
+# text. Keep the camera prompt (and its five peers) byte-identical.
+help_copy_sentence = data[/The string rows are exactly (.*?) in row order\./m]
+if help_copy_sentence.nil?
+  error("DATA_SCHEMAS.md: missing exact HelpPrompt string-row copies")
+else
+  help_copy_symbols = %w[HELP_MOVE HELP_CAMERA HELP_PAUSE HELP_PARTY HELP_SAVE HELP_MAP]
+  help_copies = help_copy_sentence.scan(/`"([^"]*)"`/).flatten
+  unless help_copies.length == help_copy_symbols.length
+    error("DATA_SCHEMAS.md: expected six exact HelpPrompt string-row copies, got #{help_copies.length}")
+  end
+  help_copy_symbols.zip(help_copies).each do |symbol, copy|
+    row = graph_by_symbol[symbol]
+    if row.nil?
+      error("DIALOGUE_GRAPH.md: missing HelpPrompt DROW #{symbol}")
+    elsif copy != row[:text]
+      error("HelpPrompt DROW copy mismatch for #{symbol}")
+    end
+  end
+end
+expected_help_camera_copy = "{C-LEFT}/{C-RIGHT} TURN   HOLD {L}+{C-UP}/{C-DOWN} TILT"
+help_camera_row = graph_by_symbol["HELP_CAMERA"]
+unless help_camera_row && help_camera_row[:text] == expected_help_camera_copy
+  error("DIALOGUE_GRAPH.md: HELP_CAMERA exact DROW copy has drifted")
+end
+story_help_section = story[/^#### Required first-use UI prompts\s*$(.*?)(?=^#### Optional Annex dialogue)/m]
+if story_help_section.nil?
+  error("STORY_AND_TIMING.md: missing Required first-use UI prompts section")
+else
+  story_help_table = markdown_table(
+    story_help_section,
+    /^\|\s*ID\s*\|\s*Exact text\s*\|\s*Completion condition\s*\|\s*$/,
+    "STORY_AND_TIMING.md Required first-use UI prompts"
+  )
+  expected_help_camera_completion = "Complete after one yaw or pitch adjustment, or explicit dismiss. Bare `{C-DOWN}` remains Field Relay."
+  expected_help_camera_line = "| `HELP_CAMERA` | `#{expected_help_camera_copy}` | #{expected_help_camera_completion} |"
+  unless story_help_table.lines.map(&:chomp).include?(expected_help_camera_line)
+    error("STORY_AND_TIMING.md: HELP_CAMERA exact copy/completion row has drifted")
+  end
+end
+
+# Process/UI composition is a typed projection of graph pages. Validate the
+# compact binding source so controllers cannot regain hard-coded page IDs or
+# accidentally acquire the final-hook save-failure choice from another policy.
+process_ui_section = data[/#### 13\.2\.1 Process\/UI binding registry(.*?)(?=#### 13\.2\.2 Process navigation)/m]
+unless process_ui_section
+  error("DATA_SCHEMAS.md: missing Process/UI binding registry")
+else
+  binding_table = markdown_table(
+    process_ui_section,
+    /^\|\s*first\/count\s*\|\s*key .*ordered item initializers\s*\|\s*$/,
+    "DATA_SCHEMAS.md ProcessUi binding registry"
+  )
+  unless binding_table.empty?
+    previous_layout = nil
+    binding_rows = binding_table.lines.each_with_object([]) do |line, parsed|
+      cells = line.split("|", -1)[1...-1]&.map(&:strip)
+      next unless cells && cells.length == 4
+
+      range_match = cells[0].match(/\A`(\d+)\/(\d+)`\z/)
+      next unless range_match
+
+      first = range_match[1].to_i
+      count = range_match[2].to_i
+      key = cells[1]
+      layout = cells[2]
+      initializers = cells[3]
+      effective_layout = if layout.match?(/\A(?:`)?same\b/i)
+                           previous_layout
+                         else
+                           layout
+                         end
+      if effective_layout.nil?
+        error("DATA_SCHEMAS.md: ProcessUi binding at #{first} uses same-layout shorthand without a predecessor")
+        effective_layout = layout
+      end
+      previous_layout = effective_layout
+      items = initializers.scan(/(STATIC_MENU|STATIC_ROOT|STATIC_STATUS|STATIC_TARGET|STATIC_CANCEL|VIEW|ACQUIRE_ROOT|MENU|ROOT|TARGET|CANCEL|STATUS|LAYER|CAP)\(([A-Z][A-Z0-9_]+)/)
+      parsed << {
+        first: first,
+        count: count,
+        key: key,
+        layout: layout,
+        effective_layout: effective_layout,
+        initializers: initializers,
+        items: items,
+        symbols: items.map(&:last),
+        line: line
+      }
+    end
+
+    static_string_rows = enum_rows(data, /ProcessStaticStringIdValue\z/)
+    static_string_symbols = static_string_rows.map(&:first)
+    expected_save_static_strings = {
+      "STR_SAVE_FAILURE_FINAL_REPLAY_WARNING" => 0x9F01,
+      "STR_SAVE_FAILURE_PRE_TRANSITION" => 0x9F02,
+      "STR_SAVE_FAILURE_COMMITTED_PROGRESS" => 0x9F03,
+      "STR_SAVE_FAILURE_RETENTION_ONCE" => 0x9F04,
+      "STR_SAVE_FAILURE_MANUAL_SETTINGS" => 0x9F05,
+      "STR_PROCESS_RECOVERY_FATAL" => 0x9F06,
+      "STR_PROCESS_RECOVERY_RETRY" => 0x9F07,
+      "STR_PROCESS_RECOVERY_RETURN_TITLE" => 0x9F08,
+      "STR_SAVE_FAILURE_NEW_GAME_INITIALIZATION" => 0x9F09
+    }
+    actual_static_strings = static_string_rows.to_h { |symbol, value, _enum| [symbol, value] }
+    unless static_string_rows.length == 103 &&
+           static_string_symbols.uniq.length == 103 &&
+           static_string_rows.map { |_symbol, value, _enum| value }.sort == (0x9F01..0x9F67).to_a
+      error("DATA_SCHEMAS.md: process static-string enum must be 103 unique IDs covering 0x9F01..0x9F67 exactly")
+    end
+    expected_save_static_strings.each do |symbol, value|
+      unless actual_static_strings[symbol] == value
+        error("DATA_SCHEMAS.md: process static save/recovery ID #{symbol} must equal #{format('0x%04X', value)}")
+      end
+    end
+    graph_string_values = rows.map { |row| row[:string_id] }
+    static_string_rows.each do |symbol, value, _enum|
+      error("DATA_SCHEMAS.md: process static StringId #{symbol}=#{format('0x%04X', value)} collides with Dialogue Graph") if graph_string_values.include?(value)
+      error("DATA_SCHEMAS.md: process static StringId #{symbol} is outside 0x9F01..0x9F67") unless (0x9F01..0x9F67).cover?(value)
+    end
+
+    expected_static_copy = {
+      "STR_SAVE_FAILURE_FINAL_REPLAY_WARNING" => "Continuing without saving may replay the closing sequence after a reboot.",
+      "STR_SAVE_FAILURE_PRE_TRANSITION" => "Travel can continue unsaved, but a reboot may restore the previous location and replay recent progress.",
+      "STR_SAVE_FAILURE_COMMITTED_PROGRESS" => "Progress remains playable in memory, but a reboot may restore an older checkpoint.",
+      "STR_SAVE_FAILURE_RETENTION_ONCE" => "Continuing unsaved may replay this one-time scene after a reboot.",
+      "STR_SAVE_FAILURE_MANUAL_SETTINGS" => "The record could not be written. Retry or cancel.",
+      "STR_PROCESS_RECOVERY_FATAL" => "Travel and source recovery both failed. Retry recovery or return safely to the title screen.",
+      "STR_PROCESS_RECOVERY_RETRY" => "RETRY RECOVERY",
+      "STR_PROCESS_RECOVERY_RETURN_TITLE" => "RETURN TO TITLE",
+      "STR_SAVE_FAILURE_NEW_GAME_INITIALIZATION" => "The new campaign record could not be initialized. Retry or return to the title screen."
+    }
+    static_catalog = markdown_table(
+      process_ui_section,
+      /^\|\s*StringId\s*\|\s*Exact copy\s*\|\s*$/,
+      "DATA_SCHEMAS.md process static-string catalog"
+    )
+    actual_static_copy_rows = static_catalog.scan(/^\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*`([^`]*)`\s*\|\s*$/)
+    actual_static_copy = actual_static_copy_rows.to_h
+    unless actual_static_copy_rows.length == 103 &&
+           actual_static_copy.length == 103 &&
+           actual_static_copy.keys.sort == static_string_symbols.sort
+      error("DATA_SCHEMAS.md: process static-string catalog must be set-equal with all 103 ProcessStaticStringIdValue symbols")
+    end
+    unless actual_static_copy_rows.map(&:first) == static_string_symbols
+      error("DATA_SCHEMAS.md: process static-string catalog order must match ProcessStaticStringIdValue declaration order")
+    end
+    actual_static_copy.each do |symbol, copy|
+      error("DATA_SCHEMAS.md: process static-string catalog has empty copy for #{symbol}") if copy.empty?
+    end
+    expected_static_copy.each do |symbol, copy|
+      unless actual_static_copy[symbol] == copy
+        error("DATA_SCHEMAS.md: missing or drifted process static copy #{symbol}")
+      end
+    end
+    static_catalog_canonical = actual_static_copy_rows.map do |symbol, copy|
+      format("%s=0x%04X\t%s", symbol, actual_static_strings.fetch(symbol, 0), copy)
+    end.join("\n")
+    unless Digest::SHA256.hexdigest(static_catalog_canonical) == "1062c478783e5406aa5b45764232aeab8476e2561942006d1ed91a398ff2d66e"
+      error("DATA_SCHEMAS.md: exact 103-row ProcessStatic enum/catalog mapping or copy has drifted")
+    end
+
+    ui_numeric_symbols = data.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/).each_with_object({}) do |(symbol, value), values|
+      values[symbol] = Integer(value, 0)
+    end
+
+    content_source_rows = enum_rows(data, /ProcessUiContentSourceValue\z/).to_h do |symbol, value, _enum|
+      [symbol, value]
+    end
+    expected_content_sources = {
+      "PROCESS_UI_CONTENT_DIALOGUE_PAGE" => 1,
+      "PROCESS_UI_CONTENT_STATIC_STRING" => 2,
+      "PROCESS_UI_CONTENT_RUNTIME_VIEW" => 3
+    }
+    unless content_source_rows == expected_content_sources
+      error("DATA_SCHEMAS.md: ProcessUiContentSourceValue must be the exact Dialogue/Static/View source-kind registry")
+    end
+
+    runtime_view_enum_rows = enum_rows(data, /ProcessUiRuntimeViewIdValue\z/)
+    runtime_view_enum_symbols = runtime_view_enum_rows.map(&:first)
+    expected_runtime_views = {
+      "PROCESS_UI_VIEW_SETTINGS_EDITOR" => 1,
+      "PROCESS_UI_VIEW_RELAY_PARTY" => 2,
+      "PROCESS_UI_VIEW_RELAY_MESSAGES" => 3,
+      "PROCESS_UI_VIEW_RELAY_RESONANCE" => 4,
+      "PROCESS_UI_VIEW_RELAY_MAP" => 5,
+      "PROCESS_UI_VIEW_RELAY_SAVE" => 6
+    }
+    actual_runtime_views = runtime_view_enum_rows.to_h { |symbol, value, _enum| [symbol, value] }
+    unless runtime_view_enum_rows.length == 6 && actual_runtime_views == expected_runtime_views
+      error("DATA_SCHEMAS.md: ProcessUiRuntimeViewIdValue must be the exact six-view registry")
+    end
+
+    relay_view_rows = c_array_rows(
+      data,
+      "static const RelayRuntimeViewDef RELAY_RUNTIME_VIEWS[5]",
+      5,
+      7,
+      "DATA_SCHEMAS.md RELAY_RUNTIME_VIEWS"
+    )
+    settings_view_rows = c_array_rows(
+      data,
+      "static const SettingsRuntimeViewDef SETTINGS_RUNTIME_VIEW[1]",
+      1,
+      11,
+      "DATA_SCHEMAS.md SETTINGS_RUNTIME_VIEW"
+    )
+    runtime_view_table_symbols = relay_view_rows.map(&:first) + settings_view_rows.map(&:first)
+    unless runtime_view_table_symbols.length == 6 &&
+           runtime_view_table_symbols.uniq.length == 6 &&
+           runtime_view_table_symbols.sort == runtime_view_enum_symbols.sort
+      error("DATA_SCHEMAS.md: runtime-view tables must map every ProcessUiRuntimeViewIdValue exactly once")
+    end
+
+    settings_view_rows.each do |fields|
+      unless fields[0] == "PROCESS_UI_VIEW_SETTINGS_EDITOR"
+        error("DATA_SCHEMAS.md: SETTINGS_RUNTIME_VIEW must own PROCESS_UI_VIEW_SETTINGS_EDITOR")
+      end
+      reset_label = fields[3]
+      unless static_string_symbols.include?(reset_label) && actual_static_copy.key?(reset_label)
+        error("DATA_SCHEMAS.md: SETTINGS_RUNTIME_VIEW reset label #{reset_label} lacks process-static enum/catalog authority")
+      end
+      error("DATA_SCHEMAS.md: SETTINGS_RUNTIME_VIEW reserved fields must be literal zero") unless fields[9] == "0" && fields[10] == "0"
+    end
+
+    relay_view_specs = {}
+    relay_view_rows.each_with_index do |fields, index|
+      view_symbol = fields[0]
+      if relay_view_specs.key?(view_symbol)
+        error("DATA_SCHEMAS.md: RELAY_RUNTIME_VIEWS duplicates #{view_symbol}")
+        next
+      end
+      unless runtime_view_enum_symbols.include?(view_symbol) && view_symbol.start_with?("PROCESS_UI_VIEW_RELAY_")
+        error("DATA_SCHEMAS.md RELAY_RUNTIME_VIEWS row #{index}: unknown Relay runtime view #{view_symbol}")
+      end
+      relay_view_specs[view_symbol] = {
+        field_count: parse_integer(fields[2], "DATA_SCHEMAS.md RELAY_RUNTIME_VIEWS row #{index} field_count"),
+        page_id: fields[1]
+      }
+      error("DATA_SCHEMAS.md RELAY_RUNTIME_VIEWS row #{index}: reserved fields must be literal zero") unless fields[5] == "0" && fields[6] == "0"
+    end
+
+    relay_source_rows = enum_rows(data, /RelayRuntimeFieldSourceValue\z/)
+    relay_source_values = relay_source_rows.to_h { |symbol, value, _enum| [symbol, value] }
+    unless relay_source_rows.length == 27 &&
+           relay_source_values.length == 27 &&
+           relay_source_values.values.sort == (1..27).to_a
+      error("DATA_SCHEMAS.md: RelayRuntimeFieldSourceValue must contain 27 unique IDs 1..27")
+    end
+    relay_formatter_symbols = enum_rows(data, /RelayRuntimeFormatterValue\z/).map(&:first)
+    relay_field_rows = c_array_rows(
+      data,
+      "static const RelayRuntimeFieldDef RELAY_RUNTIME_FIELDS[27]",
+      27,
+      7,
+      "DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS"
+    )
+    relay_field_canonical = relay_field_rows.map do |fields|
+      fields.map { |field| field.gsub(/\s+/, " ").strip }.join("|")
+    end.join("\n")
+    unless Digest::SHA256.hexdigest(relay_field_canonical) == "f8daa6af73d0ad2bb1fd2c6a02242e245eb7b445627406e7dadce00da65c5ac0"
+      error("DATA_SCHEMAS.md: exact RELAY_RUNTIME_FIELDS[27] rows have drifted")
+    end
+    relay_fields_by_view = Hash.new { |hash, key| hash[key] = [] }
+    relay_field_sources = []
+    relay_field_rows.each_with_index do |fields, index|
+      view_symbol, order_text, formatter, label_string, empty_string, source_symbol, _flags = fields
+      unless relay_view_specs.key?(view_symbol)
+        error("DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS row #{index}: unknown view #{view_symbol}")
+      end
+      unless relay_formatter_symbols.include?(formatter)
+        error("DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS row #{index}: unknown formatter #{formatter}")
+      end
+      unless relay_source_values.key?(source_symbol)
+        error("DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS row #{index}: unknown source #{source_symbol}")
+      end
+      [label_string, empty_string].each do |string_symbol|
+        next if string_symbol == "0"
+
+        unless static_string_symbols.include?(string_symbol) && actual_static_copy.key?(string_symbol)
+          error("DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS row #{index}: #{string_symbol} lacks process-static enum/catalog authority")
+        end
+      end
+      relay_fields_by_view[view_symbol] << {
+        order: parse_integer(order_text, "DATA_SCHEMAS.md RELAY_RUNTIME_FIELDS row #{index} field_order"),
+        source: source_symbol
+      }
+      relay_field_sources << source_symbol
+    end
+    unless relay_field_sources.sort == relay_source_values.keys.sort
+      error("DATA_SCHEMAS.md: RELAY_RUNTIME_FIELDS source IDs must be set-equal with RelayRuntimeFieldSourceValue")
+    end
+
+    expected_relay_source_ranges = {
+      "PROCESS_UI_VIEW_RELAY_PARTY" => (1..7),
+      "PROCESS_UI_VIEW_RELAY_MESSAGES" => (8..12),
+      "PROCESS_UI_VIEW_RELAY_RESONANCE" => (13..17),
+      "PROCESS_UI_VIEW_RELAY_MAP" => (18..21),
+      "PROCESS_UI_VIEW_RELAY_SAVE" => (22..27)
+    }
+    unless relay_view_specs.keys.sort == expected_relay_source_ranges.keys.sort &&
+           relay_fields_by_view.keys.sort == expected_relay_source_ranges.keys.sort
+      error("DATA_SCHEMAS.md: Relay runtime-view/field domains must be the exact Party, Messages, Resonance, Map, and Save set")
+    end
+    expected_relay_source_ranges.each do |view_symbol, source_range|
+      fields = relay_fields_by_view.fetch(view_symbol, [])
+      expected_sources = relay_source_values.select { |_symbol, value| source_range.cover?(value) }.keys
+      expected_count = source_range.size
+      unless relay_view_specs.dig(view_symbol, :field_count) == expected_count
+        error("DATA_SCHEMAS.md: #{view_symbol} field_count must be #{expected_count}")
+      end
+      unless fields.map { |field| field[:order] }.sort == (0...expected_count).to_a
+        error("DATA_SCHEMAS.md: #{view_symbol} field_order must cover 0..#{expected_count - 1} exactly once")
+      end
+      unless fields.map { |field| field[:source] }.sort == expected_sources.sort
+        error("DATA_SCHEMAS.md: #{view_symbol} has incomplete or cross-domain RelayRuntimeFieldSource coverage")
+      end
+    end
+
+    display_domain_rows = enum_rows(data, /RelayDisplayStringDomainValue\z/)
+    display_domain_symbols = display_domain_rows.map(&:first)
+    display_backing_rows = {
+      "RELAY_DISPLAY_SAVEABLE_LOCATION" => enum_rows(data, /SaveableLocationIdValue\z/),
+      "RELAY_DISPLAY_CHECKPOINT" => enum_rows(data, /CheckpointIdValue\z/),
+      "RELAY_DISPLAY_SAVE_REASON" => enum_rows(data, /SaveReasonValue\z/),
+      "RELAY_DISPLAY_SAVE_REQUEST_PHASE" => enum_rows(data, /SaveRequestPhaseValue\z/),
+      "RELAY_DISPLAY_MANUAL_ELIGIBILITY" => enum_rows(data, /RelayManualEligibilityValue\z/)
+    }
+    expected_display_domains = display_backing_rows.transform_values { |domain_rows| domain_rows.map(&:first) }
+    unless display_domain_rows.length == 5 &&
+           display_domain_symbols.uniq.length == 5 &&
+           display_domain_rows.map { |_symbol, value, _enum| value }.sort == (1..5).to_a &&
+           display_domain_symbols.sort == expected_display_domains.keys.sort
+      error("DATA_SCHEMAS.md: RelayDisplayStringDomainValue must be the exact five-domain registry")
+    end
+    expected_display_domain_sizes = {
+      "RELAY_DISPLAY_SAVEABLE_LOCATION" => 31,
+      "RELAY_DISPLAY_CHECKPOINT" => 12,
+      "RELAY_DISPLAY_SAVE_REASON" => 7,
+      "RELAY_DISPLAY_SAVE_REQUEST_PHASE" => 13,
+      "RELAY_DISPLAY_MANUAL_ELIGIBILITY" => 5
+    }
+    expected_display_numeric_domains = {
+      "RELAY_DISPLAY_SAVEABLE_LOCATION" => (1..31).to_a,
+      "RELAY_DISPLAY_CHECKPOINT" => (0..11).to_a,
+      "RELAY_DISPLAY_SAVE_REASON" => (0..6).to_a,
+      "RELAY_DISPLAY_SAVE_REQUEST_PHASE" => (0..12).to_a,
+      "RELAY_DISPLAY_MANUAL_ELIGIBILITY" => (0..4).to_a
+    }
+    expected_display_domains.each do |domain, symbols|
+      domain_values = display_backing_rows.fetch(domain).map { |_symbol, value, _enum| value }
+      unless symbols.length == expected_display_domain_sizes.fetch(domain) &&
+             symbols.uniq.length == symbols.length &&
+             domain_values.sort == expected_display_numeric_domains.fetch(domain)
+        error("DATA_SCHEMAS.md: #{domain} backing enum domain has #{symbols.length} rows; expected #{expected_display_domain_sizes.fetch(domain)}")
+      end
+    end
+
+    relay_display_rows = c_array_rows(
+      data,
+      "static const RelayDisplayStringDef RELAY_DISPLAY_STRINGS[68]",
+      68,
+      5,
+      "DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS"
+    )
+    relay_display_canonical = relay_display_rows.map do |fields|
+      fields.map { |field| field.gsub(/\s+/, " ").strip }.join("|")
+    end.join("\n")
+    unless Digest::SHA256.hexdigest(relay_display_canonical) == "a27a745242a5493afc7232ebd6d328717d22b9789554830a98bb7c35d91e6242"
+      error("DATA_SCHEMAS.md: exact RELAY_DISPLAY_STRINGS[68] mapping has drifted")
+    end
+    relay_display_values = Hash.new { |hash, key| hash[key] = [] }
+    relay_display_keys = []
+    relay_display_rows.each_with_index do |fields, index|
+      domain, reserved0, value_symbol, string_symbol, reserved1 = fields
+      unless expected_display_domains.key?(domain)
+        error("DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS row #{index}: unknown domain #{domain}")
+      end
+      unless ui_numeric_symbols.key?(value_symbol)
+        error("DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS row #{index}: unresolved enum value #{value_symbol}")
+      end
+      if expected_display_domains.key?(domain) && !expected_display_domains.fetch(domain).include?(value_symbol)
+        error("DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS row #{index}: #{value_symbol} is outside #{domain}")
+      end
+      unless static_string_symbols.include?(string_symbol) && actual_static_copy.key?(string_symbol)
+        error("DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS row #{index}: #{string_symbol} lacks process-static enum/catalog authority")
+      end
+      error("DATA_SCHEMAS.md RELAY_DISPLAY_STRINGS row #{index}: reserved fields must be literal zero") unless reserved0 == "0" && reserved1 == "0"
+      relay_display_values[domain] << value_symbol
+      relay_display_keys << [domain, value_symbol]
+    end
+    unless relay_display_keys.uniq.length == relay_display_keys.length
+      error("DATA_SCHEMAS.md: RELAY_DISPLAY_STRINGS contains duplicate (domain,value) keys")
+    end
+    expected_display_domains.each do |domain, expected_values|
+      unless relay_display_values.fetch(domain, []).sort == expected_values.sort
+        error("DATA_SCHEMAS.md: RELAY_DISPLAY_STRINGS #{domain} is not exhaustive over its backing enum")
+      end
+    end
+    unless relay_display_values.keys.sort == expected_display_domains.keys.sort
+      error("DATA_SCHEMAS.md: RELAY_DISPLAY_STRINGS contains an extra or missing display domain")
+    end
+
+    error("DATA_SCHEMAS.md: expected 38 ProcessUi bindings, got #{binding_rows.length}") unless binding_rows.length == 38
+    cursor = 0
+    process_item_indices = []
+    referenced_runtime_views = []
+    binding_keys = binding_rows.map { |binding| binding[:key] }
+    error("DATA_SCHEMAS.md: ProcessUi binding keys must be unique") unless binding_keys.uniq.length == binding_keys.length
+    binding_rows.each do |binding|
+      error("DATA_SCHEMAS.md: ProcessUi item range starts at #{binding[:first]}, expected #{cursor}") unless binding[:first] == cursor
+      unless binding[:symbols].length == binding[:count]
+        error("DATA_SCHEMAS.md: ProcessUi binding at #{binding[:first]} declares #{binding[:count]} items but lists #{binding[:symbols].length}")
+      end
+      binding[:items].each do |kind, symbol|
+        if kind.start_with?("STATIC_")
+          unless static_string_symbols.include?(symbol) && actual_static_copy.key?(symbol)
+            error("DATA_SCHEMAS.md: ProcessUi static content #{symbol} lacks exact ProcessStaticStringIdValue/catalog authority")
+          end
+        elsif kind == "VIEW"
+          view_symbol = "PROCESS_UI_VIEW_#{symbol}"
+          unless runtime_view_enum_symbols.include?(view_symbol)
+            error("DATA_SCHEMAS.md: ProcessUi runtime view #{symbol} has no ProcessUiRuntimeViewIdValue")
+          end
+          unless runtime_view_table_symbols.count(view_symbol) == 1
+            error("DATA_SCHEMAS.md: ProcessUi runtime view #{symbol} must resolve exactly one runtime-view table row")
+          end
+          referenced_runtime_views << view_symbol
+        else
+          error("DATA_SCHEMAS.md: ProcessUi dialogue-page content #{symbol} has no DROW") unless graph_by_symbol.key?(symbol)
+        end
+      end
+      process_item_indices.concat((binding[:first]...(binding[:first] + binding[:count])).to_a)
+      cursor += binding[:count]
+    end
+    error("DATA_SCHEMAS.md: ProcessUi concatenated item count must be 125, got #{cursor}") unless cursor == 125
+    unless process_item_indices.length == 125 &&
+           process_item_indices.uniq.length == 125 &&
+           process_item_indices.sort == (0...125).to_a
+      error("DATA_SCHEMAS.md: ProcessUi item ranges must cover 0..124 exactly once without overlap")
+    end
+    unless referenced_runtime_views.length == 6 &&
+           referenced_runtime_views.uniq.length == 6 &&
+           referenced_runtime_views.sort == runtime_view_enum_symbols.sort
+      error("DATA_SCHEMAS.md: ProcessUi VIEW items must reference every runtime view exactly once")
+    end
+
+    title_row = binding_rows.find { |binding| binding[:line].include?("TITLE_MENU") }
+    unless title_row && title_row[:symbols] == %w[TITLE_001 TITLE_002 TITLE_003] &&
+           title_row[:initializers].include?("OPEN_NEW_GAME_PROMPT") &&
+           title_row[:initializers].include?("TOKEN,TITLE_CONTINUE") &&
+           title_row[:initializers].include?("OPEN_OPTIONS")
+      error("DATA_SCHEMAS.md: Title ProcessUi binding is not the exact New Game / Continue / Options composition")
+    end
+    title_routes = process_ui_section.scan(/`\{\s*(EMPTY|VALID|INVALID_OR_INCOMPATIBLE),0,(TITLE_[A-Z0-9_]+)\s*\}`/)
+    expected_title_routes = [
+      ["EMPTY", "TITLE_NEW_GAME_PROMPT"],
+      ["VALID", "TITLE_OVERWRITE_PROMPT"],
+      ["INVALID_OR_INCOMPATIBLE", "TITLE_INVALID_SAVE_PROMPT"]
+    ]
+    unless title_routes.sort == expected_title_routes.sort
+      error("DATA_SCHEMAS.md: Title New Game journal-disposition router is incomplete")
+    end
+
+    opening_row = binding_rows.find { |binding| binding[:line].include?("OPENING_CUTSCENE_SLATE") }
+    unless opening_row && opening_row[:symbols] == %w[OPENING_INSERT_CUTSCENE OPENING_SKIP_PROMPT] &&
+           opening_row[:initializers].include?("TOKEN,OPENING_FINISH") &&
+           opening_row[:line].include?("CO_RENDER_LAYERS")
+      error("DATA_SCHEMAS.md: opening slate ProcessUi layers/finalizer token are incomplete")
+    end
+
+    name_rows = binding_rows.select { |binding| binding[:line].include?("SCENE_NAME_ENTRY") }
+    error("DATA_SCHEMAS.md: expected four Name Entry ProcessUi bindings, got #{name_rows.length}") unless name_rows.length == 4
+    unless name_rows.all? { |binding| binding[:line].include?("UI_SCREEN_NAME_ENTRY") && !binding[:line].include?("UI_SCREEN_TITLE") }
+      error("DATA_SCHEMAS.md: Name Entry ProcessUi bindings must use the distinct UI_SCREEN_NAME_ENTRY composition")
+    end
+
+    final_failure_row = binding_rows.find { |binding| binding[:line].include?("FINAL_SAVE_FAILURE") }
+    unless final_failure_row && final_failure_row[:symbols] == %w[UI_SAVE_FAILED STR_SAVE_FAILURE_FINAL_REPLAY_WARNING END_RETRY_SAVE END_CONTINUE_UNSAVED] &&
+           final_failure_row[:initializers].include?("ACQUIRE_ROOT(UI_SAVE_FAILED") &&
+           final_failure_row[:initializers].include?("LOCAL,SAVE_RETRY_IMMUTABLE") &&
+           final_failure_row[:initializers].include?("LOCAL,SAVE_CONTINUE_DIRTY")
+      error("DATA_SCHEMAS.md: final save-failure ProcessUi binding is incomplete")
+    end
+    unless binding_table.scan(/ACQUIRE_ROOT\(UI_SAVE_FAILED/).length == 1
+      error("DATA_SCHEMAS.md: UI_SAVE_FAILED must be acquired exactly once in ProcessUi bindings")
+    end
+
+    expected_failure_bindings = {
+      "PRE_TRANSITION_SAVE_FAILURE" => %w[STR_SAVE_FAILURE_PRE_TRANSITION SAVE_RETRY_IMMUTABLE SAVE_TRAVEL_UNSAVED SAVE_CANCEL_TO_OWNER],
+      "COMMITTED_PROGRESS_SAVE_FAILURE" => %w[STR_SAVE_FAILURE_COMMITTED_PROGRESS SAVE_RETRY_IMMUTABLE SAVE_CONTINUE_DIRTY],
+      "RETENTION_ONCE_SAVE_FAILURE" => %w[STR_SAVE_FAILURE_RETENTION_ONCE SAVE_RETRY_IMMUTABLE SAVE_CONTINUE_DIRTY],
+      "MANUAL_SETTINGS_SAVE_FAILURE" => %w[STR_SAVE_FAILURE_MANUAL_SETTINGS SAVE_RETRY_IMMUTABLE SAVE_CANCEL_TO_OWNER],
+      "NEW_GAME_INITIALIZATION_SAVE_FAILURE" => %w[STR_SAVE_FAILURE_NEW_GAME_INITIALIZATION SAVE_RETRY_IMMUTABLE STR_PROCESS_RECOVERY_RETURN_TITLE NEW_GAME_ABORT]
+    }
+    expected_failure_bindings.each do |owner, tokens|
+      matches = binding_rows.select { |binding| binding[:line].include?(" / #{owner} / ") }
+      error("DATA_SCHEMAS.md: #{owner} must have exactly one ProcessUi binding") unless matches.length == 1
+      row = matches.first
+      next unless row
+
+      tokens.each { |token| error("DATA_SCHEMAS.md: #{owner} binding is missing #{token}") unless row[:line].include?(token) }
+      error("DATA_SCHEMAS.md: #{owner} must use static prompt/no dialogue sequencing") unless row[:initializers].include?("STATIC_ROOT") && row[:effective_layout].include?("NO_DIALOGUE")
+      error("DATA_SCHEMAS.md: #{owner} illegally acquires UI_SAVE_FAILED") if row[:line].include?("ACQUIRE_ROOT")
+    end
+
+    new_game_failure_row = binding_rows.find { |binding| binding[:line].include?(" / NEW_GAME_INITIALIZATION_SAVE_FAILURE / ") }
+    unless new_game_failure_row &&
+           new_game_failure_row[:initializers].include?("STATIC_TARGET(STR_PROCESS_RECOVERY_RETURN_TITLE") &&
+           new_game_failure_row[:initializers].include?("TOKEN,NEW_GAME_ABORT")
+      error("DATA_SCHEMAS.md: New Game initialization save-failure binding must expose the typed New Game abort target")
+    end
+
+    process_owner_rows = enum_rows(data, /ProcessUiOwnerIdValue\z/).to_h do |symbol, value, _enum|
+      [symbol, value]
+    end
+    unless process_owner_rows["PROCESS_UI_OWNER_NEW_GAME_INITIALIZATION_SAVE_FAILURE"] == 27
+      error("DATA_SCHEMAS.md: New Game initialization save-failure owner must be PROCESS_UI_OWNER_NEW_GAME_INITIALIZATION_SAVE_FAILURE=27")
+    end
+
+    rollback_row = binding_rows.find { |binding| binding[:line].include?(" / ROLLBACK_FATAL / ROLLBACK_FATAL") }
+    unless rollback_row && rollback_row[:symbols] == %w[STR_PROCESS_RECOVERY_FATAL STR_PROCESS_RECOVERY_RETRY STR_PROCESS_RECOVERY_RETURN_TITLE] &&
+           rollback_row[:line].include?("UI_SCREEN_PROCESS_SAFE_RECOVERY") &&
+           rollback_row[:initializers].include?("LOCAL,RETRY_ROLLBACK_LOAD") &&
+           rollback_row[:initializers].include?("LOCAL,ROLLBACK_RETURN_TO_TITLE")
+      error("DATA_SCHEMAS.md: rollback-fatal ProcessUi recovery composition is incomplete")
+    end
+  end
+
+  policy_table = markdown_table(
+    process_ui_section,
+    /^\|\s*Policy\s*\|\s*Exact Process UI owner\s*\|\s*Exact flags \/ reserved bytes\s*\|\s*$/,
+    "DATA_SCHEMAS.md save-failure policy registry"
+  )
+  unless policy_table.empty?
+    expected_policies = {
+      "SAVE_FAILURE_POLICY_FINAL_HOOK" => ["PROCESS_UI_OWNER_FINAL_SAVE_FAILURE", %w[ACQUIRE_DIALOGUE_ROOT REUSE_IMMUTABLE_SNAPSHOT CONTINUE_MARKS_DIRTY WARN_REBOOT_REPLAY]],
+      "SAVE_FAILURE_POLICY_PRE_TRANSITION" => ["PROCESS_UI_OWNER_PRE_TRANSITION_SAVE_FAILURE", %w[REUSE_IMMUTABLE_SNAPSHOT CONTINUE_MARKS_DIRTY ALLOW_CANCEL WARN_REBOOT_REPLAY PUBLISH_SCRATCH_BEFORE_TRAVEL]],
+      "SAVE_FAILURE_POLICY_COMMITTED_PROGRESS" => ["PROCESS_UI_OWNER_COMMITTED_PROGRESS_SAVE_FAILURE", %w[REUSE_IMMUTABLE_SNAPSHOT CONTINUE_MARKS_DIRTY WARN_REBOOT_REPLAY]],
+      "SAVE_FAILURE_POLICY_RETENTION_ONCE" => ["PROCESS_UI_OWNER_RETENTION_ONCE_SAVE_FAILURE", %w[REUSE_IMMUTABLE_SNAPSHOT CONTINUE_MARKS_DIRTY WARN_REBOOT_REPLAY]],
+      "SAVE_FAILURE_POLICY_MANUAL_OR_SETTINGS" => ["PROCESS_UI_OWNER_MANUAL_SETTINGS_SAVE_FAILURE", %w[REUSE_IMMUTABLE_SNAPSHOT ALLOW_CANCEL]],
+      "SAVE_FAILURE_POLICY_NEW_GAME_INITIALIZATION" => ["PROCESS_UI_OWNER_NEW_GAME_INITIALIZATION_SAVE_FAILURE", %w[REUSE_IMMUTABLE_SNAPSHOT WARN_REBOOT_REPLAY ABORT_TO_TITLE_ONLY]]
+    }
+    policy_lines = policy_table.lines.select { |line| line.match?(/^\| `SAVE_FAILURE_POLICY_/) }
+    error("DATA_SCHEMAS.md: expected six save-failure policies, got #{policy_lines.length}") unless policy_lines.length == 6
+    expected_policies.each do |policy, (owner, flags)|
+      matches = policy_lines.select { |line| line.start_with?("| `#{policy}`") }
+      error("DATA_SCHEMAS.md: #{policy} must have exactly one policy row") unless matches.length == 1
+      line = matches.first
+      next unless line
+
+      error("DATA_SCHEMAS.md: #{policy} owner mismatch") unless line.include?("`#{owner}`")
+      flags.each { |flag| error("DATA_SCHEMAS.md: #{policy} missing #{flag}") unless line.include?(flag) }
+      error("DATA_SCHEMAS.md: #{policy} reserved bytes are not literal zero") unless line.include?("/ 0,0`")
+    end
+  end
+
+  route_table = markdown_table(
+    process_ui_section,
+    /^\|\s*Typed failure source\s*\|\s*Policy \/ owner equality xref\s*\|\s*$/,
+    "DATA_SCHEMAS.md save-failure source-route registry"
+  )
+  unless route_table.empty?
+    expected_routes = {
+      "SAVE_FAILURE_SOURCE_FINAL_HOOK" => ["SAVE_FAILURE_POLICY_FINAL_HOOK", "PROCESS_UI_OWNER_FINAL_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_TRANSITION_PRE_SOURCE" => ["SAVE_FAILURE_POLICY_PRE_TRANSITION", "PROCESS_UI_OWNER_PRE_TRANSITION_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_TRANSITION_POST_DESTINATION" => ["SAVE_FAILURE_POLICY_COMMITTED_PROGRESS", "PROCESS_UI_OWNER_COMMITTED_PROGRESS_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_STORY_POST_COMMIT" => ["SAVE_FAILURE_POLICY_COMMITTED_PROGRESS", "PROCESS_UI_OWNER_COMMITTED_PROGRESS_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_RETENTION_ONCE" => ["SAVE_FAILURE_POLICY_RETENTION_ONCE", "PROCESS_UI_OWNER_RETENTION_ONCE_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_MANUAL_RELAY" => ["SAVE_FAILURE_POLICY_MANUAL_OR_SETTINGS", "PROCESS_UI_OWNER_MANUAL_SETTINGS_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_SETTINGS" => ["SAVE_FAILURE_POLICY_MANUAL_OR_SETTINGS", "PROCESS_UI_OWNER_MANUAL_SETTINGS_SAVE_FAILURE"],
+      "SAVE_FAILURE_SOURCE_NEW_GAME_INITIALIZATION" => ["SAVE_FAILURE_POLICY_NEW_GAME_INITIALIZATION", "PROCESS_UI_OWNER_NEW_GAME_INITIALIZATION_SAVE_FAILURE"]
+    }
+    route_lines = route_table.lines.select { |line| line.match?(/^\| `SAVE_FAILURE_SOURCE_/) }
+    error("DATA_SCHEMAS.md: expected eight save-failure source routes, got #{route_lines.length}") unless route_lines.length == 8
+    expected_routes.each do |source, (policy, owner)|
+      exact = "| `#{source}` | `#{policy} / #{owner}` |"
+      error("DATA_SCHEMAS.md: missing or drifted save-failure route #{source}") unless route_lines.include?(exact + "\n") || route_lines.include?(exact)
+    end
+  end
+
+  if data.match?(/typedef struct SaveFailureButtonDef|typedef enum SaveFailureButtonActionValue/)
+    error("DATA_SCHEMAS.md: removed duplicate SaveFailure button/action authority is still declared")
+  end
+end
+
+camera_rows = enum_rows(data, /DialogueCameraCueIdValue\z/)
+camera_values = camera_rows.map { |_symbol, value, _enum| value }.sort
+used_camera_values = rows.map { |row| row[:camera_id] }.reject(&:zero?).uniq.sort
+unless camera_values == used_camera_values
+  error("dialogue camera registry/use mismatch: registry=#{camera_values.map { |value| format('0x%04X', value) }.join(',')} graph=#{used_camera_values.map { |value| format('0x%04X', value) }.join(',')}")
+end
+shot_rows = enum_rows(data, /DialogueCameraShotAssetIdValue\z/)
+error("DATA_SCHEMAS.md: expected 15 dialogue camera cues, got #{camera_rows.length}") unless camera_rows.length == 15
+error("DATA_SCHEMAS.md: expected 15 dialogue camera shot assets, got #{shot_rows.length}") unless shot_rows.length == 15
+cue_table = data[/The cue table is literal;(.*?)(?=The 15 resource payloads, in AssetId order, are exact:)/m]
+if cue_table
+  mapped_cues = cue_table.scan(/^\|\s*`(CAMERA_CUE_[A-Z0-9_]+)`\s*\|\s*`(ASSET_CAMERA_SHOT_[A-Z0-9_]+)`\s*\|\s*`([^`]+)`\s*\|/)
+  error("DATA_SCHEMAS.md: expected 15 literal camera cue mappings, got #{mapped_cues.length}") unless mapped_cues.length == 15
+  error("DATA_SCHEMAS.md: camera cue mapping duplicates a cue") unless mapped_cues.map(&:first).uniq.length == mapped_cues.length
+  error("DATA_SCHEMAS.md: camera cue mapping duplicates a shot asset") unless mapped_cues.map { |row| row[1] }.uniq.length == mapped_cues.length
+  error("DATA_SCHEMAS.md: expected 12 unique camera production parents, got #{mapped_cues.map { |row| row[2] }.uniq.length}") unless mapped_cues.map { |row| row[2] }.uniq.length == 12
+  mapped_cues.each do |_cue, shot, parent|
+    error("ASSET_INVENTORY.md: camera parent #{parent} for #{shot} does not resolve") unless inventory.include?("`#{parent}`")
+  end
+
+  ledger_children = ledger.scan(/^\|\s*`(ASSET_CAMERA_SHOT_[A-Z0-9_]+)`\s*\|\s*`([^`]+)`\s*\|/)
+  expected_children = mapped_cues.map { |_cue, shot, parent| [shot, parent] }
+  unless ledger_children.sort == expected_children.sort
+    error("ASSET_LEDGER.md: generated camera child provenance does not exactly match Data parent mappings")
+  end
+else
+  error("DATA_SCHEMAS.md: missing literal dialogue camera cue table")
+end
+
+payload_table = data[/The 15 resource payloads, in AssetId order, are exact:(.*?)(?=These 15 AssetIds are generated runtime children)/m]
+if payload_table
+  payload_rows = payload_table.scan(
+    /^\|\s*`(ASSET_CAMERA_SHOT_[A-Z0-9_]+)`\s*\|\s*`([A-Z_]+)\s*\/\s*([A-Z_]+)`\s*\|\s*`(-?\d+),(-?\d+),(-?\d+)`\s*\|\s*`(-?\d+),(-?\d+),(-?\d+)`\s*\|\s*`(\d+)\s*\/\s*(\d+)`\s*\|/
+  )
+  error("DATA_SCHEMAS.md: expected 15 exact camera payload rows, got #{payload_rows.length}") unless payload_rows.length == 15
+  expected_shots = shot_rows.map(&:first).sort
+  error("DATA_SCHEMAS.md: camera payload AssetIds do not match the shot enum") unless payload_rows.map(&:first).sort == expected_shots
+  target_modes = %w[NONE SPEAKER GROUP_CENTROID INTERACTION_MARKER SCENE_MARKER MAP_UI]
+  framing_modes = %w[PRESERVE_ACTIVE LOCKED FOLLOW_TARGET SCREEN_SPACE]
+  payload_rows.each do |shot, target, framing, *numbers|
+    error("DATA_SCHEMAS.md: #{shot} has invalid target mode #{target}") unless target_modes.include?(target)
+    error("DATA_SCHEMAS.md: #{shot} has invalid framing mode #{framing}") unless framing_modes.include?(framing)
+    numeric = numbers.map(&:to_i)
+    fov = numeric[-2]
+    blend = numeric[-1]
+    ui_shot = %w[NONE MAP_UI].include?(target)
+    if ui_shot
+      error("DATA_SCHEMAS.md: #{shot} UI/no-world payload must have zero FOV and blend") unless fov.zero? && blend.zero?
+    else
+      error("DATA_SCHEMAS.md: #{shot} world payload requires FOV in (0, 90deg]") unless fov.positive? && fov <= 90 * 256
+      error("DATA_SCHEMAS.md: #{shot} world payload requires blend ticks in 1..120") unless (1..120).cover?(blend)
+    end
+  end
+  unless data.include?("unpacked size\nexactly `36`, alignment `4`, `ASSET_REQUIRED`")
+    error("DATA_SCHEMAS.md: camera manifest size/alignment/required contract is missing")
+  end
+else
+  error("DATA_SCHEMAS.md: missing exact dialogue camera payload table")
+end
+
+# A DialogueNode xref is an equality mirror of exactly one dialogue trigger;
+# it is never a second dispatcher. Check both directions against Data's sole
+# StoryTrigger table and the live StoryActionList values.
+numeric_symbols = data.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/).each_with_object({}) do |(symbol, value), values|
+  values[symbol] = Integer(value, 0)
+end
+trigger_section = data[/The complete chapter-critical owner table is literal:(.*?)(?=Rusk has three noninterchangeable owners\.)/m]
+unless trigger_section
+  error("DATA_SCHEMAS.md: missing complete chapter-critical owner table")
+else
+  dialogue_triggers = trigger_section.scan(
+    /^\|\s*`DIALOGUE\s*\/\s*([A-Z][A-Z0-9_]+)`\s*\|\s*`([^`]+)`\s*\|\s*`(ACTION_[A-Z0-9_]+)`\s*\|/
+  )
+  compatible_dialogue_triggers = dialogue_triggers.select do |_owner, phase, _action_symbol|
+    %w[ENTER DISMISS].include?(phase)
+  end
+  trigger_by_owner = compatible_dialogue_triggers.group_by(&:first)
+
+  rows.each do |row|
+    triggers = trigger_by_owner.fetch(row[:symbol], [])
+    if row[:action_xref].zero?
+      next
+    end
+
+    matching_triggers = triggers.select do |_owner, _phase, action_symbol|
+      numeric_symbols[action_symbol] == row[:action_xref]
+    end
+    unless matching_triggers.length == 1
+      error("#{row[:symbol]} action xref #{format('0x%04X', row[:action_xref])} has #{matching_triggers.length} matching dialogue StoryTrigger owners; expected 1")
+      next
+    end
+    action_symbol = matching_triggers.first[2]
+    action_value = numeric_symbols[action_symbol]
+    if action_value.nil?
+      error("#{row[:symbol]} StoryTrigger action #{action_symbol} lacks numeric declaration")
+    elsif action_value != row[:action_xref]
+      error("#{row[:symbol]} graph xref #{format('0x%04X', row[:action_xref])} disagrees with #{action_symbol}=#{format('0x%04X', action_value)}")
+    end
+  end
+
+  compatible_dialogue_triggers.each do |owner, phase, action_symbol|
+    owner_rows = rows.select { |row| row[:symbol] == owner }
+    unless owner_rows.length == 1
+      error("DATA_SCHEMAS.md dialogue StoryTrigger #{owner}/#{phase} has #{owner_rows.length} DROW rows; expected 1")
+      next
+    end
+
+    action_value = numeric_symbols[action_symbol]
+    if action_value.nil?
+      error("DATA_SCHEMAS.md dialogue StoryTrigger #{owner}/#{phase} action #{action_symbol} lacks numeric declaration")
+      next
+    end
+
+    row = owner_rows.first
+    if row[:action_xref].zero?
+      error("#{owner} has zero action xref but dialogue StoryTrigger #{owner}/#{phase} requires #{action_symbol}=#{format('0x%04X', action_value)}")
+    elsif row[:action_xref] != action_value
+      error("#{owner} graph xref #{format('0x%04X', row[:action_xref])} disagrees with dialogue StoryTrigger #{owner}/#{phase} #{action_symbol}=#{format('0x%04X', action_value)}")
+    end
+  end
+end
+
+# DIALOGUE_ONE_SHOT must be an exact projection of the live dialogue-once lock
+# prefix. This prevents an authored flag from silently gaining or losing a bit.
+once_section = data[/The live dialogue-once lock assignments are exact:(.*?)(?=The live examine-once assignments are)/m]
+unless once_section
+  error("DATA_SCHEMAS.md: missing dialogue-once lock assignment table")
+else
+  once_symbols = once_section.scan(/^\|\s*\d+\s*\|\s*`([A-Z][A-Z0-9_]+)`\s*\|/).flatten
+  one_shot_symbols = rows.select { |row| (row[:flags] & 0x04) != 0 }.map { |row| row[:symbol] }
+  unless once_symbols.sort == one_shot_symbols.sort
+    error("Dialogue ONE_SHOT/registry mismatch: flags=#{one_shot_symbols.sort.join(',')} registry=#{once_symbols.sort.join(',')}")
+  end
+end
+
+mirror_section = graph[/### 6\.4 Node action mirrors(.*?)(?=^## 7\.)/m]
+unless mirror_section
+  error("DIALOGUE_GRAPH.md: missing node action mirror projection")
+else
+  documented_mirrors = mirror_section.scan(/`([A-Z][A-Z0-9_]+)=0x([0-9A-Fa-f]+)`/).to_h do |symbol, value|
+    [symbol, value.to_i(16)]
+  end
+  live_mirrors = rows.reject { |row| row[:action_xref].zero? }.to_h do |row|
+    [row[:symbol], row[:action_xref]]
+  end
+  unless documented_mirrors == live_mirrors
+    error("DIALOGUE_GRAPH node-action mirror prose disagrees with DROW fields")
+  end
+end
+
+# Bridge rows are reproduced in both contracts. Resolve Data's symbolic C
+# initializers to the graph numeric fields, including additive flag masks.
+symbol_values = data.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)(?:u)?(?:\s*<<\s*(\d+))?\b/).each_with_object({}) do |(symbol, value, shift), values|
+  numeric = Integer(value, 0)
+  numeric <<= shift.to_i if shift
+  values[symbol] = numeric
+end
+symbol_values.merge!(
+  "CHAR_NONE" => 0,
+  "CHAR_DR_SERA_VENN" => 3,
+  "CHAR_RUSK" => 6,
+  "CHAR_TAVI" => 2
+)
+
+resolve_expression = lambda do |expression, context|
+  expression.split("+").sum do |term|
+    token = term.strip
+    if token.match?(/\A(?:0x[0-9A-Fa-f]+|\d+)\z/)
+      Integer(token, 0)
+    elsif symbol_values.key?(token)
+      symbol_values[token]
+    else
+      error("#{context}: unresolved C token #{token}")
+      0
+    end
+  end
+end
+
+bridge_body = extract_c_array(data, "static const DialogueNode MANDATORY_BRIDGE_DIALOGUE_NODES[16]")
+bridge_initializers = bridge_body.scan(/\{\s*([^{}]+?)\s*\}/m).flatten
+error("DATA_SCHEMAS.md: expected 16 bridge initializers, got #{bridge_initializers.length}") unless bridge_initializers.length == 16
+bridge_initializers.each_with_index do |initializer, index|
+  fields = initializer.split(",").map(&:strip)
+  unless fields.length == 11
+    error("DATA_SCHEMAS.md bridge row #{index}: expected 11 fields, got #{fields.length}")
+    next
+  end
+  resolved = fields.map.with_index do |field, field_index|
+    resolve_expression.call(field, "DATA_SCHEMAS.md bridge row #{index} field #{field_index}")
+  end
+  row = dialogue_by_id[resolved[0]]
+  unless row
+    error("DATA_SCHEMAS.md bridge row #{index}: DialogueId #{format('0x%04X', resolved[0])} missing from graph")
+    next
+  end
+  graph_fields = [
+    row[:dialogue_id], row[:speaker_id], row[:string_id], row[:next_id],
+    row[:alternate_id], row[:condition_id], row[:action_xref], row[:camera_id],
+    row[:emote_id], row[:flags], row[:ticks]
+  ]
+  unless resolved == graph_fields
+    error("bridge byte-field mismatch for #{row[:symbol]}: DATA=#{resolved.inspect} GRAPH=#{graph_fields.inspect}")
+  end
+end
+
+data.scan(/`(STR_DIALOGUE_[A-Z0-9_]+)="([^"]*)"`/).each do |string_symbol, exact_text|
+  string_id = symbol_values[string_symbol]
+  if string_id.nil?
+    error("DATA_SCHEMAS.md bridge string #{string_symbol} lacks numeric StringId")
+    next
+  end
+  row = rows.find { |candidate| candidate[:string_id] == string_id }
+  if row.nil?
+    error("DATA_SCHEMAS.md bridge string #{string_symbol}=#{format('0x%04X', string_id)} lacks DROW")
+  elsif row[:text] != exact_text
+    error("bridge exact-text mismatch for #{row[:symbol]} / #{string_symbol}")
+  end
+end
+
+if ERRORS.empty?
+  puts "Dialogue graph validation passed: #{rows.length} nodes, #{story_script ? story_script.scan(/^\|\s*`[A-Z][A-Z0-9_]+`\s*\|/).length : 0} story rows, 16 byte-exact bridges."
+  exit 0
+end
+
+warn "Dialogue graph validation failed with #{ERRORS.length} error(s):"
+ERRORS.each { |message| warn "- #{message}" }
+exit 1

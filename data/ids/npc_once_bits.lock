@@ -1,0 +1,5 @@
+# N64GAME NPC occurrence once-bit lock v1
+# Append-only. Columns: bit_index|owner_occurrence_id|state|character_id
+0|NPC_OCCURRENCE_ANNEX_MARA|LIVE|CHAR_MARA_OVELLE
+1|NPC_OCCURRENCE_ANNEX_JO|LIVE|CHAR_JO_RENN
+2|NPC_OCCURRENCE_ANNEX_PELL|LIVE|CHAR_PELL_ANWAR

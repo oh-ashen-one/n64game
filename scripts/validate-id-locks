@@ -1,0 +1,689 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "pathname"
+require "fileutils"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+REGISTRY_PATH = "data/ids/serialized_ids.lock"
+DATA_PATH = "docs/DATA_SCHEMAS.md"
+SPECIALIZED_LOCK_PATHS = %w[
+  data/ids/dialogue_once_bits.lock
+  data/ids/examine_once_bits.lock
+  data/ids/npc_once_bits.lock
+  data/ids/spawn_ids.lock
+  data/ids/cutscene_ids.lock
+].freeze
+SNAPSHOT_PATHS = ([DATA_PATH, REGISTRY_PATH] + SPECIALIZED_LOCK_PATHS).freeze
+SPECIALIZED_ID_ENUMS = %w[SpawnIdValue CutsceneIdValue].freeze
+SPECIAL_BIT_ENUMS = {
+  "StoryFlagIndex" => %w[STORY_FLAG_LOCKED_COUNT STORY_FLAG_CAPACITY],
+  "DestinationBit" => [],
+  "RelayPageBit" => [],
+  "RewardClaimBit" => []
+}.freeze
+
+def git_capture(root, *arguments)
+  stdout, stderr, status = Open3.capture3(
+    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    "git", *arguments,
+    chdir: root.to_s
+  )
+  [stdout, stderr, status.success?]
+end
+
+def parse_once_lock_text(relative, text, errors)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 4
+      errors << "#{relative}:#{index + 1}: expected 4 columns, got #{fields.length}"
+      next
+    end
+    begin
+      bit = Integer(fields[0], 10)
+    rescue ArgumentError
+      errors << "#{relative}:#{index + 1}: invalid bit index #{fields[0].inspect}"
+      next
+    end
+    owner, state, binding = fields[1], fields[2], fields[3]
+    errors << "#{relative}:#{index + 1}: bit #{bit} outside 0..63" unless (0..63).cover?(bit)
+    errors << "#{relative}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{relative}:#{index + 1}: invalid live owner #{owner.inspect}" unless owner.match?(/\A[A-Z][A-Z0-9_]+\z/)
+      errors << "#{relative}:#{index + 1}: invalid live binding #{binding.inspect}" unless binding == "0" || binding.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif owner != "0" || binding != "0"
+      errors << "#{relative}:#{index + 1}: tombstone owner and binding must both be zero"
+    end
+    rows << { value: bit, symbol: owner, state: state, binding: binding, line: index + 1 }
+  end
+
+  rows.group_by { |row| row[:value] }.each do |bit, collisions|
+    errors << "#{relative}: duplicate bit #{bit}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| row[:symbol] }.each do |owner, collisions|
+    errors << "#{relative}: duplicate live owner #{owner}" if collisions.length > 1
+  end
+  bits = rows.map { |row| row[:value] }.sort
+  expected = bits.empty? ? [] : (0..bits.max).to_a
+  errors << "#{relative}: rows must be a complete append-only prefix 0..#{bits.max}" unless bits == expected
+  rows.sort_by { |row| row[:value] }
+end
+
+def parse_numeric_lock_text(relative, text, errors)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 3
+      errors << "#{relative}:#{index + 1}: expected 3 columns, got #{fields.length}"
+      next
+    end
+    begin
+      value = Integer(fields[0], 0)
+    rescue ArgumentError
+      errors << "#{relative}:#{index + 1}: invalid numeric ID #{fields[0].inspect}"
+      next
+    end
+    symbol, state = fields[1], fields[2]
+    errors << "#{relative}:#{index + 1}: ID must be nonzero uint16" unless (1..0xFFFF).cover?(value)
+    errors << "#{relative}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{relative}:#{index + 1}: invalid live symbol #{symbol.inspect}" unless symbol.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif symbol != "0"
+      errors << "#{relative}:#{index + 1}: tombstone symbol must be zero"
+    end
+    rows << { value: value, symbol: symbol, state: state, binding: state == "LIVE" ? "-" : "0", line: index + 1 }
+  end
+
+  rows.group_by { |row| row[:value] }.each do |value, collisions|
+    errors << "#{relative}: duplicate numeric ID #{format('0x%04X', value)}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| row[:symbol] }.each do |symbol, collisions|
+    errors << "#{relative}: duplicate live symbol #{symbol}" if collisions.length > 1
+  end
+  values = rows.map { |row| row[:value] }
+  errors << "#{relative}: rows must remain in ascending numeric order" unless values == values.sort
+  rows
+end
+
+def numeric_enum_blocks(text, errors, label)
+  blocks = {}
+  text.scan(/typedef enum\s+([A-Za-z0-9_]+)\s*\{(.*?)\}\s*\1\s*;/m).each do |name, body|
+    if blocks.key?(name)
+      errors << "#{label}: duplicate enum definition #{name}"
+    else
+      blocks[name] = body
+    end
+  end
+  text.scan(/^enum\s+([A-Za-z0-9_]+)\s*\{(.*?)^\};/m).each do |name, body|
+    if blocks.key?(name)
+      errors << "#{label}: duplicate enum definition #{name}"
+    else
+      blocks[name] = body
+    end
+  end
+  blocks
+end
+
+def numeric_assignments(enum_name, body, errors, label)
+  rows = body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/).map do |symbol, value|
+    [Integer(value, 0), symbol]
+  end
+  errors << "#{label}: #{enum_name} has no literal numeric assignments" if rows.empty?
+  rows.group_by(&:first).each do |value, collisions|
+    errors << "#{label}: #{enum_name} reuses value #{format('0x%04X', value)}" if collisions.length > 1
+  end
+  rows.group_by(&:last).each do |symbol, collisions|
+    errors << "#{label}: #{enum_name} repeats symbol #{symbol}" if collisions.length > 1
+  end
+  rows
+end
+
+def build_source_registry(data, lock_texts, errors, label)
+  enum_blocks = numeric_enum_blocks(data, errors, label)
+  rows = []
+
+  enum_blocks.keys.grep(/Id(?:Value)?\z/).sort.each do |enum_name|
+    next if SPECIALIZED_ID_ENUMS.include?(enum_name)
+
+    numeric_assignments(enum_name, enum_blocks.fetch(enum_name), errors, label)
+      .reject { |_value, symbol| %w[OBJ_CAPACITY MOVE_LOCKED_COUNT].include?(symbol) }
+      .sort_by { |value, symbol| [value, symbol] }
+      .each do |value, symbol|
+        rows << { domain: enum_name, value: value, symbol: symbol, state: "LIVE", binding: "-" }
+      end
+  end
+
+  SPECIAL_BIT_ENUMS.each do |enum_name, exclusions|
+    body = enum_blocks[enum_name]
+    unless body
+      errors << "#{label}: missing durable bit enum #{enum_name}"
+      next
+    end
+    numeric_assignments(enum_name, body, errors, label)
+      .reject { |_value, symbol| exclusions.include?(symbol) }
+      .sort_by { |value, symbol| [value, symbol] }
+      .each do |value, symbol|
+        rows << { domain: enum_name, value: value, symbol: symbol, state: "LIVE", binding: "-" }
+      end
+  end
+
+  encounter_body = enum_blocks["EncounterIdValue"]
+  if encounter_body
+    numeric_assignments("EncounterIdValue", encounter_body, errors, label).each do |value, symbol|
+      next if value.zero?
+
+      errors << "#{label}: EncounterId #{symbol}=#{value} cannot fit the 1..63 encounter-clear bitset" unless (1..63).cover?(value)
+      rows << { domain: "EncounterClearBit", value: value, symbol: symbol, state: "LIVE", binding: "-" }
+    end
+  end
+
+  once_domains = {
+    "DialogueOnceBit" => "data/ids/dialogue_once_bits.lock",
+    "ExamineOnceBit" => "data/ids/examine_once_bits.lock",
+    "NpcOnceBit" => "data/ids/npc_once_bits.lock"
+  }
+  once_domains.each do |domain, relative|
+    parse_once_lock_text(relative, lock_texts.fetch(relative, ""), errors).each do |source|
+      rows << source.merge(domain: domain).reject { |key, _value| key == :line }
+    end
+  end
+
+  {
+    "SpawnIdValue" => "data/ids/spawn_ids.lock",
+    "CutsceneIdValue" => "data/ids/cutscene_ids.lock"
+  }.each do |domain, relative|
+    parse_numeric_lock_text(relative, lock_texts.fetch(relative, ""), errors).each do |source|
+      rows << source.merge(domain: domain).reject { |key, _value| key == :line }
+    end
+  end
+
+  rows.group_by { |row| [row[:domain], row[:value]] }.each do |(domain, value), collisions|
+    errors << "#{label}: duplicate durable key #{domain}/#{value}" if collisions.length > 1
+  end
+  rows
+end
+
+def parse_registry_text(text, errors, label)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 5
+      errors << "#{label}:#{index + 1}: expected 5 columns, got #{fields.length}"
+      next
+    end
+    domain, value_text, symbol, state, binding = fields
+    begin
+      value = Integer(value_text, 0)
+    rescue ArgumentError
+      errors << "#{label}:#{index + 1}: invalid numeric value #{value_text.inspect}"
+      next
+    end
+    errors << "#{label}:#{index + 1}: invalid domain #{domain.inspect}" unless domain.match?(/\A[A-Za-z][A-Za-z0-9_]*\z/)
+    errors << "#{label}:#{index + 1}: value outside uint16" unless (0..0xFFFF).cover?(value)
+    errors << "#{label}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{label}:#{index + 1}: invalid live symbol #{symbol.inspect}" unless symbol.match?(/\A[A-Z][A-Z0-9_]+\z/)
+      errors << "#{label}:#{index + 1}: invalid live binding #{binding.inspect}" unless binding == "-" || binding == "0" || binding.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif symbol != "0" || binding != "0"
+      errors << "#{label}:#{index + 1}: tombstone symbol and binding must both be zero"
+    end
+    rows << { domain: domain, value: value, symbol: symbol, state: state, binding: binding, line: index + 1 }
+  end
+  rows.group_by { |row| [row[:domain], row[:value]] }.each do |(domain, value), collisions|
+    errors << "#{label}: duplicate durable key #{domain}/#{value}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| [row[:domain], row[:symbol]] }.each do |(domain, symbol), collisions|
+    errors << "#{label}: duplicate live symbol #{domain}/#{symbol}" if collisions.length > 1
+  end
+  rows.map { |row| row.reject { |key, _value| key == :line } }
+end
+
+def row_signature(row)
+  [row[:domain], row[:value], row[:symbol], row[:state], row[:binding]]
+end
+
+def validate_registry_matches_source(registry_rows, source_rows, errors, label)
+  registry = registry_rows.to_h { |row| [[row[:domain], row[:value]], row] }
+  source = source_rows.to_h { |row| [[row[:domain], row[:value]], row] }
+
+  source.each do |key, expected|
+    actual = registry[key]
+    if actual.nil?
+      errors << "#{label}: durable source row is absent from #{REGISTRY_PATH}: #{key.join('/')}"
+    elsif row_signature(actual) != row_signature(expected)
+      errors << "#{label}: durable source row differs from #{REGISTRY_PATH}: #{key.join('/')}"
+    end
+  end
+  registry.each do |key, row|
+    next if source.key?(key)
+    next if row[:state] == "TOMBSTONE"
+
+    errors << "#{label}: live registry row has no current durable source assignment: #{key.join('/')}"
+  end
+end
+
+def evolution_errors(previous_rows, current_rows, label)
+  errors = []
+  if current_rows.length < previous_rows.length
+    errors << "#{label}: registry deleted #{previous_rows.length - current_rows.length} historical row(s)"
+    return errors
+  end
+
+  previous_rows.each_with_index do |previous, index|
+    current = current_rows[index]
+    unless current[:domain] == previous[:domain] && current[:value] == previous[:value]
+      errors << "#{label}: row #{index + 1} changed key or was reordered"
+      next
+    end
+    if previous[:state] == "TOMBSTONE"
+      errors << "#{label}: row #{index + 1} resurrected or altered a tombstone" unless row_signature(current) == row_signature(previous)
+    elsif current[:state] == "LIVE"
+      errors << "#{label}: row #{index + 1} renamed or changed its binding" unless row_signature(current) == row_signature(previous)
+    elsif current[:state] == "TOMBSTONE"
+      unless current[:symbol] == "0" && current[:binding] == "0"
+        errors << "#{label}: row #{index + 1} has a malformed tombstone transition"
+      end
+    else
+      errors << "#{label}: row #{index + 1} has an invalid state transition"
+    end
+  end
+  errors
+end
+
+def snapshot_texts_from_commit(root, commit, errors, label)
+  SNAPSHOT_PATHS.each_with_object({}) do |relative, texts|
+    stdout, _stderr, success = git_capture(root, "show", "#{commit}:#{relative}")
+    if success
+      texts[relative] = stdout
+    else
+      errors << "#{label}: missing #{relative}"
+    end
+  end
+end
+
+def snapshot_texts_from_index(root, errors, label)
+  registry, _stderr, present = git_capture(root, "show", ":#{REGISTRY_PATH}")
+  return nil unless present
+
+  texts = { REGISTRY_PATH => registry }
+  (SNAPSHOT_PATHS - [REGISTRY_PATH]).each do |relative|
+    stdout, _path_stderr, success = git_capture(root, "show", ":#{relative}")
+    if success
+      texts[relative] = stdout
+    else
+      errors << "#{label}: missing #{relative}"
+    end
+  end
+  texts
+end
+
+def snapshot_texts_from_worktree(root, errors, label)
+  SNAPSHOT_PATHS.each_with_object({}) do |relative, texts|
+    path = root.join(relative)
+    if path.file? && !path.symlink?
+      texts[relative] = path.read
+    else
+      errors << "#{label}: missing regular file #{relative}"
+    end
+  end
+end
+
+def validate_snapshot_texts(texts, errors, label)
+  return [] unless texts && SNAPSHOT_PATHS.all? { |relative| texts.key?(relative) }
+
+  lock_texts = SPECIALIZED_LOCK_PATHS.to_h { |relative| [relative, texts.fetch(relative)] }
+  source = build_source_registry(texts.fetch(DATA_PATH), lock_texts, errors, label)
+  registry = parse_registry_text(texts.fetch(REGISTRY_PATH), errors, "#{label}:#{REGISTRY_PATH}")
+  validate_registry_matches_source(registry, source, errors, label)
+  registry
+end
+
+def reviewed_commit_from_traceability(text, errors, label)
+  decisions = text.scan(/^\| Decision \| `([^`]+)` \|$/).flatten
+  return nil unless decisions.include?("APPROVED")
+
+  if decisions != ["APPROVED"]
+    errors << "#{label}: approval decisions are ambiguous"
+    return nil
+  end
+  commits = text.scan(/^\| Reviewed content commit \| `([0-9a-f]{40})` \|$/).flatten
+  unless commits.length == 1
+    errors << "#{label}: approved record must name exactly one reviewed content commit"
+    return nil
+  end
+  commits.first
+end
+
+def approved_baseline_commit(root, errors)
+  candidates = []
+  trace_path = root.join("docs/PREPRODUCTION_TRACEABILITY.md")
+  candidates << reviewed_commit_from_traceability(trace_path.read, errors, "working tree approval record") if trace_path.file?
+  head_trace, _stderr, head_ok = git_capture(root, "show", "HEAD:docs/PREPRODUCTION_TRACEABILITY.md")
+  candidates << reviewed_commit_from_traceability(head_trace, errors, "HEAD approval record") if head_ok
+  history, history_error, history_ok = git_capture(
+    root,
+    "rev-list",
+    "HEAD",
+    "--",
+    "docs/PREPRODUCTION_TRACEABILITY.md"
+  )
+  if history_ok
+    history.lines.map(&:strip).reject(&:empty?).each do |commit|
+      trace, _trace_error, trace_ok = git_capture(root, "show", "#{commit}:docs/PREPRODUCTION_TRACEABILITY.md")
+      next unless trace_ok
+
+      candidates << reviewed_commit_from_traceability(trace, errors, "historical approval record at #{commit}")
+    end
+  else
+    errors << "cannot inspect historical Gate 2 approval records: #{history_error.strip}"
+  end
+  candidates.compact!
+  if candidates.uniq.length > 1
+    errors << "working tree and HEAD name different Gate 2 reviewed baselines"
+    return nil
+  end
+  candidates.first
+end
+
+def validate_approved_history(root, worktree_rows, errors)
+  baseline = approved_baseline_commit(root, errors)
+  return unless baseline
+
+  _stdout, _stderr, exists = git_capture(root, "cat-file", "-e", "#{baseline}^{commit}")
+  unless exists
+    errors << "serialized-ID baseline commit is unavailable: #{baseline}"
+    return
+  end
+  _ancestor_out, _ancestor_err, ancestor = git_capture(root, "merge-base", "--is-ancestor", baseline, "HEAD")
+  unless ancestor
+    errors << "serialized-ID baseline commit is not an ancestor of HEAD: #{baseline}"
+    return
+  end
+
+  cache = {}
+  load_commit = lambda do |commit|
+    cache[commit] ||= begin
+      snapshot_errors = []
+      texts = snapshot_texts_from_commit(root, commit, snapshot_errors, "commit #{commit}")
+      rows = validate_snapshot_texts(texts, snapshot_errors, "commit #{commit}")
+      errors.concat(snapshot_errors)
+      rows
+    end
+  end
+  load_commit.call(baseline)
+
+  history, _history_error, history_ok = git_capture(root, "rev-list", "--reverse", "--topo-order", "--parents", "#{baseline}..HEAD")
+  unless history_ok
+    errors << "cannot enumerate serialized-ID history after #{baseline}"
+    return
+  end
+  history.each_line do |line|
+    commit, *parents = line.split
+    current_rows = load_commit.call(commit)
+    parents.each do |parent|
+      _out, _err, parent_on_path = git_capture(root, "merge-base", "--is-ancestor", baseline, parent)
+      unless parent_on_path
+        errors << "commit #{commit} has a parent path that bypasses the serialized-ID baseline: #{parent}"
+        next
+      end
+      errors.concat(evolution_errors(load_commit.call(parent), current_rows, "#{parent} -> #{commit}"))
+    end
+  end
+
+  head_rows = load_commit.call("HEAD")
+  index_errors = []
+  index_texts = snapshot_texts_from_index(root, index_errors, "index")
+  if index_texts
+    index_rows = validate_snapshot_texts(index_texts, index_errors, "index")
+    errors.concat(index_errors)
+    errors.concat(evolution_errors(head_rows, index_rows, "HEAD -> index"))
+    errors.concat(evolution_errors(index_rows, worktree_rows, "index -> working tree"))
+  else
+    errors << "approved history requires #{REGISTRY_PATH} in the index"
+  end
+end
+
+def serialized_id_fixture_git!(root, *arguments)
+  _stdout, stderr, success = git_capture(root, *arguments)
+  raise "serialized-ID fixture git #{arguments.join(' ')} failed: #{stderr}" unless success
+end
+
+def validate_serialized_id_fixture(root)
+  errors = []
+  texts = snapshot_texts_from_worktree(root, errors, "fixture working tree")
+  rows = validate_snapshot_texts(texts, errors, "fixture working tree")
+  validate_approved_history(root, rows, errors)
+  errors
+end
+
+def run_serialized_id_git_self_tests
+  assertions = []
+  Dir.mktmpdir("n64game-serialized-id-history-") do |directory|
+    root = Pathname.new(directory)
+    SNAPSHOT_PATHS.each do |relative|
+      destination = root.join(relative)
+      FileUtils.mkdir_p(destination.dirname)
+      FileUtils.cp(ROOT.join(relative), destination)
+    end
+    trace = root.join("docs/PREPRODUCTION_TRACEABILITY.md")
+    trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 remains in progress.\n")
+    serialized_id_fixture_git!(root, "init", "-q")
+    serialized_id_fixture_git!(root, "config", "user.name", "Serialized ID Self Test")
+    serialized_id_fixture_git!(root, "config", "user.email", "serialized-id@example.invalid")
+    serialized_id_fixture_git!(root, "add", "--all")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Reviewed Gate 2 serialized-ID baseline")
+    reviewed_commit, _stderr, _success = git_capture(root, "rev-parse", "HEAD")
+    reviewed_commit = reviewed_commit.strip
+    trace.write(
+      "# Gate 2\n\n## Gate 2 approval record\n\n" \
+      "| Reviewed content commit | `#{reviewed_commit}` |\n" \
+      "| Decision | `APPROVED` |\n"
+    )
+    serialized_id_fixture_git!(root, "add", "docs/PREPRODUCTION_TRACEABILITY.md")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Approve Gate 2 serialized-ID baseline")
+    approval_commit, _approval_error, _approval_ok = git_capture(root, "rev-parse", "HEAD")
+    approval_commit = approval_commit.strip
+    approval_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts the exact committed reviewed/approval baseline" if approval_errors.empty?
+    raise "serialized-ID Git self-test rejected valid approval: #{approval_errors.join('; ')}" unless approval_errors.empty?
+
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "legal-tombstone")
+    data_path = root.join(DATA_PATH)
+    registry_path = root.join(REGISTRY_PATH)
+    data_path.write(data_path.read.sub(/^\s*AFFINITY_NONE\s*=\s*0,.*\n/, ""))
+    registry_path.write(
+      registry_path.read.sub(
+        /^AffinityId\|0x0000\|AFFINITY_NONE\|LIVE\|-$/,
+        "AffinityId|0x0000|0|TOMBSTONE|0"
+      )
+    )
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Legally tombstone a durable ID")
+    tombstone_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts a committed same-index LIVE-to-TOMBSTONE transition" if tombstone_errors.empty?
+    raise "serialized-ID Git self-test rejected legal tombstone: #{tombstone_errors.join('; ')}" unless tombstone_errors.empty?
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "forbidden-rename")
+    data_path.write(data_path.read.gsub("AFFINITY_NONE", "AFFINITY_VOID"))
+    registry_path.write(registry_path.read.gsub("AFFINITY_NONE", "AFFINITY_VOID"))
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Coordinated forbidden durable-ID rename")
+    rename_errors = validate_serialized_id_fixture(root)
+    rename_rejected = rename_errors.any? { |message| message.include?("renamed or changed its binding") }
+    assertions << "rejects a coordinated source-and-lock rename after approval" if rename_rejected
+    raise "serialized-ID Git self-test accepted coordinated rename: #{rename_errors.join('; ')}" unless rename_rejected
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "erased-approval-rename")
+    trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 remains in progress.\n")
+    data_path.write(data_path.read.gsub("AFFINITY_NONE", "AFFINITY_ERASED"))
+    registry_path.write(registry_path.read.gsub("AFFINITY_NONE", "AFFINITY_ERASED"))
+    serialized_id_fixture_git!(root, "add", "--all")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Erase approval record and rename durable ID")
+    erased_errors = validate_serialized_id_fixture(root)
+    erased_rejected = erased_errors.any? { |message| message.include?("renamed or changed its binding") }
+    assertions << "retains the historical baseline after current approval evidence is erased" if erased_rejected
+    raise "serialized-ID Git self-test lost erased historical baseline: #{erased_errors.join('; ')}" unless erased_rejected
+  end
+  assertions
+end
+
+def run_serialized_id_self_tests
+  base = [
+    { domain: "SceneIdValue", value: 1, symbol: "SCENE_BOOT", state: "LIVE", binding: "-" },
+    { domain: "StoryFlagIndex", value: 0, symbol: "FLAG_OPENING", state: "LIVE", binding: "-" }
+  ]
+  appended = base + [{ domain: "SceneIdValue", value: 2, symbol: "SCENE_TITLE", state: "LIVE", binding: "-" }]
+  tombstoned = base.map(&:dup)
+  tombstoned[1] = { domain: "StoryFlagIndex", value: 0, symbol: "0", state: "TOMBSTONE", binding: "0" }
+  fixtures = {
+    "accepts unchanged history" => evolution_errors(base, base.map(&:dup), "fixture").empty?,
+    "accepts append" => evolution_errors(base, appended, "fixture").empty?,
+    "accepts same-index tombstone" => evolution_errors(base, tombstoned, "fixture").empty?,
+    "rejects deletion" => !evolution_errors(base, base.first(1), "fixture").empty?,
+    "rejects coordinated rename/reuse" => !evolution_errors(base, [base[0].merge(symbol: "SCENE_REUSED"), base[1]], "fixture").empty?,
+    "rejects insertion or reordering" => !evolution_errors(base, [appended[2], *base], "fixture").empty?,
+    "rejects tombstone resurrection" => !evolution_errors(tombstoned, base, "fixture").empty?
+  }
+  failures = fixtures.reject { |_label, passed| passed }.keys
+  raise "serialized-ID history self-test failed: #{failures.join(', ')}" unless failures.empty?
+
+  git_assertions = run_serialized_id_git_self_tests
+  puts "Serialized-ID history self-test passed: #{fixtures.length + git_assertions.length} isolated accept/reject fixtures, including committed approval history."
+end
+
+if ARGV == ["--self-test-serialized-id-history"]
+  run_serialized_id_self_tests
+  exit 0
+elsif !ARGV.empty?
+  warn "usage: scripts/validate-id-locks [--self-test-serialized-id-history]"
+  exit 2
+end
+
+run_serialized_id_self_tests
+errors = []
+worktree_texts = snapshot_texts_from_worktree(ROOT, errors, "working tree")
+worktree_rows = validate_snapshot_texts(worktree_texts, errors, "working tree")
+
+data = worktree_texts.fetch(DATA_PATH, "")
+graph_path = ROOT.join("docs/DIALOGUE_GRAPH.md")
+unless graph_path.file?
+  errors << "missing docs/DIALOGUE_GRAPH.md"
+  graph = ""
+else
+  graph = graph_path.read
+end
+
+dialogue = parse_once_lock_text("data/ids/dialogue_once_bits.lock", worktree_texts.fetch("data/ids/dialogue_once_bits.lock", ""), errors)
+examine = parse_once_lock_text("data/ids/examine_once_bits.lock", worktree_texts.fetch("data/ids/examine_once_bits.lock", ""), errors)
+npc = parse_once_lock_text("data/ids/npc_once_bits.lock", worktree_texts.fetch("data/ids/npc_once_bits.lock", ""), errors)
+spawn_ids = parse_numeric_lock_text("data/ids/spawn_ids.lock", worktree_texts.fetch("data/ids/spawn_ids.lock", ""), errors)
+cutscene_ids = parse_numeric_lock_text("data/ids/cutscene_ids.lock", worktree_texts.fetch("data/ids/cutscene_ids.lock", ""), errors)
+
+errors << "dialogue once lock: expected at least 10 rows, got #{dialogue.length}" unless dialogue.length >= 10
+errors << "examine once lock: expected at least 20 rows, got #{examine.length}" unless examine.length >= 20
+errors << "NPC once lock: expected at least 3 rows, got #{npc.length}" unless npc.length >= 3
+errors << "spawn ID lock: expected at least 35 rows, got #{spawn_ids.length}" unless spawn_ids.length >= 35
+errors << "cutscene ID lock: expected at least 1 row, got #{cutscene_ids.length}" unless cutscene_ids.length >= 1
+
+enum_blocks = numeric_enum_blocks(data, errors, DATA_PATH)
+{
+  "data/ids/spawn_ids.lock" => [spawn_ids, "SpawnIdValue", "SPAWN_NONE"],
+  "data/ids/cutscene_ids.lock" => [cutscene_ids, "CutsceneIdValue", "CUTSCENE_NONE"]
+}.each do |relative, (locked_rows, enum_name, zero_symbol)|
+  body = enum_blocks[enum_name]
+  declared = body ? numeric_assignments(enum_name, body, errors, DATA_PATH).reject { |_value, symbol| symbol == zero_symbol } : []
+  live = locked_rows.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol]] }
+  tombstones = locked_rows.select { |row| row[:state] == "TOMBSTONE" }.map { |row| row[:value] }
+  errors << "#{relative}: live rows differ from DATA_SCHEMAS enum" unless live.sort == declared.sort
+  declared.each do |value, symbol|
+    errors << "#{relative}: declared live #{symbol} reuses tombstoned #{format('0x%04X', value)}" if tombstones.include?(value)
+  end
+end
+
+dialogue_section = data[/The live dialogue-once lock assignments are exact:(.*?)(?=The live examine-once assignments are)/m]
+if dialogue_section
+  documented = dialogue_section.scan(
+    /^\|\s*(\d+)\s*\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*`[^`]*\/\s*([A-Z0-9_]+)`\s*\|/
+  ).map { |bit, owner, repeat| [bit.to_i, owner, repeat] }
+  locked = dialogue.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "dialogue once lock differs from DATA_SCHEMAS live assignment table" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing live dialogue-once assignment section"
+end
+
+examine_section = data[/The live examine-once assignments are the exact pairs(.*?)(?=The NPC occurrence and lock tables are literal:)/m]
+if examine_section
+  documented = examine_section.scan(/\((\d+),(INT_[A-Z0-9_]+),([A-Z][A-Z0-9_]+)\)/).map do |bit, owner, repeat|
+    [bit.to_i, owner, repeat]
+  end
+  locked = examine.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "examine once lock differs from DATA_SCHEMAS exact-pair list" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing live examine-once assignment section"
+end
+
+npc_section = data[/The NPC occurrence and lock tables are literal:(.*?)(?=The six variant rows are)/m]
+if npc_section
+  documented = npc_section.scan(
+    /^\|\s*`(NPC_OCCURRENCE_[A-Z0-9_]+)\s*\/\s*(CHAR_[A-Z0-9_]+)\s*\/[^`]*`\s*\|\s*`[^`]+`\s*\|\s*`[^`]+`\s*\|\s*`(\d+)\s*\//
+  ).map { |owner, character, bit| [bit.to_i, owner, character] }.sort_by(&:first)
+  locked = npc.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "NPC once lock differs from DATA_SCHEMAS literal table" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing NPC occurrence/lock section"
+end
+
+graph_rows = {}
+graph.lines.each_with_index do |line, index|
+  next unless (match = line.match(/^DROW\(([A-Z][A-Z0-9_]+),(?:[^,]*,){11}\s*(0x[0-9A-Fa-f]+|\d+)\s*,/))
+
+  graph_rows[match[1]] = { flags: Integer(match[2], 0), line: index + 1 }
+end
+
+dialogue.select { |row| row[:state] == "LIVE" }.each do |row|
+  graph_row = graph_rows[row[:symbol]]
+  if graph_row.nil?
+    errors << "dialogue once owner #{row[:symbol]} has no DROW"
+  elsif (graph_row[:flags] & 0x04).zero?
+    errors << "dialogue once owner #{row[:symbol]} DROW lacks ONE_SHOT"
+  end
+  if row[:binding] != "0" && !graph_rows.key?(row[:binding])
+    errors << "dialogue once repeat #{row[:binding]} has no DROW"
+  end
+end
+examine.select { |row| row[:state] == "LIVE" && row[:binding] != "0" }.each do |row|
+  errors << "once lock repeat #{row[:binding]} has no DROW" unless graph_rows.key?(row[:binding])
+end
+npc.select { |row| row[:state] == "LIVE" }.each do |row|
+  unless data.match?(/^\s*#{Regexp.escape(row[:binding])}\s*=\s*(?:0x[0-9A-Fa-f]+|\d+)\b/)
+    errors << "NPC once lock character #{row[:binding]} lacks numeric CharacterId"
+  end
+end
+
+validate_approved_history(ROOT, worktree_rows, errors)
+
+if errors.empty?
+  live_count = worktree_rows.count { |row| row[:state] == "LIVE" }
+  tombstone_count = worktree_rows.length - live_count
+  puts "ID lock validation passed: #{dialogue.length} dialogue, #{examine.length} examine, #{npc.length} NPC bits, #{spawn_ids.length} spawns, #{cutscene_ids.length} cutscenes."
+  puts "Serialized registry: #{worktree_rows.length} rows (#{live_count} live, #{tombstone_count} tombstones), immutable from the committed Gate 2 baseline after approval."
+  exit 0
+end
+
+warn "ID lock validation failed with #{errors.length} error(s):"
+errors.each { |message| warn "- #{message}" }
+exit 1

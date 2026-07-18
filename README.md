@@ -4,9 +4,9 @@
 
 ## Current status
 
-**Preproduction — Gate 1: reference and legal audit.**
+**Preproduction — Gate 2: specification and production-contract reconciliation in progress.**
 
-The repository does not contain a playable ROM yet. Current work is establishing the clean-room reference study, art direction, technical architecture, production inventory, licensing, reproducible toolchain, and evidence gates required before implementation. Status claims will be updated only when the corresponding output has been verified.
+The repository does not contain a playable ROM yet. Gate 2 is the specification and production-contract stage for the clean-room boundary, art direction, technical architecture, production inventory, licensing, and evidence gates. Gate 3 will establish the pinned reproducible toolchain and first verified clean ROM. Status claims are updated only after the corresponding output has been verified.
 
 The authoritative production contract is [docs/N64GAME_MASTER_SPEC.md](docs/N64GAME_MASTER_SPEC.md). The reusable goal prompt is [docs/N64GAME_GOAL_PROMPT.md](docs/N64GAME_GOAL_PROMPT.md).
 

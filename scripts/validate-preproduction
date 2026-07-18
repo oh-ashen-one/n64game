@@ -1,0 +1,1699 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "pathname"
+require "uri"
+require "open3"
+require "date"
+require "fileutils"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+ERRORS = []
+
+def error(message)
+  ERRORS << message
+end
+
+def read(relative)
+  path = ROOT.join(relative)
+  unless path.file?
+    error("missing required file: #{relative}")
+    return ""
+  end
+  path.read
+end
+
+GATE2_APPROVAL_TRANSITION_PATHS = %w[
+  README.md
+  docs/PRODUCTION_CHECKLIST.md
+  docs/PREPRODUCTION_TRACEABILITY.md
+].freeze
+
+# These are the Gate 2 contract bytes audited by the two independent reviewers.
+# They are immutable only across the reviewed-content -> approval transition.
+# Later gates may legitimately revise them while the two historical commits keep
+# the exact reviewed snapshot and its approval evidence permanently inspectable.
+GATE2_REVIEWED_SNAPSHOT_PATHS = %w[
+  LICENSE
+  ASSET_LICENSE.md
+  THIRD_PARTY_NOTICES.md
+  docs/N64GAME_MASTER_SPEC.md
+  docs/N64GAME_GOAL_PROMPT.md
+  docs/reference-study.md
+  docs/STORY_AND_TIMING.md
+  docs/DIALOGUE_GRAPH.md
+  docs/CONDITION_REGISTRY.md
+  docs/TECHNICAL_ARCHITECTURE.md
+  docs/DATA_SCHEMAS.md
+  docs/ART_BIBLE.md
+  docs/ASSET_INVENTORY.md
+  docs/ASSET_REVIEW_TEMPLATES.md
+  docs/ASSET_LEDGER.md
+  docs/NAMING_AND_ORIGINALITY_AUDIT.md
+  docs/VISUAL_BENCHMARK_APPROVAL.md
+  data/ids/dialogue_once_bits.lock
+  data/ids/examine_once_bits.lock
+  data/ids/npc_once_bits.lock
+  data/ids/spawn_ids.lock
+  data/ids/cutscene_ids.lock
+  data/ids/serialized_ids.lock
+  scripts/validate-data-c
+  scripts/validate-dialogue-graph
+  scripts/validate-condition-registry
+  scripts/validate-id-locks
+  scripts/validate-asset-contract
+  scripts/validate-public-hygiene
+  scripts/validate-preproduction --reviewed-content
+].freeze
+
+GATE2_APPROVAL_EVIDENCE_COMMANDS = %w[
+  scripts/validate-data-c
+  scripts/validate-dialogue-graph
+  scripts/validate-condition-registry
+  scripts/validate-id-locks
+  scripts/validate-asset-contract
+  scripts/validate-public-hygiene
+  scripts/validate-preproduction
+].freeze
+
+GENERIC_REVIEWER_COMPONENTS = %w[
+  agent anonymous audit bot codex example generic identity name pending person
+  reviewer root sample someone test testing tbd todo unknown user
+].freeze
+
+GATE2_REVIEWED_CONTENT_PLACEHOLDER_ERRORS = [
+  "Gate 2 exit audit still has 37 unchecked item(s)",
+  "Gate 2 approval record lacks exactly one full reviewed content commit",
+  "Gate 2 approval record must contain exactly one reviewer-1 row and one reviewer-2 row",
+  "Gate 2 approval record lacks exactly one ISO review date",
+  "Gate 2 approval record must contain the exact ordered reviewed-SHA/command/result=PASS evidence rows",
+  "Gate 2 approval record omits one exact Gate 3/Gate 4 deferred-measurement-risk row",
+  "Gate 2 approval decision is not exactly one APPROVED row"
+].freeze
+
+def git_capture(root, *arguments)
+  stdout, stderr, status = Open3.capture3(
+    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    "git", *arguments,
+    chdir: root.to_s
+  )
+  [stdout, stderr, status.success?]
+end
+
+def committed_file(root, commit, relative)
+  stdout, _stderr, success = git_capture(root, "show", "#{commit}:#{relative}")
+  success ? stdout : nil
+end
+
+def committed_mode(root, commit, relative)
+  stdout, _stderr, success = git_capture(root, "ls-tree", commit, "--", relative)
+  return nil unless success
+
+  match = stdout.match(/\A([0-9]{6})\s+blob\s+[0-9a-f]+\t/)
+  match && match[1]
+end
+
+def heading_section(text, heading)
+  match = text.match(/^#{Regexp.escape(heading)}[ \t]*\r?\n?/)
+  return nil unless match
+
+  body_start = match.end(0)
+  next_heading = text.match(/^##\s+/, body_start)
+  body_end = next_heading ? next_heading.begin(0) : text.length
+  {
+    heading_start: match.begin(0),
+    body_start: body_start,
+    body_end: body_end,
+    body: text[body_start...body_end]
+  }
+end
+
+def heading_count(text, heading)
+  text.scan(/^#{Regexp.escape(heading)}[ \t]*\r?$/).length
+end
+
+def gate2_checkbox_marks(traceability)
+  section = heading_section(traceability, "## Gate 2 exit audit")
+  section ? section[:body].scan(/^- \[([ xX])\] /).flatten : []
+end
+
+def gate2_approval_record(traceability)
+  section = heading_section(traceability, "## Gate 2 approval record")
+  section && section[:body]
+end
+
+def normalized_gate2_traceability(traceability)
+  audit = heading_section(traceability, "## Gate 2 exit audit")
+  approval = heading_section(traceability, "## Gate 2 approval record")
+  return nil unless audit && approval
+
+  normalized = traceability.dup
+  replacements = [
+    [audit[:body_start], audit[:body_end], audit[:body].gsub(/^- \[[ xX]\] /, "- [?] ")],
+    [approval[:body_start], approval[:body_end], "<GATE2_APPROVAL_RECORD>\n"]
+  ]
+  replacements.sort_by(&:first).reverse_each do |start_index, end_index, replacement|
+    normalized[start_index...end_index] = replacement
+  end
+  normalized
+end
+
+def gate2_readme_status_line(readme)
+  matches = readme.lines.select { |line| line.match?(/^\*\*Preproduction — Gate 2: .*\*\*[ \t]*\r?\n?$/) }
+  matches.length == 1 ? matches.first.sub(/\r?\n\z/, "") : nil
+end
+
+def normalized_gate2_readme(readme)
+  status_line = gate2_readme_status_line(readme)
+  return nil unless status_line
+
+  readme.sub(status_line, "**<GATE2_STATUS>**")
+end
+
+def gate2_checklist_row(checklist)
+  matches = checklist.lines.select { |line| line.match?(/^\| 2\. Preproduction \|/) }
+  matches.length == 1 ? matches.first.sub(/\r?\n\z/, "") : nil
+end
+
+def normalized_gate2_checklist(checklist)
+  row = gate2_checklist_row(checklist)
+  return nil unless row
+
+  checklist.sub(row, "| <GATE2_CHECKLIST_ROW> |")
+end
+
+def canonical_reviewer_identity?(identity)
+  suffix = if (match = identity.match(/\Agithub:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\z/))
+             match[1]
+           elsif (match = identity.match(%r{\Aagent:(/[a-z0-9][a-z0-9._/-]{2,127})\z}))
+             match[1]
+           end
+  return false unless suffix
+
+  components = suffix.downcase.split(/[^a-z0-9]+/).reject(&:empty?).map { |component| component.sub(/\d+\z/, "") }
+  components.any? { |component| !component.empty? && !GENERIC_REVIEWER_COMPONENTS.include?(component) }
+end
+
+def commit_calendar_date(root, commit)
+  stdout, _stderr, success = git_capture(root, "show", "-s", "--format=%cs", commit)
+  return nil unless success && stdout.strip.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+
+  Date.iso8601(stdout.strip)
+rescue Date::Error
+  nil
+end
+
+def validate_gate2_record_fields(record, expected_reviewed_commit, errors, root: nil, approval_commit: nil,
+                                 reviewed_date_override: nil, approval_date_override: nil)
+  unless record
+    errors << "Gate 2 approval record section is missing"
+    return nil
+  end
+
+  reviewed_rows = record.scan(/^\| Reviewed content commit \| `([0-9a-f]{40})` \|$/).flatten
+  errors << "Gate 2 approval record lacks exactly one full reviewed content commit" unless reviewed_rows.length == 1
+  reviewed_commit = reviewed_rows.first
+  if expected_reviewed_commit && reviewed_commit != expected_reviewed_commit
+    errors << "Gate 2 approval record names #{reviewed_commit || 'no commit'}, expected #{expected_reviewed_commit}"
+  end
+
+  reviewer_1_rows = record.scan(/^\| Independent reviewer 1 \| `([^`]+)` \|$/).flatten
+  reviewer_2_rows = record.scan(/^\| Independent reviewer 2 \| `([^`]+)` \|$/).flatten
+  unless reviewer_1_rows.length == 1 && reviewer_2_rows.length == 1
+    errors << "Gate 2 approval record must contain exactly one reviewer-1 row and one reviewer-2 row"
+  end
+  reviewers = [reviewer_1_rows.first, reviewer_2_rows.first].compact
+  if reviewers.length == 2
+    normalized_reviewers = reviewers.map(&:downcase)
+    errors << "Gate 2 independent reviewer identities are not distinct" unless normalized_reviewers.uniq.length == 2
+    reviewers.each do |reviewer|
+      errors << "Gate 2 reviewer identity is not canonical or is placeholder-only: #{reviewer.inspect}" unless
+        canonical_reviewer_identity?(reviewer)
+    end
+  end
+
+  date_rows = record.scan(/^\| Review date \| `(\d{4}-\d{2}-\d{2})` \|$/).flatten
+  if date_rows.length != 1
+    errors << "Gate 2 approval record lacks exactly one ISO review date"
+  else
+    begin
+      review_date = Date.iso8601(date_rows.first)
+      errors << "Gate 2 approval review date is in the future" if review_date > Date.today
+      reviewed_commit_date = reviewed_date_override || (root && reviewed_commit && commit_calendar_date(root, reviewed_commit))
+      approval_commit_date = approval_date_override || (root && approval_commit && commit_calendar_date(root, approval_commit))
+      if reviewed_commit && root && reviewed_commit_date.nil?
+        errors << "Gate 2 cannot read the reviewed content commit date"
+      elsif reviewed_commit_date && review_date < reviewed_commit_date
+        errors << "Gate 2 review date predates the reviewed content commit"
+      end
+      if approval_commit && root && approval_commit_date.nil?
+        errors << "Gate 2 cannot read the approval commit date"
+      elsif approval_commit_date && review_date > approval_commit_date
+        errors << "Gate 2 review date is later than the approval commit"
+      end
+    rescue Date::Error
+      errors << "Gate 2 approval record contains an invalid calendar date"
+    end
+  end
+
+  evidence_rows = record.scan(
+    /^\| Validation evidence \| `reviewed=([0-9a-f]{40}); command=(scripts\/[a-z0-9-]+(?: --[a-z0-9-]+)?); result=PASS` \|$/
+  )
+  evidence_lines = record.lines.count { |line| line.start_with?("| Validation evidence ") }
+  expected_evidence = GATE2_APPROVAL_EVIDENCE_COMMANDS.map { |command| [reviewed_commit, command] }
+  actual_evidence = evidence_rows.map { |sha, command| [sha, command] }
+  unless reviewed_commit && evidence_lines == GATE2_APPROVAL_EVIDENCE_COMMANDS.length &&
+         actual_evidence == expected_evidence
+    errors << "Gate 2 approval record must contain the exact ordered reviewed-SHA/command/result=PASS evidence rows"
+  end
+  risk_rows = record.scan(/^\| Deferred measurement risks \| `([^`]+)` \|$/).flatten
+  unless risk_rows.length == 1 && risk_rows.first.include?("Gate 3") && risk_rows.first.include?("Gate 4")
+    errors << "Gate 2 approval record omits one exact Gate 3/Gate 4 deferred-measurement-risk row"
+  end
+  decisions = record.scan(/^\| Decision \| `([^`]+)` \|$/).flatten
+  errors << "Gate 2 approval decision is not exactly one APPROVED row" unless decisions == ["APPROVED"]
+  reviewed_commit
+end
+
+def validate_gate2_approval_history(root, current_readme, current_traceability, current_checklist)
+  errors = []
+  ["## Gate 2 exit audit", "## Gate 2 approval record"].each do |heading|
+    count = heading_count(current_traceability, heading)
+    errors << "current PREPRODUCTION_TRACEABILITY must contain exactly one #{heading}; found #{count}" unless count == 1
+  end
+  current_marks = gate2_checkbox_marks(current_traceability)
+  errors << "Gate 2 exit-audit checkboxes: expected 37, got #{current_marks.length}" unless current_marks.length == 37
+  unchecked = current_marks.count { |mark| mark == " " }
+  errors << "Gate 2 exit audit still has #{unchecked} unchecked item(s)" unless current_marks.length == 37 && unchecked.zero?
+
+  current_record = gate2_approval_record(current_traceability)
+  reviewed_commit = validate_gate2_record_fields(current_record, nil, errors, root: root)
+  return errors unless reviewed_commit
+
+  _object_out, _object_err, commit_exists = git_capture(root, "cat-file", "-e", "#{reviewed_commit}^{commit}")
+  unless commit_exists
+    errors << "Gate 2 reviewed content commit is not available locally: #{reviewed_commit}"
+    return errors
+  end
+
+  _ancestor_out, _ancestor_err, ancestor = git_capture(
+    root, "merge-base", "--is-ancestor", reviewed_commit, "HEAD"
+  )
+  unless ancestor
+    errors << "Gate 2 reviewed content commit is not an ancestor of HEAD"
+    return errors
+  end
+
+  history, _history_err, history_ok = git_capture(root, "rev-list", "--parents", "HEAD")
+  unless history_ok
+    errors << "cannot inspect Git history for the Gate 2 approval transition"
+    return errors
+  end
+
+  reachable_children = []
+  direct_single_parent_children = history.lines.each_with_object([]) do |line, children|
+    fields = line.split
+    commit = fields.first
+    parents = fields.drop(1)
+    next unless parents.include?(reviewed_commit)
+
+    reachable_children << commit
+    children << commit if parents == [reviewed_commit]
+  end
+  approval_candidates = direct_single_parent_children.select do |commit|
+    trace = committed_file(root, commit, "docs/PREPRODUCTION_TRACEABILITY.md")
+    record = trace && gate2_approval_record(trace)
+    record &&
+      record.match?(/^\| Reviewed content commit \| `#{Regexp.escape(reviewed_commit)}` \|$/) &&
+      record.match?(/^\| Decision \| `APPROVED` \|$/)
+  end
+
+  if approval_candidates.empty?
+    errors << "no committed Gate 2 approval transition is a direct single-parent child of reviewed content commit #{reviewed_commit}"
+    return errors
+  end
+  if approval_candidates.length > 1
+    errors << "multiple Gate 2 approval transitions descend directly from reviewed content commit #{reviewed_commit}"
+    return errors
+  end
+  approval_commit = approval_candidates.first
+  unless reachable_children.uniq == [approval_commit]
+    errors << "every reviewed-content -> HEAD history path must pass through the sole Gate 2 approval commit"
+  end
+
+  changed_out, _changed_err, changed_ok = git_capture(
+    root, "diff-tree", "--no-commit-id", "--name-only", "-r", reviewed_commit, approval_commit
+  )
+  unless changed_ok
+    errors << "cannot inspect the reviewed-content -> approval transition diff"
+  else
+    changed_paths = changed_out.lines.map(&:strip).reject(&:empty?).sort
+    expected_paths = GATE2_APPROVAL_TRANSITION_PATHS.sort
+    unless changed_paths == expected_paths
+      errors << "Gate 2 approval transition must change exactly #{expected_paths.join(', ')}; changed #{changed_paths.join(', ')}"
+    end
+  end
+
+  GATE2_REVIEWED_SNAPSHOT_PATHS.each do |relative|
+    reviewed_bytes = committed_file(root, reviewed_commit, relative)
+    approved_bytes = committed_file(root, approval_commit, relative)
+    reviewed_mode = committed_mode(root, reviewed_commit, relative)
+    approved_mode = committed_mode(root, approval_commit, relative)
+    if reviewed_bytes.nil? || approved_bytes.nil?
+      errors << "Gate 2 snapshot file is missing from reviewed or approval commit: #{relative}"
+    elsif reviewed_bytes != approved_bytes
+      errors << "Gate 2 snapshot file changed during approval transition: #{relative}"
+    end
+    unless reviewed_mode && reviewed_mode == approved_mode
+      errors << "Gate 2 snapshot file changed type or mode during approval transition: #{relative}"
+    end
+  end
+
+  GATE2_APPROVAL_TRANSITION_PATHS.each do |relative|
+    reviewed_mode = committed_mode(root, reviewed_commit, relative)
+    approved_mode = committed_mode(root, approval_commit, relative)
+    unless reviewed_mode && reviewed_mode == approved_mode
+      errors << "Gate 2 controlled approval file changed type or mode during approval: #{relative}"
+    end
+  end
+
+  reviewed_readme = committed_file(root, reviewed_commit, "README.md")
+  approved_readme = committed_file(root, approval_commit, "README.md")
+  reviewed_checklist = committed_file(root, reviewed_commit, "docs/PRODUCTION_CHECKLIST.md")
+  approved_checklist = committed_file(root, approval_commit, "docs/PRODUCTION_CHECKLIST.md")
+  reviewed_traceability = committed_file(root, reviewed_commit, "docs/PREPRODUCTION_TRACEABILITY.md")
+  approved_traceability = committed_file(root, approval_commit, "docs/PREPRODUCTION_TRACEABILITY.md")
+
+  if [reviewed_readme, approved_readme, reviewed_checklist, approved_checklist,
+      reviewed_traceability, approved_traceability].any?(&:nil?)
+    errors << "Gate 2 approval transition is missing one or more controlled approval files"
+    return errors
+  end
+
+  [reviewed_traceability, approved_traceability].each_with_index do |trace, index|
+    label = index.zero? ? "reviewed content commit" : "approval commit"
+    ["## Gate 2 exit audit", "## Gate 2 approval record"].each do |heading|
+      count = heading_count(trace, heading)
+      errors << "#{label} must contain exactly one #{heading}; found #{count}" unless count == 1
+    end
+  end
+
+  reviewed_status = gate2_readme_status_line(reviewed_readme)
+  approved_status = gate2_readme_status_line(approved_readme)
+  unless reviewed_status&.match?(/\bin progress\b/i) && !reviewed_status.match?(/\bcomplete\b/i)
+    errors << "reviewed content commit must report Gate 2 in progress in README"
+  end
+  unless approved_status&.match?(/\A\*\*Preproduction — Gate 2: complete\.?\*\*\z/)
+    errors << "approval commit must report Gate 2 complete in README"
+  end
+  unless normalized_gate2_readme(reviewed_readme) == normalized_gate2_readme(approved_readme)
+    errors << "README changed beyond its Gate 2 status line during approval"
+  end
+
+  reviewed_row = gate2_checklist_row(reviewed_checklist)
+  approved_row = gate2_checklist_row(approved_checklist)
+  unless reviewed_row&.match?(/^\| 2\. Preproduction \| In progress \|/)
+    errors << "reviewed content commit must report Gate 2 In progress in PRODUCTION_CHECKLIST"
+  end
+  unless approved_row&.match?(/^\| 2\. Preproduction \| Complete \|/)
+    errors << "approval commit must report Gate 2 Complete in PRODUCTION_CHECKLIST"
+  end
+  unless normalized_gate2_checklist(reviewed_checklist) == normalized_gate2_checklist(approved_checklist)
+    errors << "PRODUCTION_CHECKLIST changed beyond its Gate 2 row during approval"
+  end
+
+  reviewed_marks = gate2_checkbox_marks(reviewed_traceability)
+  approved_marks = gate2_checkbox_marks(approved_traceability)
+  unless reviewed_marks.length == 37 && reviewed_marks.all? { |mark| mark == " " }
+    errors << "reviewed content commit must contain exactly 37 unchecked Gate 2 audit items"
+  end
+  unless approved_marks.length == 37 && approved_marks.none? { |mark| mark == " " }
+    errors << "approval commit must contain exactly 37 checked Gate 2 audit items"
+  end
+  reviewed_record = gate2_approval_record(reviewed_traceability)
+  unless reviewed_record&.match?(/\bin progress\b/i) &&
+         !reviewed_record.match?(/^\| Reviewed content commit \| `[0-9a-f]{40}` \|$/) &&
+         !reviewed_record.match?(/^\| Decision \| `APPROVED` \|$/)
+    errors << "reviewed content commit must retain an unapproved in-progress Gate 2 approval record"
+  end
+  unless normalized_gate2_traceability(reviewed_traceability) == normalized_gate2_traceability(approved_traceability)
+    errors << "PREPRODUCTION_TRACEABILITY changed beyond Gate 2 checkbox marks and approval record during approval"
+  end
+
+  approved_record = gate2_approval_record(approved_traceability)
+  validate_gate2_record_fields(approved_record, reviewed_commit, errors, root: root, approval_commit: approval_commit)
+  approved_audit = heading_section(approved_traceability, "## Gate 2 exit audit")
+  current_audit = heading_section(current_traceability, "## Gate 2 exit audit")
+  unless approved_record == current_record
+    errors << "current Gate 2 approval record differs from the committed approval transition"
+  end
+  unless approved_audit && current_audit && approved_audit[:body] == current_audit[:body]
+    errors << "current Gate 2 exit audit differs from the committed approval transition"
+  end
+
+
+  head_traceability = committed_file(root, "HEAD", "docs/PREPRODUCTION_TRACEABILITY.md")
+  if head_traceability
+    ["## Gate 2 exit audit", "## Gate 2 approval record"].each do |heading|
+      count = heading_count(head_traceability, heading)
+      errors << "HEAD PREPRODUCTION_TRACEABILITY must contain exactly one #{heading}; found #{count}" unless count == 1
+    end
+  end
+  head_record = head_traceability && gate2_approval_record(head_traceability)
+  head_audit = head_traceability && heading_section(head_traceability, "## Gate 2 exit audit")
+  unless head_record == approved_record
+    errors << "HEAD does not preserve the committed Gate 2 approval record"
+  end
+  unless head_audit && approved_audit && head_audit[:body] == approved_audit[:body]
+    errors << "HEAD does not preserve the committed Gate 2 exit audit"
+  end
+
+  current_row = gate2_checklist_row(current_checklist)
+  unless current_row&.match?(/^\| 2\. Preproduction \| Complete \|/)
+    errors << "current PRODUCTION_CHECKLIST does not preserve Gate 2 Complete"
+  end
+  head_checklist = committed_file(root, "HEAD", "docs/PRODUCTION_CHECKLIST.md")
+  head_row = head_checklist && gate2_checklist_row(head_checklist)
+  unless head_row&.match?(/^\| 2\. Preproduction \| Complete \|/)
+    errors << "HEAD does not preserve Gate 2 Complete in PRODUCTION_CHECKLIST"
+  end
+  current_status = gate2_readme_status_line(current_readme)
+  if current_status && !current_status.match?(/\A\*\*Preproduction — Gate 2: complete\.?\*\*\z/)
+    errors << "current README still has a non-complete Gate 2 status"
+  end
+
+  head_out, _head_err, head_ok = git_capture(root, "rev-parse", "HEAD")
+  if head_ok && head_out.strip == approval_commit
+    errors << "uncommitted README differs from the approval commit" unless current_readme == approved_readme
+    errors << "uncommitted PRODUCTION_CHECKLIST differs from the approval commit" unless current_checklist == approved_checklist
+    errors << "uncommitted PREPRODUCTION_TRACEABILITY differs from the approval commit" unless current_traceability == approved_traceability
+  end
+
+  errors
+end
+
+def between(text, start_marker, end_marker = nil)
+  start_index = text.index(start_marker)
+  unless start_index
+    error("missing section marker: #{start_marker}")
+    return ""
+  end
+
+  body_start = start_index + start_marker.length
+  end_index = end_marker ? text.index(end_marker, body_start) : text.length
+  unless end_index
+    error("missing section end marker after #{start_marker}: #{end_marker}")
+    return ""
+  end
+  text[body_start...end_index]
+end
+
+def table_id_count(text, start_marker, end_marker)
+  between(text, start_marker, end_marker).lines.count do |line|
+    line.match?(/^\|\s*`[^`]+`\s*\|/)
+  end
+end
+
+def expect_count(label, actual, expected)
+  error("#{label}: expected #{expected}, got #{actual}") unless actual == expected
+end
+
+def enum_count(text, enum_name, prefix, excluded = [])
+  match = text.match(/typedef enum #{Regexp.escape(enum_name)}\s*\{(?<body>.*?)\}\s*#{Regexp.escape(enum_name)}\s*;/m)
+  unless match
+    error("missing enum: #{enum_name}")
+    return 0
+  end
+
+  match[:body].lines.count do |line|
+    symbol = line[/^\s*(#{Regexp.escape(prefix)}[A-Z0-9_]+)\s*=/, 1]
+    symbol && !excluded.include?(symbol)
+  end
+end
+
+def validate_offset_table(label, text, start_marker, end_marker, expected_total)
+  body = between(text, start_marker, end_marker)
+  rows = body.scan(/^\|\s*`0x([0-9A-Fa-f]+)`\s*\|\s*(\d+)\s*\|/)
+  if rows.empty?
+    error("#{label}: no offset rows found")
+    return
+  end
+
+  cursor = 0
+  rows.each do |hex_offset, byte_count|
+    offset = hex_offset.to_i(16)
+    bytes = byte_count.to_i
+    error("#{label}: expected next offset 0x#{cursor.to_s(16).upcase}, got 0x#{hex_offset.upcase}") unless offset == cursor
+    cursor = offset + bytes
+  end
+  error("#{label}: expected #{expected_total} bytes, rows cover #{cursor}") unless cursor == expected_total
+end
+
+def gate2_history_test_git!(root, *arguments)
+  stdout, stderr, success = git_capture(root, *arguments)
+  return stdout if success
+
+  raise "git #{arguments.join(' ')} failed in Gate 2 history self-test: #{stderr}"
+end
+
+def gate2_history_test_write(root, relative, body)
+  path = Pathname.new(root).join(relative)
+  FileUtils.mkdir_p(path.dirname)
+  path.write(body)
+end
+
+def gate2_history_test_trace(reviewed_commit = nil, checked: false, review_date: nil)
+  mark = checked ? "x" : " "
+  audit = (1..37).map { |index| "- [#{mark}] synthetic audited criterion #{index}" }.join("\n")
+  record = if reviewed_commit
+             raise "Gate 2 history fixture requires a review date" unless review_date
+
+             evidence = GATE2_APPROVAL_EVIDENCE_COMMANDS.map do |command|
+               "| Validation evidence | `reviewed=#{reviewed_commit}; command=#{command}; result=PASS` |"
+             end
+             [
+               "| Field | Value |",
+               "|---|---|",
+               "| Reviewed content commit | `#{reviewed_commit}` |",
+               "| Independent reviewer 1 | `github:alice-audit` |",
+               "| Independent reviewer 2 | `github:bob-audit` |",
+               "| Review date | `#{review_date}` |",
+               *evidence,
+               "| Deferred measurement risks | `Gate 3 toolchain proof and Gate 4 native-resolution benchmark proof remain required` |",
+               "| Decision | `APPROVED` |",
+               ""
+             ].join("\n")
+           else
+             "Gate 2 remains **in progress** pending independent review.\n"
+           end
+  <<~TRACE
+    # Synthetic Gate 2 traceability fixture
+
+    ## Gate 2 exit audit
+
+    #{audit}
+
+    ## Gate 2 approval record
+
+    #{record}
+  TRACE
+end
+
+
+def gate2_history_test_readme(complete: false)
+  status = if complete
+             "**Preproduction — Gate 2: complete.**"
+           else
+             "**Preproduction — Gate 2: specification and production-contract reconciliation in progress.**"
+           end
+  "# Synthetic repository\n\n#{status}\n\nStable README content.\n"
+end
+
+def gate2_history_test_checklist(complete: false)
+  status = complete ? "Complete" : "In progress"
+  <<~CHECKLIST
+    # Synthetic production checklist
+
+    | Gate | Status | Evidence | Note |
+    |---|---|---|---|
+    | 1. Audit | Complete | fixture | fixture |
+    | 2. Preproduction | #{status} | fixture | fixture |
+    | 3. Toolchain | Not started | fixture | fixture |
+  CHECKLIST
+end
+
+def with_gate2_history_fixture
+  Dir.mktmpdir("n64game-gate2-history-") do |directory|
+    root = Pathname.new(directory)
+    gate2_history_test_git!(root, "init", "-q")
+    gate2_history_test_git!(root, "config", "user.name", "Gate 2 Self Test")
+    gate2_history_test_git!(root, "config", "user.email", "gate2-self-test@example.invalid")
+
+    GATE2_REVIEWED_SNAPSHOT_PATHS.each do |relative|
+      gate2_history_test_write(root, relative, "reviewed fixture bytes for #{relative}\n")
+    end
+    gate2_history_test_write(root, "README.md", gate2_history_test_readme)
+    gate2_history_test_write(root, "docs/PRODUCTION_CHECKLIST.md", gate2_history_test_checklist)
+    gate2_history_test_write(root, "docs/PREPRODUCTION_TRACEABILITY.md", gate2_history_test_trace)
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Reviewed Gate 2 content snapshot")
+    reviewed_commit = gate2_history_test_git!(root, "rev-parse", "HEAD").strip
+    yield root, reviewed_commit
+  end
+end
+
+def gate2_history_test_stage_approval(root, reviewed_commit, collateral_path: nil, collateral_body: nil,
+                                      readme_suffix: "")
+  review_date = gate2_history_test_git!(root, "show", "-s", "--format=%cs", reviewed_commit).strip
+  gate2_history_test_write(
+    root,
+    "README.md",
+    gate2_history_test_readme(complete: true) + readme_suffix
+  )
+  gate2_history_test_write(
+    root,
+    "docs/PRODUCTION_CHECKLIST.md",
+    gate2_history_test_checklist(complete: true)
+  )
+  gate2_history_test_write(
+    root,
+    "docs/PREPRODUCTION_TRACEABILITY.md",
+    gate2_history_test_trace(reviewed_commit, checked: true, review_date: review_date)
+  )
+  gate2_history_test_write(root, collateral_path, collateral_body) if collateral_path
+  gate2_history_test_git!(root, "add", "--all")
+end
+
+def gate2_history_test_current(root)
+  [
+    root.join("README.md").read,
+    root.join("docs/PREPRODUCTION_TRACEABILITY.md").read,
+    root.join("docs/PRODUCTION_CHECKLIST.md").read
+  ]
+end
+
+def run_gate2_approval_metadata_self_tests
+  reviewed_commit = "a" * 40
+  reviewed_date = Date.today - 2
+  review_date = Date.today - 1
+  approval_date = Date.today
+  valid_record = gate2_approval_record(
+    gate2_history_test_trace(reviewed_commit, checked: true, review_date: review_date.iso8601)
+  )
+  validate = lambda do |record, reviewed: reviewed_date, approved: approval_date|
+    errors = []
+    validate_gate2_record_fields(
+      record,
+      reviewed_commit,
+      errors,
+      reviewed_date_override: reviewed,
+      approval_date_override: approved
+    )
+    errors
+  end
+  assertions = {
+    "accepts exact canonical approval metadata" => validate.call(valid_record).empty?,
+    "rejects duplicate reviewer labels" => validate.call(
+      valid_record.sub("Independent reviewer 2", "Independent reviewer 1")
+    ).any? { |message| message.include?("exactly one reviewer-1 row and one reviewer-2 row") },
+    "rejects generic placeholder identities with numeric suffixes" => validate.call(
+      valid_record.sub("github:alice-audit", "github:reviewer1")
+    ).any? { |message| message.include?("not canonical or is placeholder-only") },
+    "rejects evidence without explicit PASS" => validate.call(
+      valid_record.sub("result=PASS", "result=FAIL")
+    ).any? { |message| message.include?("exact ordered reviewed-SHA") },
+    "rejects evidence bound to another SHA" => validate.call(
+      valid_record.sub(
+        "| Validation evidence | `reviewed=#{reviewed_commit};",
+        "| Validation evidence | `reviewed=#{'b' * 40};"
+      )
+    ).any? { |message| message.include?("exact ordered reviewed-SHA") },
+    "rejects a review date before the reviewed commit" => validate.call(
+      valid_record.sub(review_date.iso8601, (reviewed_date - 1).iso8601)
+    ).any? { |message| message.include?("predates the reviewed content commit") },
+    "rejects a review date after the approval commit" => validate.call(
+      valid_record.sub(review_date.iso8601, (approval_date + 1).iso8601)
+    ).any? { |message| message.include?("later than the approval commit") }
+  }
+  failures = assertions.reject { |_label, passed| passed }.keys
+  raise "Gate 2 approval-metadata self-test failed: #{failures.join(', ')}" unless failures.empty?
+
+  puts "Gate 2 approval-metadata self-test passed: #{assertions.length} isolated exact-field fixtures."
+end
+
+def run_gate2_history_self_tests
+  run_gate2_approval_metadata_self_tests
+  assertions = []
+  assert = lambda do |condition, label, detail = nil|
+    raise "Gate 2 history self-test failed: #{label}#{detail ? ": #{detail}" : ''}" unless condition
+
+    assertions << label
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approve Gate 2 reviewed snapshot")
+
+    # A later gate may evolve formerly frozen production contracts and advance
+    # the README banner; the historical reviewed/approval pair remains proof.
+    gate2_history_test_write(root, "docs/ASSET_LEDGER.md", "legitimate Gate 4 ledger evolution\n")
+    gate2_history_test_write(root, "THIRD_PARTY_NOTICES.md", "legitimate later notice evolution\n")
+    future_readme = root.join("README.md").read.sub(
+      /^\*\*Preproduction — Gate 2: complete\.\*\*$/,
+      "**Toolchain — Gate 3: implementation in progress.**"
+    )
+    gate2_history_test_write(root, "README.md", future_readme)
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Begin legitimate post-Gate-2 production")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(errors.empty?, "accepts an exact approval transition plus later production evolution", errors.join("; "))
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_git!(root, "switch", "-q", "-c", "approval-path")
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approve Gate 2 reviewed snapshot")
+
+    # A second child of the reviewed commit cannot be merged after approval:
+    # that would create a reviewed-content -> HEAD path which bypasses the
+    # approval transition even though the approval commit remains an ancestor.
+    gate2_history_test_git!(root, "switch", "-q", "-c", "parallel-preapproval-path", reviewed_commit)
+    gate2_history_test_write(root, "docs/ASSET_LEDGER.md", "parallel preapproval ledger rewrite\n")
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Parallel preapproval content")
+    gate2_history_test_git!(root, "switch", "-q", "approval-path")
+    gate2_history_test_git!(
+      root, "merge", "-q", "--no-ff", "parallel-preapproval-path", "-m", "Merge parallel preapproval path"
+    )
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("every reviewed-content -> HEAD history path") },
+      "rejects a merged history path that bypasses the approval commit",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("no committed Gate 2 approval transition") },
+      "rejects a forged uncommitted approval",
+      errors.join("; ")
+    )
+  end
+
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approve Gate 2 reviewed snapshot")
+    approved_trace = root.join("docs/PREPRODUCTION_TRACEABILITY.md").read
+    approved_checklist = root.join("docs/PRODUCTION_CHECKLIST.md").read
+    gate2_history_test_write(
+      root,
+      "docs/PREPRODUCTION_TRACEABILITY.md",
+      approved_trace.sub("`github:alice-audit`", "`github:erased-current-head`")
+    )
+    gate2_history_test_write(
+      root,
+      "docs/PRODUCTION_CHECKLIST.md",
+      approved_checklist.sub("| 2. Preproduction | Complete |", "| 2. Preproduction | Reopened |")
+    )
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Erase Gate 2 evidence from current HEAD")
+
+    # Restoring the evidence only in the working tree must not conceal that the
+    # current committed tree erased it.
+    gate2_history_test_write(root, "docs/PREPRODUCTION_TRACEABILITY.md", approved_trace)
+    gate2_history_test_write(root, "docs/PRODUCTION_CHECKLIST.md", approved_checklist)
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("HEAD does not preserve the committed Gate 2 approval record") } &&
+        errors.any? { |message| message.include?("HEAD does not preserve Gate 2 Complete") },
+      "rejects evidence restored only as uncommitted working-tree bytes",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(
+      root,
+      reviewed_commit,
+      collateral_path: "docs/ASSET_LEDGER.md",
+      collateral_body: "unaudited approval-time mutation\n"
+    )
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approval with forbidden collateral mutation")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("approval transition must change exactly") } &&
+        errors.any? { |message| message.include?("snapshot file changed during approval transition") },
+      "rejects a contract mutation hidden in the approval commit",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "update-index", "--chmod=+x", "docs/ART_BIBLE.md")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approval with frozen snapshot mode mutation")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? do |message|
+        message.include?("snapshot file changed type or mode during approval transition: docs/ART_BIBLE.md")
+      end,
+      "rejects a mode-only mutation of a frozen snapshot file in the approval commit",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    # Preserve a valid approval commit as the replacement object, then make the
+    # real HEAD an invalid approval whose parent and frozen snapshot both differ.
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Valid approval replacement object")
+    replacement_commit = gate2_history_test_git!(root, "rev-parse", "HEAD").strip
+
+    gate2_history_test_git!(root, "switch", "-q", "--detach", reviewed_commit)
+    gate2_history_test_write(root, "docs/ART_BIBLE.md", "replacement-hidden frozen snapshot mutation\n")
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Intervening real content mutation")
+    intervening_commit = gate2_history_test_git!(root, "rev-parse", "HEAD").strip
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Invalid real approval history")
+    forged_commit = gate2_history_test_git!(root, "rev-parse", "HEAD").strip
+    gate2_history_test_git!(
+      root,
+      "update-ref",
+      "refs/replace/#{forged_commit}",
+      replacement_commit
+    )
+
+    replaced_history, replaced_history_error, replaced_history_status = Open3.capture3(
+      { "GIT_NO_REPLACE_OBJECTS" => nil },
+      "git", "rev-list", "--parents", "--max-count=1", "HEAD",
+      chdir: root.to_s
+    )
+    replaced_bytes, replaced_bytes_error, replaced_bytes_status = Open3.capture3(
+      { "GIT_NO_REPLACE_OBJECTS" => nil },
+      "git", "show", "HEAD:docs/ART_BIBLE.md",
+      chdir: root.to_s
+    )
+    real_history, _real_history_error, real_history_ok = git_capture(
+      root, "rev-list", "--parents", "--max-count=1", "HEAD"
+    )
+    real_bytes, _real_bytes_error, real_bytes_ok = git_capture(
+      root, "show", "HEAD:docs/ART_BIBLE.md"
+    )
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    replaced_fields = replaced_history.split
+    real_fields = real_history.split
+    assert.call(
+      replaced_history_status.success? &&
+        replaced_bytes_status.success? &&
+        replaced_fields == [forged_commit, reviewed_commit] &&
+        replaced_bytes == "reviewed fixture bytes for docs/ART_BIBLE.md\n" &&
+        real_history_ok &&
+        real_bytes_ok &&
+        real_fields == [forged_commit, intervening_commit] &&
+        real_bytes == "replacement-hidden frozen snapshot mutation\n" &&
+        errors.any? { |message| message.include?("no committed Gate 2 approval transition") },
+      "rejects a replacement ref that would conceal real ancestry and frozen content",
+      [
+        "replacement history error=#{replaced_history_error.strip}",
+        "replacement content error=#{replaced_bytes_error.strip}",
+        "replacement history=#{replaced_history.strip}",
+        "real history=#{real_history.strip}",
+        "errors=#{errors.join('; ')}"
+      ].join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_write(root, "INTERMEDIATE.md", "intervening commit\n")
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Intervening unaudited commit")
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approval too late in history")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("direct single-parent child") },
+      "rejects an approval whose exact parent is not the reviewed commit",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approve Gate 2 reviewed snapshot")
+    tampered = root.join("docs/PREPRODUCTION_TRACEABILITY.md").read.sub("`github:alice-audit`", "`github:forged-reviewer`")
+    gate2_history_test_write(root, "docs/PREPRODUCTION_TRACEABILITY.md", tampered)
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("current Gate 2 approval record differs") } &&
+        errors.any? { |message| message.include?("uncommitted PREPRODUCTION_TRACEABILITY differs") },
+      "rejects current evidence tampering after approval",
+      errors.join("; ")
+    )
+  end
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(
+      root,
+      reviewed_commit,
+      readme_suffix: "unaudited README rewrite in approval commit\n"
+    )
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approval with uncontrolled README rewrite")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("README changed beyond its Gate 2 status line") },
+      "rejects uncontrolled edits inside an allowed approval file",
+      errors.join("; ")
+    )
+  end
+
+
+  with_gate2_history_fixture do |root, reviewed_commit|
+    gate2_history_test_stage_approval(root, reviewed_commit)
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Approve Gate 2 reviewed snapshot")
+    duplicate = root.join("docs/PREPRODUCTION_TRACEABILITY.md").read + <<~DUPLICATE
+
+      ## Gate 2 approval record
+
+      | Decision | `REBUILD` |
+    DUPLICATE
+    gate2_history_test_write(root, "docs/PREPRODUCTION_TRACEABILITY.md", duplicate)
+    gate2_history_test_git!(root, "add", "--all")
+    gate2_history_test_git!(root, "commit", "-q", "-m", "Append contradictory Gate 2 approval record")
+    errors = validate_gate2_approval_history(root, *gate2_history_test_current(root))
+    assert.call(
+      errors.any? { |message| message.include?("must contain exactly one ## Gate 2 approval record") },
+      "rejects duplicate or contradictory current approval sections",
+      errors.join("; ")
+    )
+  end
+
+  puts "Gate 2 approval-history self-test passed: #{assertions.length} isolated positive/negative histories."
+end
+
+if ARGV == ["--self-test-gate2-history"]
+  run_gate2_history_self_tests
+  exit 0
+end
+reviewed_content_mode = ARGV == ["--reviewed-content"]
+unless ARGV.empty? || reviewed_content_mode
+  warn "usage: scripts/validate-preproduction [--reviewed-content|--self-test-gate2-history]"
+  exit 2
+end
+
+required_files = %w[
+  README.md
+  LICENSE
+  ASSET_LICENSE.md
+  THIRD_PARTY_NOTICES.md
+  docs/N64GAME_MASTER_SPEC.md
+  docs/N64GAME_GOAL_PROMPT.md
+  docs/reference-study.md
+  docs/STORY_AND_TIMING.md
+  docs/DIALOGUE_GRAPH.md
+  docs/CONDITION_REGISTRY.md
+  docs/TECHNICAL_ARCHITECTURE.md
+  docs/DATA_SCHEMAS.md
+  docs/ART_BIBLE.md
+  docs/ASSET_INVENTORY.md
+  docs/ASSET_REVIEW_TEMPLATES.md
+  docs/ASSET_LEDGER.md
+  docs/VISUAL_BENCHMARK_APPROVAL.md
+  docs/NAMING_AND_ORIGINALITY_AUDIT.md
+  docs/PREPRODUCTION_TRACEABILITY.md
+  docs/PRODUCTION_CHECKLIST.md
+  data/ids/dialogue_once_bits.lock
+  data/ids/examine_once_bits.lock
+  data/ids/npc_once_bits.lock
+  data/ids/spawn_ids.lock
+  data/ids/cutscene_ids.lock
+  data/ids/serialized_ids.lock
+  scripts/validate-data-c
+  scripts/validate-dialogue-graph
+  scripts/validate-condition-registry
+  scripts/validate-id-locks
+  scripts/validate-asset-contract
+  scripts/validate-public-hygiene
+]
+
+required_files.each { |relative| read(relative) }
+
+data_c_validator = ROOT.join("scripts/validate-data-c")
+unless data_c_validator.file? &&
+       data_c_validator.executable? &&
+       system([data_c_validator.to_s, data_c_validator.basename.to_s], chdir: ROOT.to_s)
+  error("DATA_SCHEMAS C aggregate validation failed")
+end
+
+dialogue_graph_validator = ROOT.join("scripts/validate-dialogue-graph")
+unless dialogue_graph_validator.file? &&
+       dialogue_graph_validator.executable? &&
+       system([dialogue_graph_validator.to_s, dialogue_graph_validator.basename.to_s], chdir: ROOT.to_s)
+  error("DIALOGUE_GRAPH validation failed")
+end
+
+condition_registry_validator = ROOT.join("scripts/validate-condition-registry")
+unless condition_registry_validator.file? &&
+       condition_registry_validator.executable? &&
+       system([condition_registry_validator.to_s, condition_registry_validator.basename.to_s], chdir: ROOT.to_s)
+  error("CONDITION_REGISTRY validation failed")
+end
+
+id_lock_validator = ROOT.join("scripts/validate-id-locks")
+unless id_lock_validator.file? &&
+       id_lock_validator.executable? &&
+       system([id_lock_validator.to_s, id_lock_validator.basename.to_s], chdir: ROOT.to_s)
+  error("append-only ID lock validation failed")
+end
+
+asset_contract_validator = ROOT.join("scripts/validate-asset-contract")
+unless asset_contract_validator.file? &&
+       asset_contract_validator.executable? &&
+       system([asset_contract_validator.to_s, asset_contract_validator.basename.to_s], chdir: ROOT.to_s)
+  error("asset-production contract validation failed")
+end
+
+public_hygiene_validator = ROOT.join("scripts/validate-public-hygiene")
+unless public_hygiene_validator.file? &&
+       public_hygiene_validator.executable? &&
+       system([public_hygiene_validator.to_s, public_hygiene_validator.basename.to_s], chdir: ROOT.to_s)
+  error("reachable-history/index/worktree public-hygiene validation failed")
+end
+
+goal = read("docs/N64GAME_GOAL_PROMPT.md")
+goal_chars = goal.each_char.count
+error("goal prompt is #{goal_chars} characters; limit is 4000") unless goal_chars < 4000
+error("goal prompt omits local master-spec path") unless goal.include?("/Users/midir/Documents/New project 8/docs/N64GAME_MASTER_SPEC.md")
+error("goal prompt omits public master-spec fallback") unless goal.include?("https://raw.githubusercontent.com/oh-ashen-one/n64game/main/docs/N64GAME_MASTER_SPEC.md")
+
+readme = read("README.md")
+traceability = read("docs/PREPRODUCTION_TRACEABILITY.md")
+production_checklist = read("docs/PRODUCTION_CHECKLIST.md")
+validate_gate2_approval_history(ROOT, readme, traceability, production_checklist).each do |message|
+  error(message)
+end
+
+markdown_files = (required_files.select { |path| path.end_with?(".md") } + ["README.md"]).uniq
+markdown_files.each do |relative|
+  text = read(relative)
+  lines = text.lines
+  in_fence = false
+  table_pipe_count = nil
+
+  lines.each_with_index do |line, index|
+    line_number = index + 1
+    error("#{relative}:#{line_number}: trailing whitespace") if line.match?(/[ \t]+\r?\n\z/)
+
+    if line.match?(/^\s*```/)
+      in_fence = !in_fence
+      table_pipe_count = nil
+      next
+    end
+    next if in_fence
+
+    if line.start_with?("|")
+      pipe_count = line.scan(/(?<!\\)\|/).length
+      table_pipe_count ||= pipe_count
+      if pipe_count != table_pipe_count
+        error("#{relative}:#{line_number}: Markdown table has #{pipe_count} pipes; expected #{table_pipe_count}")
+      end
+    else
+      table_pipe_count = nil
+    end
+  end
+  error("#{relative}: unclosed fenced code block") if in_fence
+
+  text.scan(/!?\[[^\]]*\]\(([^)]+)\)/).flatten.each do |raw_target|
+    target = raw_target.strip
+    target = target[1...-1] if target.start_with?("<") && target.end_with?(">")
+    target = target.split(/\s+["']/).first
+    next if target.empty? || target.start_with?("#")
+    next if target.match?(/\A[a-z][a-z0-9+.-]*:/i)
+
+    relative_target = URI::DEFAULT_PARSER.unescape(target.split("#", 2).first)
+    resolved = ROOT.join(relative).dirname.join(relative_target).cleanpath
+    error("#{relative}: broken internal link: #{target}") unless resolved.exist?
+  end
+end
+
+story = read("docs/STORY_AND_TIMING.md")
+art = read("docs/ART_BIBLE.md")
+inventory = read("docs/ASSET_INVENTORY.md")
+naming = read("docs/NAMING_AND_ORIGINALITY_AUDIT.md")
+data = read("docs/DATA_SCHEMAS.md")
+graph = read("docs/DIALOGUE_GRAPH.md")
+technical = read("docs/TECHNICAL_ARCHITECTURE.md")
+review_templates = read("docs/ASSET_REVIEW_TEMPLATES.md")
+ledger = read("docs/ASSET_LEDGER.md")
+
+unless graph.include?("Status: Gate 2 implementation contract") &&
+       graph.include?("## 8. Frozen integration disposition")
+  error("dialogue graph lacks the Gate 2 contract/disposition sections")
+end
+
+title_contract_docs = {
+  "story" => story,
+  "technical architecture" => technical,
+  "data schemas" => data,
+  "art bible" => art,
+  "asset inventory" => inventory,
+  "asset review templates" => review_templates
+}
+title_contract_docs.each do |label, text|
+  unless text.match?(/Title (?:`?OPTIONS`?|Apply|Settings).*process(?:-resident|-profile| profile| settings profile)/i)
+    error("#{label}: Title settings do not state the process-profile-only contract")
+  end
+  if text.match?(/Title Apply\s+(?:performs|creates|issues|writes)\b/i) ||
+     text.match?(/Title settings writes are\b/i) ||
+     text.match?(/selected verified page.{0,180}Title Apply.{0,180}journal update/i)
+    error("#{label}: stale Title EEPROM-write contract remains")
+  end
+end
+
+error("story omits the exact Name-to-Sim publication point for player_name_confirmed") unless
+  story.include?("Name-to-Sim post recipe publishes after coherent Sim staging and successful address promotion")
+error("dialogue graph permits tutorial start before the first New Game page commits") unless
+  graph.include?("the first request reached `COMMITTED`, possibly after immutable Retry") &&
+  graph.include?("Return-to-Title abort terminates the branch and emits no tutorial-start edge")
+error("story permits end-card transition while final save outcome is pending") unless
+  story.include?("`TRANS_DEF_HOOK_TO_END_CARD` is forbidden while the final outcome is `PENDING`")
+error("dialogue graph omits final-save-before-end-card ordering") unless
+  graph.include?("authored mark/subtitle treatment only after the immutable final save outcome resolves")
+
+save_service_row = graph.lines.find { |line| line.start_with?("| `SAVE_SERVICE` |") }.to_s
+error("dialogue graph generic SAVE_SERVICE still owns UI_SAVE_FAILED") if save_service_row.include?("UI_SAVE_FAILED")
+error("dialogue graph final save owner does not exclusively acquire UI_SAVE_FAILED") unless
+  graph.include?("| `FINAL_SAVE_FAILURE` | `UI_SAVE_FAILED -> END_RETRY_SAVE/END_CONTINUE_UNSAVED` |")
+error("story world-map cancel omits captured physical MapOrigin routing") unless
+  story.include?("Back returns to the captured physical `MapOrigin`: Annex threshold, Estate courtyard, or Estate courtyard with follower handoff")
+error("story follower predicate drifts from the generated contract") unless
+  story.include?("`OBJ_RETURN_WITH_TAVI active && return_to_annex_requested && tavi_found && !tavi_returned_to_annex && current zone has valid follower nav/handoff`")
+error("story opening finalizer does not preserve continuous title music") unless
+  story.include?("never stops or restarts the continuous `MUSIC_CUE_TITLE` motif")
+error("DATA_SCHEMAS has trailing text after its canonical final paragraph") unless
+  data.rstrip.end_with?("casting that struct to serialized bytes is always a defect.")
+
+roster_names = %w[Quarrune Ayselor Kilnback Nacreel Gyreclast Kivarrax Kovrass Ulvorel]
+{
+  "story" => story,
+  "art bible" => art,
+  "inventory" => inventory,
+  "naming audit" => naming,
+  "data schemas" => data
+}.each do |label, text|
+  roster_names.each do |name|
+    error("#{label}: canonical Echoform missing: #{name}") unless text.include?(name)
+  end
+end
+
+inventory_echoform_joints = inventory.scan(
+  /^\| `echo\.([a-z0-9_]+)` \|.*?\|\s*[^|]*;\s*(\d+) joints\s*\|/
+).to_h.transform_keys { |name| "ECHO_#{name.upcase}" }.transform_values(&:to_i)
+data_creature_companion = data[/The remaining CreatureDef bytes.*?(?=Together, the two tables)/m].to_s
+data_echoform_joints = data_creature_companion.scan(
+  /^\|\s*`(ECHO_[A-Z0-9_]+)`.*?\|\s*`(\d+)\s*\/\s*1`\s*\|/
+).to_h.transform_values(&:to_i)
+expect_count("inventory Echoform rig rows", inventory_echoform_joints.length, 8)
+expect_count("Data CreatureDef rig rows", data_echoform_joints.length, 8)
+unless inventory_echoform_joints == data_echoform_joints
+  mismatches = (inventory_echoform_joints.keys | data_echoform_joints.keys).select do |symbol|
+    inventory_echoform_joints[symbol] != data_echoform_joints[symbol]
+  end
+  error("Echoform rig joint drift between Inventory and CreatureDef: #{mismatches.sort.join(', ')}")
+end
+
+character_symbol_by_asset = {
+  "chr.player.ari" => "CHAR_PLAYER",
+  "chr.tavi" => "CHAR_TAVI",
+  "chr.sera_venn" => "CHAR_DR_SERA_VENN",
+  "chr.oren_saye" => "CHAR_OREN_SAYE",
+  "chr.ivo_veyra" => "CHAR_IVO_VEYRA",
+  "chr.rusk" => "CHAR_RUSK",
+  "chr.mara_ovelle" => "CHAR_MARA_OVELLE",
+  "chr.jo_renn" => "CHAR_JO_RENN",
+  "chr.pell_anwar" => "CHAR_PELL_ANWAR"
+}
+inventory_character_rows = inventory.scan(
+  /^\| `(chr\.[a-z0-9_.]+)` \|.*?\|\s*([^|]+)\|\s*[^|]*?(\d+) mats;[^|]*\|\s*(\d+) joints;/
+).each_with_object({}) do |(asset, count_text, materials, joints), rows|
+  symbol = character_symbol_by_asset[asset]
+  next unless symbol
+
+  rows[symbol] = [joints.to_i, materials.to_i, count_text.include?("distance mesh") ? 2 : 1]
+end
+data_character_table = data[/All nine characters are text-only.*?(?=`CHAR_PLAYER\.name_string_id`)/m].to_s
+data_character_rows = data_character_table.scan(
+  /^\|\s*`(CHAR_[A-Z0-9_]+)`.*?\|\s*`(\d+)\s*\/\s*1\s*\/\s*(\d+)\s*\/\s*(\d+)`\s*\|/
+).each_with_object({}) do |(symbol, joints, materials, lods), rows|
+  rows[symbol] = [joints.to_i, materials.to_i, lods.to_i]
+end
+expect_count("inventory humanoid model contract rows", inventory_character_rows.length, 9)
+expect_count("Data CharacterDef model contract rows", data_character_rows.length, 9)
+unless inventory_character_rows == data_character_rows
+  mismatches = (inventory_character_rows.keys | data_character_rows.keys).select do |symbol|
+    inventory_character_rows[symbol] != data_character_rows[symbol]
+  end
+  error("humanoid rig/material/LOD drift between Inventory and CharacterDef: #{mismatches.sort.join(', ')}")
+end
+
+expect_count("story objectives", table_id_count(story, "### 7.1 Canonical scene and objective IDs", "### 7.2 Saved story flags"), 4)
+expect_count("saved story flags", table_id_count(story, "### 7.2 Saved story flags", "### 7.3 Progression invariants"), 23)
+expect_count("stable checkpoints", table_id_count(story, "### 8.1 Stable checkpoints", "### 8.2 Dialogue and scene skipping"), 11)
+error("story timing target is not locked to 22:30") unless story.include?("**Target total**") && story.include?("**15:35**") && story.include?("22 minutes 30 seconds")
+error("story weakens the 15-minute active-control floor to a median") unless
+  story.include?("Every one of the three qualifying runs must independently record at least 15 minutes of active-control time") &&
+  story.include?("active-control compliance is never evaluated by median") &&
+  story.include?("Only total duration is evaluated by median")
+error("traceability weakens the per-run active-control floor") unless
+  traceability.include?("At least 15 minutes in every qualifying first-playthrough certification run; never a median-only test")
+
+prefix_expectations = {
+  "chr" => 9,
+  "echo" => 8,
+  "env" => 16,
+  "lmk" => 8,
+  "veh" => 1,
+  "prop" => 63,
+  "col" => 18,
+  "nav" => 13,
+  "spn" => 13,
+  "int" => 13,
+  "ui" => 35,
+  "font" => 2,
+  "mus" => 8,
+  "amb" => 2,
+  "vox" => 8,
+  "vfx.move" => 32
+}
+prefix_expectations.each do |prefix, expected|
+  ids = inventory.scan(/`((?:#{Regexp.escape(prefix)}\.)[^`]+)`/).flatten.reject { |id| id.include?("*") }.uniq
+  expect_count("inventory #{prefix} IDs", ids.length, expected)
+end
+expect_count("common/environment/story VFX rows", table_id_count(inventory, "## 11. Common, environment, transition, and story VFX", "## 12. Animation banks"), 20)
+expect_count("humanoid animation banks", table_id_count(inventory, "### 12.1 Humanoids", "### 12.2 Echoforms"), 10)
+expect_count("Echoform animation banks", table_id_count(inventory, "### 12.2 Echoforms", "### 12.3 Mechanisms and presentation"), 8)
+expect_count("mechanism/presentation animation banks", table_id_count(inventory, "### 12.3 Mechanisms and presentation", "## 13. Music, ambience, vocals, and SFX"), 24)
+error("inventory does not lock 33 environment SFX") unless inventory.match?(/\| `sfx\.environment` \| 33 \|/)
+error("inventory does not lock 14 story SFX") unless inventory.match?(/\| `sfx\.story` \| 14 \|/)
+error("inventory does not lock the exact 12-icon controller atlas") unless
+  inventory.include?("12 icons, 12×12 IA4") &&
+  inventory.include?("Stick, D-pad, A, B, L, R, Z, C-Up, C-Down, C-Left, C-Right, and Start")
+
+storyboard_panel_ids = inventory.scan(/`(sb\.opening\.panel\.\d{2})`/).flatten.uniq
+expect_count("storyboard panel IDs", storyboard_panel_ids.length, 18)
+expected_storyboard_panels = (1..18).map { |index| format("sb.opening.panel.%02d", index) }
+error("storyboard panel IDs are not the exact 01..18 set") unless storyboard_panel_ids.sort == expected_storyboard_panels
+
+storyboard_continuity_ids = inventory.scan(/`(sb\.opening\.continuity\.[a-z0-9_]+)`/).flatten.uniq
+expect_count("storyboard continuity IDs", storyboard_continuity_ids.length, 9)
+required_storyboard_continuity = %w[
+  sb.opening.continuity.solace
+  sb.opening.continuity.glider
+  sb.opening.continuity.severance
+  sb.opening.continuity.crew
+  sb.opening.continuity.protagonist_context
+  sb.opening.continuity.fractured_colossus
+  sb.opening.continuity.beacon
+  sb.opening.continuity.environment_and_deck
+  sb.opening.continuity.spatial_map
+]
+unless storyboard_continuity_ids.sort == required_storyboard_continuity.sort
+  error("storyboard continuity inventory is incomplete or contains an undeclared substitute")
+end
+error("storyboard review omits key environment continuity") unless review_templates.include?("Desert/storm/research-deck environment")
+
+error("art bible does not require all seven review gates") unless art.include?("all seven review gates")
+error("art bible does not require two documented hero polish passes") unless art.include?("two documented polish passes for hero assets")
+error("review templates do not demand evidence for two hero polish passes") unless review_templates.include?("before/after images for two hero polish passes")
+%w[generic\ primitives default\ materials empty\ corridors default\ lighting noisy\ generated\ textures dead\ poses].each do |prohibited_shortcut|
+  normalized = prohibited_shortcut.tr("\\", "")
+  error("art bible anti-slop contract omits #{normalized}") unless art.downcase.include?(normalized)
+end
+error("asset ledger lacks generated runtime child provenance registry") unless ledger.include?("## Generated runtime child provenance")
+
+expect_count("SceneId rows", enum_count(data, "SceneIdValue", "SCENE_", ["SCENE_NONE"]), 10)
+expect_count("CharacterId rows", enum_count(data, "CharacterIdValue", "CHAR_", ["CHAR_NONE"]), 9)
+expect_count("CreatureId rows", enum_count(data, "CreatureIdValue", "ECHO_", ["ECHO_NONE"]), 8)
+
+move_enum = data.match(/typedef enum MoveIdValue\s*\{(?<body>.*?)\}\s*MoveIdValue\s*;/m)
+if move_enum
+  move_rows = move_enum[:body].lines.count do |line|
+    symbol = line[/^\s*([A-Z][A-Z0-9_]+)\s*=/, 1]
+    symbol && !%w[MOVE_NONE MOVE_LOCKED_COUNT].include?(symbol)
+  end
+  expect_count("MoveId rows", move_rows, 34)
+else
+  error("missing enum: MoveIdValue")
+end
+
+expect_count("ObjectiveId rows", enum_count(data, "ObjectiveIdValue", "OBJ_", ["OBJ_NONE", "OBJ_CAPACITY"]), 4)
+expect_count("CheckpointId rows", enum_count(data, "CheckpointIdValue", "CHECKPOINT_", ["CHECKPOINT_NONE"]), 11)
+
+flag_enum = data.match(/typedef enum StoryFlagIndex\s*\{(?<body>.*?)\}\s*StoryFlagIndex\s*;/m)
+if flag_enum
+  flag_rows = flag_enum[:body].lines.count { |line| line.match?(/^\s*FLAG_[A-Z0-9_]+\s*=/) }
+  expect_count("StoryFlag rows", flag_rows, 23)
+else
+  error("missing enum: StoryFlagIndex")
+end
+
+string_id_rows = data.scan(/^\s*(STR_[A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)/)
+string_id_rows.group_by { |_name, value| Integer(value) }.each do |value, rows|
+  next if rows.length == 1
+
+  error("duplicate global StringId 0x#{value.to_s(16).upcase}: #{rows.map(&:first).join(', ')}")
+end
+
+all_numeric_symbols = data.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/)
+
+declared_condition_symbols = all_numeric_symbols.map(&:first).grep(/\ACOND_/).uniq
+condition_language_opcodes = %w[COND_AND COND_EQ COND_GE COND_NOT COND_OR]
+undefined_condition_symbols = data.scan(/\bCOND_[A-Z0-9_]+\b/).uniq - declared_condition_symbols - condition_language_opcodes
+unless undefined_condition_symbols.empty?
+  error("data schemas reference undefined condition symbols: #{undefined_condition_symbols.sort.join(', ')}")
+end
+
+generated_move_id_ranges = [
+  ["StringId", /^STR_/, "STR_MOVE_GENERATED_BASE", 0x8001..0x8022],
+  ["AssetId", /^ASSET_/, "ASSET_VFX_MOVE_GENERATED_BASE", 0x8301..0x8322],
+  ["AudioCueId", /^AUDIO_/, "AUDIO_SFX_MOVE_GENERATED_BASE", 0x8401..0x8422],
+  ["CameraCueId", /^CAMERA_/, "CAMERA_CUE_MOVE_GENERATED_BASE", 0x8501..0x8522]
+]
+generated_move_id_ranges.each do |domain, prefix, base_symbol, range|
+  explicit_rows = all_numeric_symbols.select do |symbol, _value|
+    symbol.match?(prefix) && symbol != base_symbol
+  end
+  explicit_rows.each do |symbol, value_text|
+    value = Integer(value_text)
+    next unless range.cover?(value)
+
+    error("generated move #{domain} range #{range.begin.to_s(16)}..#{range.end.to_s(16)} collides with #{symbol}=0x#{value.to_s(16).upcase}")
+  end
+end
+
+numeric_enum_rows = {}
+data.scan(/typedef enum\s+([A-Za-z0-9_]+)\s*\{(.*?)\}\s*[A-Za-z0-9_]+\s*;/m).each do |name, body|
+  numeric_enum_rows[name] = body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/)
+end
+data.scan(/^enum\s+([A-Za-z0-9_]+)\s*\{(.*?)^\};/m).each do |name, body|
+  numeric_enum_rows[name] ||= body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/)
+end
+
+typed_id_domains = {
+  "AssetId" => /AssetIdValue/,
+  "ConditionId" => /ConditionIdValue/,
+  "DialogueId" => /DialogueIdValue/,
+  "InteractionId" => /InteractionIdValue/,
+  "AnimationSetId" => /AnimationSetIdValue/,
+  "AudioCueId" => /(MusicCueIdValue|VocalBankIdValue)/,
+  "StoryActionListId" => /StoryActionListIdValue/
+}
+typed_id_domains.each do |domain, enum_name_pattern|
+  rows = numeric_enum_rows.select { |name, _values| name.match?(enum_name_pattern) }.flat_map(&:last)
+  rows.group_by { |_name, value| Integer(value) }.each do |value, collisions|
+    next if collisions.length == 1
+
+    error("duplicate global #{domain} 0x#{value.to_s(16).upcase}: #{collisions.map(&:first).join(', ')}")
+  end
+end
+
+validate_offset_table("EEPROM map", data, "### 11.1 Entire 512-byte map", "### 11.2 Global header, 32 bytes", 512)
+validate_offset_table("EEPROM global header", data, "### 11.2 Global header, 32 bytes", "### 11.3 Journal page, 240 bytes each", 32)
+validate_offset_table("EEPROM journal page", data, "### 11.3 Journal page, 240 bytes each", "### 11.4 Payload schema v1, exactly 216 bytes", 240)
+validate_offset_table("EEPROM payload v1", data, "### 11.4 Payload schema v1, exactly 216 bytes", "### 11.5 Party slot, 16 bytes", 216)
+validate_offset_table("EEPROM party slot", data, "### 11.5 Party slot, 16 bytes", "### 11.6 Save migration and corruption behavior", 16)
+
+static_assert_names = data.scan(/_Static_assert\(sizeof\(([A-Za-z0-9_]+)\)/).flatten
+static_assert_names.group_by(&:itself).each do |name, rows|
+  error("duplicate sizeof static assertion: #{name}") if rows.length > 1
+end
+
+required_layouts = %w[
+  InputTuningDef
+  HardwareInputBindingDef
+  CameraInputTuningDef
+  PlayerMotionTuningDef
+  CollisionTuningDef
+  CameraTuningDef
+  CameraVolumeDef
+  FollowerTuningDef
+  SceneDef
+  CutsceneDef
+  CreatureDef
+  MoveDef
+  MoveEffectInstr
+  MoveEffectScriptDef
+  StatusDef
+  TeamDef
+  EncounterDef
+  AiProfileDef
+  TutorialScriptDef
+  TutorialGateDef
+  TutorialEventToken
+  TutorialEventRouteDef
+  TutorialRestartDef
+  BattleActor
+  BattleState
+  BattleEvent
+  BattlePresentationAck
+  DialogueNode
+  DialogueOnceRegistryDef
+  ExamineOnceRegistryDef
+  NpcOnceRegistryDef
+  DialogueConversationOnceDef
+  NpcOccurrenceDef
+  NpcOccurrenceVariantDef
+  HelpPromptDef
+  PortalDialogueRouteDef
+  ConditionInstr
+  ConditionDef
+  StoryAction
+  StoryActionListDef
+  StoryTriggerBindingDef
+  StoryStartPreconditionDef
+  StoryStartEdgeDef
+  StorySequenceDef
+  StoryResolutionVolumeDef
+  SaveData
+  GameProgress
+  GameProgressSnapshot
+  SaveRequest
+  SaveQueueAdmissionPolicyDef
+  SaveQueueAdmissionToken
+  PreRuskBattleSnapshotPayload
+  PreRuskSnapshotOwner
+  BattleDefeatResultToken
+  BattleDefeatFlowDef
+  BattleDefeatRollbackContinuationDef
+  SaveableLocationDef
+  ChapterMilestoneRecipeDef
+  StoryRetentionSaveRecipeDef
+  GameSettings
+  SettingsFieldDef
+  SettingsEditControlDef
+  SettingsValueLabelDef
+  SettingsEditSessionOwner
+  SettingsRuntimeViewDef
+  SettingsProfileOwner
+  PartySlot
+  MapNodePresentationDef
+  MapConfirmRouteDef
+  MapOriginSnapshot
+  MapCancelRouteDef
+  TransitionDef
+  TransitionStoryRecipeDef
+  TransitionStoryBindingDef
+  FinalSaveOutcomeContinuationDef
+  FinalSaveOutcomeOwner
+  TransitionRequest
+  TransitionRollbackDescriptor
+  FrameMetrics
+  ZoneBindingDef
+  DestinationNodeDef
+  DestinationEdgeDef
+  NavGraphDef
+  NavNodeDef
+  NavEdgeDef
+  SpawnDef
+  InteractionDef
+  HeldInteractionDef
+  HeldInteractionCallbackDef
+  InteractionVariantDef
+  MechanismWorldTransactionDef
+  CharacterDef
+  StoryFlagSet
+  ObjectiveDef
+  ObjectiveSubstageDef
+  CutsceneEvent
+  NameEntryDef
+  DuoFinisherDef
+  BattleStatus
+  RewardDef
+  TutorialEncounterBootstrapDef
+  BattleCommand
+  ResonanceSetupRecord
+  BattleRuntimeOwner
+  BattleEventQueueHeader
+  CameraShotResourceDef
+  DialogueCameraCueDef
+  DeferredDialogueOnceCommitDef
+  NpcInteractionRouteDef
+  NpcInteractionPlacementDef
+  LocationKey
+  DefeatFlowOwner
+  UIScreenDef
+  AssetManifestEntry
+  BundleManifestEntry
+  BundleAssetRef
+  RetainedBaseHandoffSnapshot
+  TitleNewGameRouteDef
+  NewGameJournalWritePlan
+  NewGameJournalWriteAuthority
+  RuntimeDraftOwner
+  ProcessUiItemDef
+  ProcessUiBindingDef
+  ProcessUiOriginSnapshot
+  PauseMenuRouteDef
+  RelayPageDef
+  RelayRuntimeViewDef
+  RelayRuntimeFieldDef
+  RelayDisplayStringDef
+  RelayMessageDef
+  UserSaveUiRouteDef
+  DirtyReturnWarningOwner
+  DirtyReturnWarningRouteDef
+  ProcessUiTimedSequenceDef
+  ProcessLoadingMusicDef
+  SaveFailureUiPolicyDef
+  SaveFailureRouteDef
+  SaveFailureProducerRouteDef
+  OpeningFinishAudioDef
+  MusicPresentationRouteDef
+  BootReadyOwner
+  BootReadyToken
+  ProcessNavigationDef
+  TelemetryEvent
+]
+required_layouts.each do |name|
+  error("missing unique sizeof assertion: #{name}") unless static_assert_names.count(name) == 1
+end
+
+milestone_contract = between(data, "typedef enum ChapterMilestoneRecipeIdValue", "## 10. Settings")
+error("chapter milestone rows still use nonliteral 'all flags' shorthand") if milestone_contract.include?("| all flags |")
+error("chapter milestone rows still use unresolved NONE continuation shorthand") if milestone_contract.match?(%r{/ NONE`?\s*\|})
+
+trigger_contract = between(data, "The complete chapter-critical owner table is literal:", "Rusk has three noninterchangeable owners.")
+trigger_shorthand = %w[
+  ENCOUNTER
+  DIALOGUE
+  WORLD_CALLBACK
+  HOOK_SEQUENCE
+  HELD_INTERACTION
+  TRANSITION_RECIPE
+  RESULT_ACCEPT
+  DISMISS
+  STABLE_AFTER_DISMISS
+  VICTORY_COMMIT
+  DEFEAT_COMMIT
+  ANIMATION_COMPLETE
+  ENTER
+  SEQUENCE_BEGIN
+  HELD_BEGIN
+  HELD_CANCEL
+  HELD_COMMIT
+  RECIPE_APPLY
+  EXACT_ONCE
+  OWNER_CLOSE_BEFORE_EXTERNAL
+  REQUIRE_STABLE_AFTER_DISMISS
+  ENTER_BEFORE_FIRST_LINE
+  CONTROLLER_CALLBACK
+  GENERATION_BOUND
+]
+trigger_alias_contract = between(
+  data,
+  "The authoring-table aliases map exactly as follows",
+  "Context admission is generated from owner plus phase"
+)
+trigger_shorthand.each do |token|
+  next unless trigger_contract.match?(/`[^`]*\b#{Regexp.escape(token)}\b[^`]*`/)
+
+  error("story trigger shorthand lacks an explicit alias mapping: #{token}") unless trigger_alias_contract.include?(token)
+end
+error("story trigger alias contract permits undeclared shorthand") unless trigger_alias_contract.include?("No other shorthand exists.")
+
+data.scan(/static const StoryAction\s+(\w+)\[(\d+)\]\s*=\s*\{(.*?)\n\};/m).each do |name, declared, body|
+  actual = body.scan(/^\s*\{\s*ACTION_/).length
+  error("#{name}: declares #{declared} StoryAction rows but contains #{actual}") unless actual == declared.to_i
+end
+
+data.scan(/static const StoryActionListDef\s+(\w+)\[(\d+)\]\s*=\s*\{(.*?)\n\};/m).each do |name, declared, body|
+  actual = body.scan(/^\s*\{/).length
+  error("#{name}: declares #{declared} StoryActionListDef rows but contains #{actual}") unless actual == declared.to_i
+end
+
+
+live_story_action_list_symbols = data.scan(
+  /static const StoryActionListDef\s+\w+\[\d+\]\s*=\s*\{(.*?)\n\};/m
+).flat_map do |body|
+  body.first.scan(/^\s*\{\s*([A-Z][A-Z0-9_]+)\s*,/).flatten
+end
+
+live_story_action_list_values = live_story_action_list_symbols.each_with_object([]) do |symbol, rows|
+  assignments = all_numeric_symbols.select { |candidate, _value| candidate == symbol }
+  if assignments.length != 1
+    error("live StoryActionListId #{symbol} has #{assignments.length} numeric declarations; expected exactly 1")
+    next
+  end
+  rows << [symbol, Integer(assignments.first.last)]
+end
+live_story_action_list_values.group_by(&:last).each do |value, rows|
+  next if rows.length == 1
+
+  error("duplicate live StoryActionListId 0x#{value.to_s(16).upcase}: #{rows.map(&:first).join(', ')}")
+end
+
+trigger_owned_action_lists = trigger_contract.scan(
+  /^\|\s*`[^`]+`\s*\|\s*`[^`]+`\s*\|\s*`(ACTION_[A-Z0-9_]+)`\s*\|/
+).flatten
+
+trigger_owner_phase_keys = trigger_contract.scan(
+  /^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`[^`]+`\s*\|/
+).map { |owner, phase| [owner, phase] }
+trigger_owner_phase_keys.group_by(&:itself).each do |(owner, phase), rows|
+  next if rows.length == 1
+
+  error("duplicate StoryTrigger owner/phase key #{owner} / #{phase}: #{rows.length} rows")
+end
+
+
+trigger_contract.scan(
+  /^\|\s*`(DIALOGUE\s*\/\s*[^`]+)`\s*\|\s*`[^`]+`\s*\|\s*`[^`]+`\s*\|\s*`(COND_TRANS_[A-Z0-9_]+)`\s*\|/
+).each do |owner, condition|
+  error("dialogue StoryTrigger #{owner} illegally uses transition-view condition #{condition}")
+end
+
+trigger_owned_action_lists.group_by(&:itself).each do |symbol, rows|
+  error("StoryActionListId #{symbol} has #{rows.length} trigger owners; expected exactly 1") unless rows.length == 1
+end
+
+(live_story_action_list_symbols - trigger_owned_action_lists).uniq.sort.each do |symbol|
+  error("live StoryActionListId lacks a sole-dispatch StoryTrigger owner: #{symbol}")
+end
+(trigger_owned_action_lists - live_story_action_list_symbols).uniq.sort.each do |symbol|
+  error("StoryTrigger owns undefined StoryActionListId: #{symbol}")
+end
+
+if reviewed_content_mode
+  expected = GATE2_REVIEWED_CONTENT_PLACEHOLDER_ERRORS.sort
+  actual = ERRORS.sort
+  if actual == expected
+    puts "Gate 2 reviewed-content validation passed: all substantive checks pass and exactly seven approval-only placeholders remain."
+    puts "This mode is valid only on the reviewed-content commit before its direct approval child."
+    exit 0
+  end
+
+  missing = expected - actual
+  unexpected = actual - expected
+  warn "Gate 2 reviewed-content validation failed: the remaining error set is not the exact seven approval-only placeholders."
+  missing.each { |message| warn "- missing expected placeholder: #{message}" }
+  unexpected.each { |message| warn "- unexpected substantive error: #{message}" }
+  exit 1
+end
+
+if ERRORS.empty?
+  puts "Gate 2 preproduction validation passed."
+  puts "Goal prompt: #{goal_chars} characters (<4000)."
+  puts "Story: 10 scenes, 4 objectives, 23 flags, 11 checkpoints, 22:30 target / 15:35 active."
+  puts "Inventory: 9 humans, 8 Echoforms, 16 environment sources, 63 props, 32 regular move events, 20 common VFX, 42 animation banks."
+  puts "Data: 10 scenes, 9 characters, 8 Echoforms, 34 moves, 4 objectives, 23 flags, 11 checkpoints."
+  exit 0
+end
+
+warn "Gate 2 preproduction validation failed with #{ERRORS.length} error(s):"
+ERRORS.each { |message| warn "- #{message}" }
+exit 1

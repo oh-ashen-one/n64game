@@ -1,0 +1,375 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "open3"
+require "pathname"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+MAX_GIT_BLOB_BYTES = 1024 * 1024
+MAGIC_PREFIX_BYTES = 65_536
+BANNED_EXTENSIONS = %w[
+  .z64 .n64 .v64 .rom .eep .sav .srm .state
+  .bin .iso .img .dmg
+  .zip .7z .rar .tar .gz .tgz .bz2 .xz .lz .lz4 .zst
+].freeze
+CREDENTIAL_FILENAME = /\A(?:\.env(?:\..+)?|credentials?.*|.*\.(?:pem|key|p12|pfx|jks|keystore))\z/i
+SECRET_PATTERNS = {
+  "private key block" => /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+  "GitHub token" => /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/,
+  "AWS access key" => /\bAKIA[0-9A-Z]{16}\b/,
+  "Google API key" => /\bAIza[0-9A-Za-z_-]{30,}\b/,
+  "Stripe live secret" => /\bsk_live_[0-9A-Za-z]{16,}\b/,
+  "Slack token" => /\bxox[baprs]-[0-9A-Za-z-]{20,}\b/
+}.freeze
+REJECTED_NAMES = ["Tessram", "Aeralume", "Vantrel", "Brassel", "Mireveil", "Qorrum", "Mara Quill"].freeze
+REJECTED_NAME_EXEMPT_PATHS = %w[
+  docs/NAMING_AND_ORIGINALITY_AUDIT.md
+  scripts/validate-preproduction
+  scripts/validate-public-hygiene
+].freeze
+
+def git_capture(root, *arguments, stdin_data: nil)
+  stdout, stderr, status = Open3.capture3(
+    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    "git", *arguments,
+    chdir: root.to_s,
+    stdin_data: stdin_data
+  )
+  [stdout, stderr, status.success?]
+end
+
+def decode_text(bytes)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  return "" if bytes.empty?
+
+  if bytes.start_with?("\xEF\xBB\xBF".b)
+    candidate = bytes.byteslice(3..-1).dup.force_encoding(Encoding::UTF_8)
+  elsif bytes.start_with?("\xFF\xFE".b)
+    candidate = bytes.byteslice(2..-1).dup.force_encoding(Encoding::UTF_16LE)
+    return candidate.encode(Encoding::UTF_8)
+  elsif bytes.start_with?("\xFE\xFF".b)
+    candidate = bytes.byteslice(2..-1).dup.force_encoding(Encoding::UTF_16BE)
+    return candidate.encode(Encoding::UTF_8)
+  else
+    return nil if bytes.include?("\x00".b)
+
+    candidate = bytes.dup.force_encoding(Encoding::UTF_8)
+  end
+  candidate.valid_encoding? ? candidate : nil
+rescue EncodingError
+  nil
+end
+
+def magic_labels(bytes)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  labels = []
+  labels << "N64 big-endian ROM magic" if bytes.start_with?("\x80\x37\x12\x40".b)
+  labels << "N64 byte-swapped ROM magic" if bytes.start_with?("\x37\x80\x40\x12".b)
+  labels << "N64 little-endian ROM magic" if bytes.start_with?("\x40\x12\x37\x80".b)
+  labels << "ZIP archive magic" if ["PK\x03\x04".b, "PK\x05\x06".b, "PK\x07\x08".b].any? { |magic| bytes.start_with?(magic) }
+  labels << "7-Zip archive magic" if bytes.start_with?("\x37\x7A\xBC\xAF\x27\x1C".b)
+  labels << "RAR archive magic" if bytes.start_with?("Rar!\x1A\x07".b)
+  labels << "gzip archive magic" if bytes.start_with?("\x1F\x8B".b)
+  labels << "bzip2 archive magic" if bytes.start_with?("BZh".b)
+  labels << "XZ archive magic" if bytes.start_with?("\xFD7zXZ\x00".b)
+  labels << "Zstandard archive magic" if bytes.start_with?("\x28\xB5\x2F\xFD".b)
+  labels << "tar archive magic" if bytes.bytesize >= 262 && bytes.byteslice(257, 5) == "ustar".b
+  labels << "ISO-9660 image magic" if bytes.bytesize >= 32_774 && bytes.byteslice(32_769, 5) == "CD001".b
+  labels << "Apple disk-image trailer magic" if bytes.bytesize >= 512 && bytes.byteslice(-512, 4) == "koly".b
+  labels
+end
+
+def artifact_findings(path, bytes, scan_rejected_names: true)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  findings = []
+  extension = File.extname(path.to_s).downcase
+  findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
+  findings << "credential-like filename" if File.basename(path.to_s).match?(CREDENTIAL_FILENAME) && File.basename(path.to_s) != ".env.example"
+  magic_labels(bytes).each { |label| findings << label }
+
+  text = decode_text(bytes)
+  if text
+    SECRET_PATTERNS.each do |label, pattern|
+      findings << "possible #{label}" if text.match?(pattern)
+    end
+    if scan_rejected_names && !REJECTED_NAME_EXEMPT_PATHS.include?(path.to_s)
+      REJECTED_NAMES.each do |name|
+        findings << "rejected working name remains: #{name}" if text.match?(/\b#{Regexp.escape(name)}\b/i)
+      end
+    end
+  end
+  findings.uniq
+end
+
+def add_artifact_findings(errors, label, path, bytes, scan_rejected_names: true)
+  artifact_findings(path, bytes, scan_rejected_names: scan_rejected_names).each do |finding|
+    errors << "#{label}: #{finding}"
+  end
+end
+
+def reachable_blob_records(root, errors)
+  objects, stderr, success = git_capture(root, "rev-list", "--objects", "--all")
+  unless success
+    errors << "history: cannot enumerate reachable objects: #{stderr.strip}"
+    return []
+  end
+  paths_by_oid = Hash.new { |hash, key| hash[key] = [] }
+  objects.each_line do |line|
+    oid, path = line.chomp.split(" ", 2)
+    paths_by_oid[oid] << path if path && !path.empty?
+  end
+  return [] if paths_by_oid.empty?
+
+  object_ids = paths_by_oid.keys
+  checked, check_error, check_ok = git_capture(
+    root,
+    "cat-file",
+    "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+    stdin_data: object_ids.join("\n") + "\n"
+  )
+  unless check_ok
+    errors << "history: cannot inspect reachable object metadata: #{check_error.strip}"
+    return []
+  end
+  checked.each_line.each_with_object([]) do |line, records|
+    oid, type, size_text = line.split
+    next unless type == "blob"
+
+    records << { oid: oid, size: Integer(size_text, 10), paths: paths_by_oid.fetch(oid, []) }
+  end
+end
+
+def validate_reachable_history(root, errors)
+  reachable_blob_records(root, errors).each do |record|
+    path_label = record[:paths].empty? ? "<unknown-path>" : record[:paths].sort.join(",")
+    label = "history blob #{record[:oid]} (#{path_label})"
+    record[:paths].each do |path|
+      extension = File.extname(path).downcase
+      errors << "#{label}: forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
+      errors << "#{label}: credential-like filename" if File.basename(path).match?(CREDENTIAL_FILENAME) && File.basename(path) != ".env.example"
+    end
+    if record[:size] > MAX_GIT_BLOB_BYTES
+      errors << "#{label}: reachable Git blob exceeds 1 MiB (#{record[:size]} bytes)"
+      next
+    end
+    bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", record[:oid])
+    unless read_ok
+      errors << "#{label}: cannot read blob bytes: #{read_error.strip}"
+      next
+    end
+    errors << "#{label}: Git size metadata differs from decoded bytes" unless bytes.bytesize == record[:size]
+    add_artifact_findings(errors, label, record[:paths].first || record[:oid], bytes, scan_rejected_names: false)
+  end
+end
+
+def validate_index(root, errors)
+  output, stderr, success = git_capture(root, "ls-files", "--stage", "-z")
+  unless success
+    errors << "index: cannot enumerate entries: #{stderr.strip}"
+    return
+  end
+  output.split("\0").reject(&:empty?).each do |entry|
+    metadata, path = entry.split("\t", 2)
+    mode, oid, stage = metadata.to_s.split
+    label = "index:#{path || '<unparsed>'}"
+    unless path && mode && oid && stage
+      errors << "#{label}: malformed index entry"
+      next
+    end
+    if stage != "0"
+      errors << "#{label}: unmerged index stage #{stage}"
+      next
+    end
+    if mode == "120000"
+      errors << "#{label}: public candidate must not be a symlink"
+      next
+    end
+    bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", oid)
+    unless read_ok
+      errors << "#{label}: cannot read staged blob: #{read_error.strip}"
+      next
+    end
+    errors << "#{label}: staged Git blob exceeds 1 MiB (#{bytes.bytesize} bytes)" if bytes.bytesize > MAX_GIT_BLOB_BYTES
+    add_artifact_findings(errors, label, path, bytes)
+  end
+end
+
+def canonical_lfs_materialization?(root, relative, absolute)
+  attr_out, _attr_err, attr_ok = git_capture(root, "check-attr", "filter", "--", relative)
+  index_blob, _index_err, index_ok = git_capture(root, "show", ":#{relative}")
+  pointer = index_blob.match(
+    /\Aversion https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (0|[1-9][0-9]*)\n\z/
+  )
+  return false unless attr_ok && attr_out.match?(/:\s*filter:\s*lfs\s*\z/) && index_ok && pointer
+  return false unless pointer[2].to_i == File.size(absolute)
+
+  pointer[1] == Digest::SHA256.file(absolute).hexdigest
+end
+
+def bounded_file_bytes(path)
+  size = File.size(path)
+  return File.binread(path) if size <= MAX_GIT_BLOB_BYTES
+
+  prefix = File.binread(path, MAGIC_PREFIX_BYTES)
+  suffix_length = [512, size].min
+  File.open(path, "rb") do |file|
+    file.seek(-suffix_length, IO::SEEK_END)
+    prefix + file.read(suffix_length)
+  end
+end
+
+def validate_worktree(root, errors)
+  output, stderr, success = git_capture(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+  unless success
+    errors << "worktree: cannot enumerate tracked and unignored files: #{stderr.strip}"
+    return
+  end
+  output.split("\0").sort.each do |relative|
+    absolute = root.join(relative)
+    label = "worktree:#{relative}"
+    next unless absolute.exist? || absolute.symlink?
+
+    if absolute.symlink?
+      errors << "#{label}: public candidate must not be a symlink"
+      next
+    end
+    next unless absolute.file?
+
+    if absolute.size > MAX_GIT_BLOB_BYTES && !canonical_lfs_materialization?(root, relative, absolute)
+      errors << "#{label}: file exceeds 1 MiB and is not a canonical staged Git LFS materialization"
+    end
+    add_artifact_findings(errors, label, relative, bounded_file_bytes(absolute))
+  end
+end
+
+def validate_public_hygiene(root)
+  errors = []
+  validate_reachable_history(root, errors)
+  validate_index(root, errors)
+  validate_worktree(root, errors)
+  errors.uniq
+end
+
+def fixture_git!(root, *arguments)
+  _stdout, stderr, success = git_capture(root, *arguments)
+  raise "fixture git #{arguments.join(' ')} failed: #{stderr}" unless success
+end
+
+def with_fixture_repo
+  Dir.mktmpdir("n64game-public-hygiene-") do |directory|
+    root = Pathname.new(directory)
+    fixture_git!(root, "init", "-q")
+    fixture_git!(root, "config", "user.name", "Public Hygiene Self Test")
+    fixture_git!(root, "config", "user.email", "hygiene@example.invalid")
+    yield root
+  end
+end
+
+def fixture_write(root, relative, bytes)
+  path = root.join(relative)
+  FileUtils.mkdir_p(path.dirname)
+  File.binwrite(path, bytes)
+end
+
+def fixture_commit!(root, message)
+  fixture_git!(root, "add", "--all")
+  fixture_git!(root, "commit", "-q", "-m", message)
+end
+
+def run_public_hygiene_self_tests
+  assertions = []
+  assert = lambda do |condition, label, detail = nil|
+    raise "public-hygiene self-test failed: #{label}#{detail ? ": #{detail}" : ''}" unless condition
+
+    assertions << label
+  end
+  token = "gh" + "p_" + ("A" * 36)
+
+  assert.call(
+    artifact_findings("payload.dat", "\x80\x37\x12\x40synthetic".b).include?("N64 big-endian ROM magic"),
+    "detects extensionless N64 ROM magic"
+  )
+  assert.call(
+    artifact_findings("payload.dat", "PK\x03\x04synthetic".b).include?("ZIP archive magic"),
+    "detects extensionless archive magic"
+  )
+  assert.call(
+    artifact_findings("notes", "credential=#{token}\n").include?("possible GitHub token"),
+    "detects extensionless textual secrets by content"
+  )
+  assert.call(
+    artifact_findings("release.rom", "plain text").any? { |finding| finding.include?("forbidden public artifact extension") },
+    "detects common ROM extensions without relying on magic"
+  )
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    errors = validate_public_hygiene(root)
+    assert.call(errors.empty?, "accepts a clean history, index, and worktree", errors.join("; "))
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_write(root, "historical_secret", "credential=#{token}\n")
+    fixture_commit!(root, "historical secret fixture")
+    FileUtils.rm(root.join("historical_secret"))
+    fixture_commit!(root, "delete historical secret fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") },
+      "rejects a secret retained only in reachable history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "staged_only", "credential=#{token}\n")
+    fixture_git!(root, "add", "staged_only")
+    fixture_write(root, "staged_only", "safe worktree replacement\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("index:staged_only") && message.include?("possible GitHub token") },
+      "rejects a secret present only in the index",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "untracked_payload.dat", "\x37\x80\x40\x12synthetic".b)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("worktree:untracked_payload.dat") && message.include?("N64 byte-swapped ROM magic") },
+      "rejects an untracked worktree ROM by magic",
+      errors.join("; ")
+    )
+  end
+
+  puts "Public-hygiene self-test passed: #{assertions.length} isolated content/history/index/worktree fixtures."
+end
+
+if ARGV == ["--self-test-public-hygiene"]
+  run_public_hygiene_self_tests
+  exit 0
+elsif !ARGV.empty?
+  warn "usage: scripts/validate-public-hygiene [--self-test-public-hygiene]"
+  exit 2
+end
+
+run_public_hygiene_self_tests
+errors = validate_public_hygiene(ROOT)
+if errors.empty?
+  puts "Public hygiene validation passed: every reachable blob plus index and worktree candidates scanned by content."
+  exit 0
+end
+
+warn "Public hygiene validation failed with #{errors.length} error(s):"
+errors.each { |message| warn "- #{message}" }
+exit 1
