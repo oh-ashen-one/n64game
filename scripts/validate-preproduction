@@ -64,17 +64,17 @@ GATE2_REVIEWED_SNAPSHOT_PATHS = %w[
   scripts/validate-id-locks
   scripts/validate-asset-contract
   scripts/validate-public-hygiene
-  scripts/validate-preproduction --reviewed-content
+  scripts/validate-preproduction
 ].freeze
 
-GATE2_APPROVAL_EVIDENCE_COMMANDS = %w[
-  scripts/validate-data-c
-  scripts/validate-dialogue-graph
-  scripts/validate-condition-registry
-  scripts/validate-id-locks
-  scripts/validate-asset-contract
-  scripts/validate-public-hygiene
-  scripts/validate-preproduction
+GATE2_APPROVAL_EVIDENCE_COMMANDS = [
+  "scripts/validate-data-c",
+  "scripts/validate-dialogue-graph",
+  "scripts/validate-condition-registry",
+  "scripts/validate-id-locks",
+  "scripts/validate-asset-contract",
+  "scripts/validate-public-hygiene",
+  "scripts/validate-preproduction --reviewed-content"
 ].freeze
 
 GENERIC_REVIEWER_COMPONENTS = %w[
@@ -693,6 +693,11 @@ def run_gate2_approval_metadata_self_tests
     errors
   end
   assertions = {
+    "keeps reviewed snapshot path separate from reviewed-content command" =>
+      GATE2_REVIEWED_SNAPSHOT_PATHS.include?("scripts/validate-preproduction") &&
+      GATE2_REVIEWED_SNAPSHOT_PATHS.none? { |path| path.start_with?("--") || path.include?(" ") } &&
+      GATE2_APPROVAL_EVIDENCE_COMMANDS.last == "scripts/validate-preproduction --reviewed-content" &&
+      valid_record.include?("command=scripts/validate-preproduction --reviewed-content; result=PASS"),
     "accepts exact canonical approval metadata" => validate.call(valid_record).empty?,
     "rejects duplicate reviewer labels" => validate.call(
       valid_record.sub("Independent reviewer 2", "Independent reviewer 1")
