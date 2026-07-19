@@ -1,34 +1,183 @@
 // SPDX-License-Identifier: MIT
-// Gate 3 diagnostic scene. This is original project code, not production art.
+// Native N64 entry point for the Meridian Annex vertical slice.
+
+#include <assert.h>
+#include <stdbool.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include <libdragon.h>
 
-// The pinned Tiny3D header has one audited long-to-uint16_t mask assignment in
-// an inline helper. Keep -Wconversion fatal for project code while containing
-// that upstream diagnostic to the header where it originates.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wconversion"
-#include <t3d/t3d.h>
-#pragma GCC diagnostic pop
+#include "n64game_core.h"
+#include "n64game_render.h"
+#include "n64game_save.h"
 
-#define FONT_ID 1
+typedef enum {
+    SAVE_WRITE_IDLE = 0,
+    SAVE_WRITE_INVALIDATING,
+    SAVE_WRITE_BODY,
+    SAVE_WRITE_FOOTER,
+} SaveWritePhase;
 
-static void draw_centered_text(float y, uint8_t style, const char *text)
+enum {
+    SAVE_SETTLE_FRAMES = 2,
+};
+
+typedef struct {
+    SaveWritePhase phase;
+    uint8_t target_slot;
+    uint32_t sequence;
+    uint8_t bytes[N64GAME_SAVE_BYTES];
+    N64GameCore snapshot;
+    uint8_t settle_frames;
+    bool faulted;
+} SaveWriter;
+
+static N64GameInput read_game_input(void)
 {
-    const rdpq_textparms_t parms = {
-        .style_id = style,
-        .width = 320,
-        .align = ALIGN_CENTER,
-        .valign = VALIGN_TOP,
+    const joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
+    const joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
+    uint16_t pressed = 0U;
+    if (buttons.d_up) {
+        pressed |= N64GAME_INPUT_UP;
+    }
+    if (buttons.d_down) {
+        pressed |= N64GAME_INPUT_DOWN;
+    }
+    if (buttons.d_left) {
+        pressed |= N64GAME_INPUT_LEFT;
+    }
+    if (buttons.d_right) {
+        pressed |= N64GAME_INPUT_RIGHT;
+    }
+    if (buttons.a) {
+        pressed |= N64GAME_INPUT_CONFIRM;
+    }
+    if (buttons.b) {
+        pressed |= N64GAME_INPUT_CANCEL;
+    }
+    if (buttons.start) {
+        pressed |= N64GAME_INPUT_START;
+    }
+    int8_t stick_x = inputs.stick_x;
+    int8_t stick_y = inputs.stick_y;
+    if (inputs.btn.d_left) {
+        stick_x = -INT8_MAX;
+    } else if (inputs.btn.d_right) {
+        stick_x = INT8_MAX;
+    }
+    if (inputs.btn.d_up) {
+        stick_y = INT8_MAX;
+    } else if (inputs.btn.d_down) {
+        stick_y = -INT8_MAX;
+    }
+    return (N64GameInput){
+        .pressed = pressed,
+        .stick_x = stick_x,
+        .stick_y = stick_y,
     };
-    rdpq_text_print(&parms, FONT_ID, 0.0f, y, text);
+}
+
+static bool input_pressed(N64GameInput input, N64GameInputButton button)
+{
+    return (input.pressed & (uint16_t)button) != 0U;
+}
+
+static size_t save_slot_offset(uint8_t slot)
+{
+    return (size_t)slot * N64GAME_SAVE_BYTES;
+}
+
+static bool save_writer_begin(
+    SaveWriter *writer,
+    const N64GameCore *game,
+    uint32_t current_sequence,
+    bool active_slot_valid,
+    uint8_t active_slot
+)
+{
+    if (writer->phase != SAVE_WRITE_IDLE || writer->faulted) {
+        return false;
+    }
+    writer->sequence = current_sequence + 1U;
+    writer->target_slot = active_slot_valid ? (uint8_t)(active_slot ^ UINT8_C(1)) : 0U;
+    writer->snapshot = *game;
+    writer->snapshot.save_requested = false;
+    if (!n64game_save_encode(game, writer->sequence, writer->bytes)) {
+        writer->faulted = true;
+        return false;
+    }
+    uint8_t invalid_footer[N64GAME_SAVE_FOOTER_BYTES];
+    for (size_t index = 0U; index < N64GAME_SAVE_FOOTER_BYTES; ++index) {
+        invalid_footer[index] = (uint8_t)(
+            writer->bytes[N64GAME_SAVE_BODY_BYTES + index] ^ UINT8_C(0xFF)
+        );
+    }
+    eeprom_write_bytes(
+        invalid_footer,
+        save_slot_offset(writer->target_slot) + N64GAME_SAVE_BODY_BYTES,
+        sizeof(invalid_footer)
+    );
+    writer->phase = SAVE_WRITE_INVALIDATING;
+    writer->settle_frames = 0U;
+    return true;
+}
+
+static bool save_writer_pump(
+    SaveWriter *writer,
+    N64GameCore *continue_game,
+    uint32_t *save_sequence,
+    uint8_t *active_slot
+)
+{
+    if (writer->phase == SAVE_WRITE_IDLE) {
+        return false;
+    }
+    if (eeprom_is_busy()) {
+        writer->settle_frames = 0U;
+        return false;
+    }
+    if (++writer->settle_frames < SAVE_SETTLE_FRAMES) {
+        return false;
+    }
+    writer->settle_frames = 0U;
+    const size_t offset = save_slot_offset(writer->target_slot);
+    if (writer->phase == SAVE_WRITE_INVALIDATING) {
+        eeprom_write_bytes(writer->bytes, offset, N64GAME_SAVE_BODY_BYTES);
+        writer->phase = SAVE_WRITE_BODY;
+        return false;
+    }
+    if (writer->phase == SAVE_WRITE_BODY) {
+        eeprom_write_bytes(
+            writer->bytes + N64GAME_SAVE_BODY_BYTES,
+            offset + N64GAME_SAVE_BODY_BYTES,
+            N64GAME_SAVE_FOOTER_BYTES
+        );
+        writer->phase = SAVE_WRITE_FOOTER;
+        return false;
+    }
+
+    uint8_t verified_bytes[N64GAME_SAVE_BYTES];
+    N64GameCore verified_game;
+    uint32_t verified_sequence = 0U;
+    eeprom_read_bytes(verified_bytes, offset, sizeof(verified_bytes));
+    if (!n64game_save_decode(verified_bytes, &verified_game, &verified_sequence) ||
+        verified_sequence != writer->sequence) {
+        writer->faulted = true;
+        writer->phase = SAVE_WRITE_IDLE;
+        return false;
+    }
+    *continue_game = writer->snapshot;
+    *save_sequence = writer->sequence;
+    *active_slot = writer->target_slot;
+    writer->phase = SAVE_WRITE_IDLE;
+    return true;
 }
 
 int main(void)
 {
     debug_init_emulog();
     debug_init_usblog();
-
     display_init(
         RESOLUTION_320x240,
         DEPTH_16_BPP,
@@ -41,103 +190,71 @@ int main(void)
     joypad_init();
     t3d_init((T3DInitParams){});
 
-    rdpq_font_t *font = rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO);
-    rdpq_font_style(font, 0, &(rdpq_fontstyle_t){
-        .color = RGBA32(221, 236, 242, 255),
-        .outline_color = RGBA32(5, 10, 18, 255),
-    });
-    rdpq_font_style(font, 1, &(rdpq_fontstyle_t){
-        .color = RGBA32(83, 226, 208, 255),
-        .outline_color = RGBA32(5, 10, 18, 255),
-    });
-    rdpq_text_register_font(FONT_ID, font);
+    N64GameRenderer renderer;
+    assertf(n64game_renderer_init(&renderer), "N64GAME renderer allocation failed");
 
-    T3DMat4FP *model_matrix_fp = malloc_uncached(sizeof(T3DMat4FP));
-    T3DVertPacked *vertices = malloc_uncached(sizeof(T3DVertPacked) * 2);
-    assertf(model_matrix_fp && vertices, "Gate 3 diagnostic allocation failed");
+    N64GameCore game;
+    N64GameCore continue_game;
+    n64game_core_init(&game);
+    n64game_core_init(&continue_game);
 
-    const uint16_t normal_top = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, 1.0f, 0.0f}});
-    const uint16_t normal_left = t3d_vert_pack_normal(&(fm_vec3_t){{-0.7f, -0.4f, 0.6f}});
-    const uint16_t normal_right = t3d_vert_pack_normal(&(fm_vec3_t){{0.7f, -0.4f, 0.6f}});
-    const uint16_t normal_back = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, -0.4f, -0.9f}});
-
-    vertices[0] = (T3DVertPacked){
-        .posA = {0, 28, 0},
-        .rgbaA = 0x53E2D0FF,
-        .normA = normal_top,
-        .posB = {-22, -16, 18},
-        .rgbaB = 0x4267B2FF,
-        .normB = normal_left,
-    };
-    vertices[1] = (T3DVertPacked){
-        .posA = {22, -16, 18},
-        .rgbaA = 0xEAB464FF,
-        .normA = normal_right,
-        .posB = {0, -16, -24},
-        .rgbaB = 0x7655A6FF,
-        .normB = normal_back,
-    };
-
-    const fm_vec3_t camera_position = {{0.0f, 7.0f, -82.0f}};
-    const fm_vec3_t camera_target = {{0.0f, 0.0f, 0.0f}};
-    const fm_vec3_t camera_up = {{0.0f, 1.0f, 0.0f}};
-    fm_vec3_t rotation_axis = {{0.35f, 1.0f, 0.2f}};
-    const fm_vec3_t model_scale = {{0.72f, 0.72f, 0.72f}};
-    const uint8_t ambient[4] = {44, 55, 72, 255};
-    const uint8_t directional[4] = {255, 240, 214, 255};
-    const fm_vec3_t light_direction = {{-0.35f, 0.65f, 1.0f}};
-    fm_vec3_norm(&rotation_axis, &rotation_axis);
-
-    T3DViewport viewport = t3d_viewport_create();
-    rspq_block_t *geometry_block = NULL;
-    float angle = 0.0f;
-    bool pulse = false;
+    const eeprom_type_t save_type = eeprom_present();
+    const bool save_available = save_type != EEPROM_NONE;
+    uint32_t save_sequence = 0U;
+    uint8_t active_save_slot = 0U;
+    bool continue_available = false;
+    if (save_available) {
+        uint8_t stored_slots[N64GAME_SAVE_SLOT_COUNT][N64GAME_SAVE_BYTES];
+        eeprom_read_bytes(stored_slots, 0U, sizeof(stored_slots));
+        continue_available = n64game_save_select_latest(
+            stored_slots, &continue_game, &save_sequence, &active_save_slot
+        );
+    }
+    SaveWriter save_writer = {0};
+    bool controller_was_connected = false;
 
     for (;;) {
         joypad_poll();
-        const joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-        if (pressed.a) {
-            pulse = !pulse;
+        const bool controller_connected = joypad_is_connected(JOYPAD_PORT_1);
+        const bool clear_edge_frame = controller_connected && !controller_was_connected;
+        controller_was_connected = controller_connected;
+        const N64GameInput input = controller_connected ?
+            read_game_input() : (N64GameInput){0};
+        const bool resume_now = game.scene == N64GAME_SCENE_OPENING_SLATE &&
+            controller_connected && !clear_edge_frame && continue_available &&
+            input_pressed(input, N64GAME_INPUT_START);
+        if (resume_now) {
+            game = continue_game;
+        } else {
+            n64game_core_update_controller(
+                &game, input, controller_connected, clear_edge_frame
+            );
         }
 
-        angle += pulse ? 0.052f : 0.026f;
-        fm_mat4_t model_matrix;
-        fm_mat4_identity(&model_matrix);
-        fm_mat4_from_axis_angle(&model_matrix, &rotation_axis, angle);
-        fm_mat4_scale(&model_matrix, &model_scale);
-        t3d_mat4_to_fixed(model_matrix_fp, &model_matrix);
-
-        t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(72.0f), 8.0f, 140.0f);
-        t3d_viewport_look_at(&viewport, &camera_position, &camera_target, &camera_up);
-
-        rdpq_attach(display_get(), display_get_zbuf());
-        t3d_frame_start();
-        t3d_viewport_attach(&viewport);
-        t3d_screen_clear_color(RGBA32(6, 11, 20, 255));
-        t3d_screen_clear_depth();
-        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
-        t3d_light_set_ambient(ambient);
-        t3d_light_set_directional(0, directional, &light_direction);
-        t3d_light_set_count(1);
-        t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
-
-        if (!geometry_block) {
-            rspq_block_begin();
-            t3d_matrix_push(model_matrix_fp);
-            t3d_vert_load(vertices, 0, 4);
-            t3d_matrix_pop(1);
-            t3d_tri_draw(0, 1, 2);
-            t3d_tri_draw(0, 3, 1);
-            t3d_tri_draw(0, 2, 3);
-            t3d_tri_draw(1, 3, 2);
-            t3d_tri_sync();
-            geometry_block = rspq_block_end();
+        if (save_available && !save_writer.faulted) {
+            if (save_writer_pump(
+                    &save_writer, &continue_game, &save_sequence, &active_save_slot)) {
+                continue_available = true;
+            }
+            if (game.save_requested && save_writer.phase == SAVE_WRITE_IDLE) {
+                if (save_writer_begin(
+                    &save_writer, &game, save_sequence,
+                    continue_available, active_save_slot
+                )) {
+                    game.save_requested = false;
+                }
+            }
         }
-        rspq_block_run(geometry_block);
 
-        draw_centered_text(18.0f, 1, "N64GAME");
-        draw_centered_text(36.0f, 0, "PINNED TINY3D TOOLCHAIN PROOF");
-        draw_centered_text(210.0f, 0, pulse ? "A  PULSE: ON" : "A  PULSE: OFF");
-        rdpq_detach_show();
+        const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE || eeprom_is_busy();
+        const bool save_usable = save_available && !save_writer.faulted;
+        n64game_renderer_draw(
+            &renderer,
+            &game,
+            save_busy,
+            save_usable,
+            continue_available,
+            controller_connected
+        );
     }
 }

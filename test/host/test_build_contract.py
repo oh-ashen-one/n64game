@@ -18,6 +18,17 @@ import n64game_build as build  # noqa: E402
 
 
 class BuildContractTests(unittest.TestCase):
+    def test_host_report_expectation_matches_canonical_runner_exactly(self) -> None:
+        runner = (ROOT / "scripts" / "test-host").read_text(encoding="utf-8")
+        match = re.search(
+            r"^printf '([^']*)' > build/reports/host-tests\.txt$",
+            runner,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(match)
+        emitted = match.group(1).replace(r"\n", "\n")
+        self.assertEqual(emitted, build.EXPECTED_HOST_TEST_REPORT)
+
     def test_canonical_host_runner_is_python_isolated_and_bytecode_free(self) -> None:
         self.assertEqual(sys.flags.isolated, 1)
         self.assertEqual(sys.flags.ignore_environment, 1)
@@ -123,13 +134,31 @@ class BuildContractTests(unittest.TestCase):
             with self.assertRaises(build.ContractError):
                 build.inspect_rom(path)
 
-    def test_diagnostic_source_uses_locked_display_and_tiny3d(self) -> None:
+    def test_game_entrypoint_uses_locked_display_tiny3d_and_release_spine(self) -> None:
         source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
         self.assertIn("RESOLUTION_320x240", source)
         self.assertIn("DEPTH_16_BPP", source)
         self.assertIn("display_set_fps_limit(30.0f)", source)
         self.assertIn("t3d_init", source)
-        self.assertIn("fm_vec3_norm(&rotation_axis, &rotation_axis)", source)
+        self.assertIn("n64game_core_update", source)
+        self.assertIn("n64game_renderer_draw", source)
+        self.assertIn("n64game_save_decode", source)
+        self.assertIn("n64game_save_select_latest", source)
+        self.assertIn("N64GAME_SAVE_SLOT_COUNT", source)
+        self.assertIn("SAVE_WRITE_INVALIDATING", source)
+        self.assertIn("SAVE_WRITE_BODY", source)
+        self.assertIn("SAVE_WRITE_FOOTER", source)
+        self.assertIn("eeprom_write_bytes", source)
+        self.assertIn("joypad_is_connected(JOYPAD_PORT_1)", source)
+        self.assertIn("n64game_core_update_controller", source)
+
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        for object_name in (
+            "n64game_core.o",
+            "n64game_render.o",
+            "n64game_save.o",
+        ):
+            self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
@@ -149,14 +178,14 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("include $(T3D_ROOT)/t3d.mk", makefile)
 
     def test_conversion_suppression_is_scoped_to_the_tiny3d_header(self) -> None:
-        source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        source = (ROOT / "src" / "n64game_render.h").read_text(encoding="utf-8")
         push = source.index("#pragma GCC diagnostic push")
         include = source.index("#include <t3d/t3d.h>")
         pop = source.index("#pragma GCC diagnostic pop")
-        main = source.index("int main(void)")
+        core = source.index('#include "n64game_core.h"')
         self.assertLess(push, include)
         self.assertLess(include, pop)
-        self.assertLess(pop, main)
+        self.assertLess(pop, core)
 
     def test_lock_is_valid_json_with_immutable_container(self) -> None:
         lock = json.loads((ROOT / "config" / "toolchain.lock.json").read_text(encoding="utf-8"))
