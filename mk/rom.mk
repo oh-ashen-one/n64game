@@ -16,7 +16,9 @@ OBJS := $(BUILD_DIR)/main.o
 
 all: stage-rom
 
-$(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) $(T3D_ROOT)/build/libt3d.a
+# t3d.mk already injects libt3d.a into the linker flags. Keep the archive as an
+# order-only prerequisite so it is built first without also appearing in $^.
+$(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) | $(T3D_ROOT)/build/libt3d.a
 
 $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME GATE 3"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k

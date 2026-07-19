@@ -126,6 +126,14 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("mv $< $(ROM_OUTPUT)", makefile)
         self.assertNotIn("$(ROM_OUTPUT): $(ROM_NAME).z64", makefile)
 
+    def test_tiny3d_archive_is_linked_exactly_once(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        elf_rule = "$(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) | $(T3D_ROOT)/build/libt3d.a"
+        duplicate_rule = "$(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) $(T3D_ROOT)/build/libt3d.a"
+        self.assertIn(elf_rule, makefile)
+        self.assertNotIn(duplicate_rule, makefile)
+        self.assertIn("include $(T3D_ROOT)/t3d.mk", makefile)
+
     def test_conversion_suppression_is_scoped_to_the_tiny3d_header(self) -> None:
         source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
         push = source.index("#pragma GCC diagnostic push")
