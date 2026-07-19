@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE="report"
+case "${1:-}" in
+    "") ;;
+    --build) MODE="build" ;;
+    --ci) MODE="ci" ;;
+    --all) MODE="all" ;;
+    *) printf 'usage: scripts/bootstrap-check [--build|--ci|--all]\n' >&2; exit 64 ;;
+esac
+exec python3 "$ROOT/tools/n64game_build.py" bootstrap --mode "$MODE"

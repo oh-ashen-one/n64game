@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+scripts/verify-toolchain-pins >/dev/null
+
+LIBDRAGON_SHA="f13b48985edbf4310f07779c76d9a68c7605037b"
+TINY3D_SHA="e84172f29f719680ac3213a7f408c2f721ef7b24"
+DEPS="$ROOT/build/deps"
+LIBDRAGON_OUT="$DEPS/libdragon"
+TINY3D_OUT="$DEPS/tiny3d"
+
+test "$LIBDRAGON_OUT" = "$ROOT/build/deps/libdragon"
+test "$TINY3D_OUT" = "$ROOT/build/deps/tiny3d"
+rm -rf "$LIBDRAGON_OUT" "$TINY3D_OUT"
+mkdir -p "$LIBDRAGON_OUT" "$TINY3D_OUT"
+
+git -C vendor/libdragon archive --format=tar "$LIBDRAGON_SHA" | tar -xf - -C "$LIBDRAGON_OUT"
+git -C vendor/tiny3d archive --format=tar "$TINY3D_SHA" | tar -xf - -C "$TINY3D_OUT"
+
+printf '%s\n' "$LIBDRAGON_SHA" > "$DEPS/libdragon.commit"
+printf '%s\n' "$TINY3D_SHA" > "$DEPS/tiny3d.commit"
+printf 'libdragon_tree\t%s\ntiny3d_tree\t%s\n' \
+    "$(git -C vendor/libdragon rev-parse "$LIBDRAGON_SHA^{tree}")" \
+    "$(git -C vendor/tiny3d rev-parse "$TINY3D_SHA^{tree}")" \
+    > "$DEPS/source-trees.tsv"

@@ -34,6 +34,9 @@ SAFE_GIT_ENVIRONMENT = {
   "GIT_NO_REPLACE_OBJECTS" => "1",
   "GIT_GRAFT_FILE" => nil
 }.freeze
+NONPUBLIC_WORKSPACE_REF_PREFIXES = %w[
+  refs/codex/turn-diffs/
+].freeze
 
 class UnknownIdLockEnumIdentifier < StandardError; end
 
@@ -738,6 +741,11 @@ def serialized_id_public_commit_roots(root, errors)
     return []
   end
   refs.each_line.map(&:strip).reject(&:empty?).sort.each do |refname|
+    # Codex records local before/after tree snapshots under this namespace.
+    # They are not branch, tag, remote, or linked-worktree commit roots and
+    # cannot participate in public serialized-ID history.
+    next if NONPUBLIC_WORKSPACE_REF_PREFIXES.any? { |prefix| refname.start_with?(prefix) }
+
     commit, commit_error, commit_ok = git_capture(
       root,
       "rev-parse",
@@ -1118,6 +1126,32 @@ def run_serialized_id_git_self_tests
     approval_errors = validate_serialized_id_fixture(root)
     assertions << "accepts the exact committed reviewed/approval baseline" if approval_errors.empty?
     raise "serialized-ID Git self-test rejected valid approval: #{approval_errors.join('; ')}" unless approval_errors.empty?
+
+    approval_tree, approval_tree_error, approval_tree_ok = git_capture(root, "rev-parse", "HEAD^{tree}")
+    raise "serialized-ID Git self-test cannot resolve approval tree: #{approval_tree_error}" unless approval_tree_ok
+    workspace_ref = "refs/codex/turn-diffs/captures/self-test/base"
+    serialized_id_fixture_git!(root, "update-ref", workspace_ref, approval_tree.strip)
+    workspace_ref_errors = validate_serialized_id_fixture(root)
+    workspace_ref_accepted = workspace_ref_errors.empty?
+    assertions << "ignores a Codex-local tree snapshot as a public commit root" if workspace_ref_accepted
+    unless workspace_ref_accepted
+      raise "serialized-ID Git self-test treated a Codex-local tree snapshot as public history: " \
+            "#{workspace_ref_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "update-ref", "-d", workspace_ref)
+
+    public_tree_ref = "refs/tags/serialized-id-standalone-tree"
+    serialized_id_fixture_git!(root, "update-ref", public_tree_ref, approval_tree.strip)
+    public_tree_errors = validate_serialized_id_fixture(root)
+    public_tree_rejected = public_tree_errors.any? do |message|
+      message.include?(public_tree_ref) && message.include?("does not peel to a commit")
+    end
+    assertions << "rejects a standalone tree retained by a public tag" if public_tree_rejected
+    unless public_tree_rejected
+      raise "serialized-ID Git self-test accepted a standalone tree as public history: " \
+            "#{public_tree_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "update-ref", "-d", public_tree_ref)
 
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "conflicting-public-approval")
     trace.write(

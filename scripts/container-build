@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+test -n "${N64_INST:-}"
+test -d build/deps/libdragon
+test -d build/deps/tiny3d
+
+export TZ=UTC
+export LC_ALL=C
+if [[ ! "${SOURCE_DATE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'SOURCE_DATE_EPOCH must be supplied as a positive integer by scripts/build-rom\n' >&2
+    exit 1
+fi
+export SOURCE_DATE_EPOCH
+export N64GAME_JOBS="${N64GAME_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 4)}"
+
+make -C build/deps/libdragon install-mk
+make -C build/deps/libdragon -j"$N64GAME_JOBS" libdragon tools
+make -C build/deps/libdragon install tools-install
+make -C build/deps/tiny3d -j"$N64GAME_JOBS"
+make -f mk/rom.mk all
+
+"$N64_INST/bin/mips64-elf-size" -A build/game/n64game-gate3.elf > build/game/n64game-gate3.elf.size.txt
+scripts/validate-rom build/game/n64game-gate3.z64

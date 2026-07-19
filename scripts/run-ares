@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROM="$ROOT/build/game/n64game-gate3.z64"
+EXPECTED_ROM_SHA=""
+CHECK_ONLY=0
+
+for argument in "$@"; do
+    case "$argument" in
+        --homebrew-mode) ;;
+        --check-only) CHECK_ONLY=1 ;;
+        --expected-rom-sha256=*) EXPECTED_ROM_SHA="${argument#*=}" ;;
+        --*) printf 'unsupported argument: %s\n' "$argument" >&2; exit 64 ;;
+        *) ROM="$argument" ;;
+    esac
+done
+
+if [[ "$ROM" != /* ]]; then
+    ROM="$ROOT/$ROM"
+fi
+test -f "$ROM"
+test ! -L "$ROM"
+
+ACTUAL_ROM_SHA="$(shasum -a 256 "$ROM" | awk '{print $1}')"
+if [[ -n "$EXPECTED_ROM_SHA" && "$ACTUAL_ROM_SHA" != "$EXPECTED_ROM_SHA" ]]; then
+    printf 'ROM SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_ROM_SHA" "$EXPECTED_ROM_SHA" >&2
+    exit 1
+fi
+
+ARES="${N64GAME_ARES_BINARY:-$HOME/Applications/Emulators/ares-v148/ares.app/Contents/MacOS/ares}"
+EXPECTED_ARES_SHA="7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345"
+test -f "$ARES"
+test -x "$ARES"
+test ! -L "$ARES"
+ACTUAL_ARES_SHA="$(shasum -a 256 "$ARES" | awk '{print $1}')"
+if [[ "$ACTUAL_ARES_SHA" != "$EXPECTED_ARES_SHA" ]]; then
+    printf 'Ares executable SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_ARES_SHA" "$EXPECTED_ARES_SHA" >&2
+    exit 1
+fi
+
+STATE_ROOT="${N64GAME_ARES_STATE:-$HOME/Library/Application Support/ares-v148-n64game}"
+mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
+VERSION="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
+if [[ "$VERSION" != *"v148"* ]]; then
+    printf 'unexpected Ares version: %s\n' "$VERSION" >&2
+    exit 1
+fi
+
+printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
+    "$VERSION" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+
+if [[ "$CHECK_ONLY" -eq 1 ]]; then
+    exit 0
+fi
+
+exec "$ARES" \
+    --settings-file "$STATE_ROOT/settings.bml" \
+    --setting General/HomebrewMode=true \
+    --setting Nintendo64/ExpansionPak=false \
+    --setting Input/Defocus=Allow \
+    --setting "Paths/Home=$STATE_ROOT/Systems/" \
+    --setting "Paths/Saves=$STATE_ROOT/Saves/" \
+    --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/" \
+    --setting "Paths/Debugging=$STATE_ROOT/Debugging/" \
+    --system "Nintendo 64" \
+    --kiosk \
+    "$ROM"

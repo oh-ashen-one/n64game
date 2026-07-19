@@ -42,6 +42,7 @@ filesystem/
 .tmp/
 tmp/
 tools/.venv/
+node_modules/
 __pycache__/
 *.pyc
 

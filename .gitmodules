@@ -1,0 +1,6 @@
+[submodule "vendor/libdragon"]
+	path = vendor/libdragon
+	url = https://github.com/DragonMinded/libdragon.git
+[submodule "vendor/tiny3d"]
+	path = vendor/tiny3d
+	url = https://github.com/HailToDodongo/tiny3d.git
