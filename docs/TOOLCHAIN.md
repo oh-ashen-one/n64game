@@ -38,11 +38,28 @@ make report    # ROM checksum, header/size, map, dependency and validation repor
 make clean     # remove ignored build/ plus the one transient root ROM staging path
 ```
 
-`scripts/build-rom` starts by deleting only the resolved repository `build/` path and the exact transient root-level `n64game-gate3.z64` staging path used by libdragon's upstream make rule. It exports each pinned submodule through `git archive` into `build/deps/`, so generated headers and dependency objects never dirty the public gitlinks. CLI 12.2.1 creates or starts the digest-addressed container; the wrapper then verifies its running state, exact image identity, and one expected read-write project mount before invoking the audited project build with Docker. Direct `libdragon exec` is intentionally avoided because its fresh-container recovery path silently runs the vendor's broader `build.sh` before the requested command. The audited container entrypoint installs the pinned libdragon library/tools, builds Tiny3D locally, and compiles the project with warnings as errors.
+`scripts/build-rom` starts by deleting only the resolved repository `build/` path and the exact transient root-level `n64game-gate3.z64` staging path used by libdragon's upstream make rule. It exports each pinned submodule through `git archive` into `build/deps/`, so generated headers and dependency objects never dirty the public gitlinks. CLI 12.2.1 creates or starts the digest-addressed container; the wrapper then verifies its running state, exact image identity, and one expected read-write project mount before invoking the audited project build with Docker. The wrapper resolves the positive `SOURCE_DATE_EPOCH` from the trusted host checkout and passes that value into the container, so the container never needs to weaken Git ownership checks for differently presented bind mounts. Direct `libdragon exec` is intentionally avoided because its fresh-container recovery path silently runs the vendor's broader `build.sh` before the requested command. The audited container entrypoint installs the pinned libdragon library/tools, builds Tiny3D locally, and compiles the project with warnings as errors.
 
 Project code enables `-Wshadow` and `-Wconversion` as errors in addition to the pinned toolchain defaults. One known conversion warning inside Tiny3D's inline `t3d_mat4fp_set_float` mask is suppressed only while parsing the pinned upstream header; strict conversion diagnostics resume before any project declaration or function body.
 
 The selected OCI image currently publishes Linux AMD64 plus provenance, not an ARM64 runtime. The wrapper sets `DOCKER_DEFAULT_PLATFORM=linux/amd64`; Apple Silicon therefore requires Docker's x86 emulation. CI runs the same image natively on an AMD64 runner.
+
+### Audited Apple Silicon fallback
+
+The master specification names Docker Desktop as the required local runtime. On the audited host, Docker Desktop 4.82.0 is still blocked before engine startup by macOS policy error `failed to call driver: 0x3`. To separate that host-service failure from project reproducibility, Gate 3 also verified the same Docker API and immutable image through Colima 0.10.3 / Lima 2.1.4 using Virtualization.framework, virtiofs, and Rosetta:
+
+```sh
+brew install colima
+colima start --profile n64game \
+  --runtime docker --vm-type vz --arch aarch64 --vz-rosetta \
+  --mount-type virtiofs --cpus 4 --memory 8 --disk 60 --activate=false
+export DOCKER_CONTEXT=colima-n64game
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
+scripts/bootstrap-check --all
+make validate && make rom && make test && make report
+```
+
+This fallback produced the exact CI/Ares ROM SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e` from clean commit `85e91c793eccaeff70327ea6fd67e8f7e775faad`. It proves the pinned build is portable through a local Docker-compatible engine, but it is not described as a Docker Desktop pass and does not silently amend the master specification.
 
 ## Outputs
 

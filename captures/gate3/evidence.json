@@ -1,11 +1,22 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "ci": {
     "workflow_run": 29674638989,
     "workflow_job": 88159621235,
     "artifact_id": 8438442749,
     "pr_head": "4265329248375578e1bbe1c416e9ba004f7fa36b",
     "actions_merge_revision": "657d3500e157bd10e09618a178a12c792c9977b5"
+  },
+  "confirmation_ci": {
+    "workflow_run": 29675864028,
+    "workflow_job": 88163077829,
+    "artifact_id": 8438863000,
+    "artifact_name": "n64game-gate3-75499d5784967852cab2c4ca071cf7aeb05e2e70",
+    "artifact_sha256": "f7bc2ba02d37ed1535f300702fa721f40da9b7fe0787dac76b6653d026c3ca83",
+    "pr_head": "85e91c793eccaeff70327ea6fd67e8f7e775faad",
+    "actions_merge_revision": "75499d5784967852cab2c4ca071cf7aeb05e2e70",
+    "actions_merge_tree": "292a0c867bd71b1f1c7d5cf7d935f9b0953a0016",
+    "rom_matches_boot_evidence": true
   },
   "rom": {
     "sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
@@ -19,11 +30,41 @@
     "defocus": "Allow"
   },
   "local_build": {
-    "status": "BLOCKED",
-    "docker_desktop_version": "4.82.0",
-    "docker_desktop_build": "233772",
-    "docker_engine": "UNAVAILABLE",
-    "host_policy_error": "failed to call driver: 0x3"
+    "status": "PASS_WITH_AUDITED_DOCKER_COMPATIBLE_FALLBACK",
+    "gate3_closure": "BLOCKED_DOCKER_DESKTOP_REQUIRED_BY_MASTER_SPEC",
+    "rom_built_at": "2026-07-19T02:06:35-04:00",
+    "completed_at": "2026-07-19T02:07:41-04:00",
+    "source_commit": "85e91c793eccaeff70327ea6fd67e8f7e775faad",
+    "source_tree": "292a0c867bd71b1f1c7d5cf7d935f9b0953a0016",
+    "source_dirty": false,
+    "commands": {
+      "make_validate": "PASS",
+      "make_rom": "PASS",
+      "make_test": "PASS_17_OF_17",
+      "make_report": "PASS",
+      "bootstrap_all": "PASS"
+    },
+    "rom_sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
+    "rom_size_bytes": 212992,
+    "runtime": {
+      "colima_version": "0.10.3",
+      "lima_version": "2.1.4",
+      "vm_driver": "macOS Virtualization.Framework",
+      "vm_arch": "aarch64",
+      "mount_type": "virtiofs",
+      "rosetta": true,
+      "docker_client": "29.6.2",
+      "docker_engine": "29.5.2",
+      "container_platform": "linux/amd64",
+      "container_image_id": "sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83"
+    },
+    "docker_desktop": {
+      "status": "BLOCKED",
+      "version": "4.82.0",
+      "build": "233772",
+      "engine": "UNAVAILABLE",
+      "host_policy_error": "failed to call driver: 0x3"
+    }
   },
   "captures": [
     {
