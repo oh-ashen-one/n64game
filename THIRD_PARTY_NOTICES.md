@@ -1,24 +1,38 @@
 # Third-Party Notices
 
-This project is designed to use the following external tools and libraries. Each component remains subject to its own license. Exact pinned revisions are recorded in the master specification and will be mirrored in the build lock/configuration once integration begins.
+This project uses the following external tools and libraries. Each component remains subject to its own license. Exact revisions, archive hashes, container digests, and tool versions are recorded in `config/toolchain.lock.json`. Dependency source is fetched through pinned public Git submodules; compiler, CLI, emulator, and authoring-tool binaries are not committed to this repository.
 
 ## Runtime and build dependencies
 
 ### libdragon
 
 - Project: https://github.com/DragonMinded/libdragon
-- Planned branch: `preview`
+- Pinned branch/commit: `preview` at `f13b48985edbf4310f07779c76d9a68c7605037b`
 - License: The Unlicense
-- Status: planned Gate 3 dependency; not vendored in this repository at Gate 2
+- Status: pinned public Git submodule at `vendor/libdragon`; compiled from an archive of the exact gitlink inside ignored `build/`
 
 ### Tiny3D
 
 - Project: https://github.com/HailToDodongo/tiny3d
+- Pinned commit: `e84172f29f719680ac3213a7f408c2f721ef7b24`
 - License: MIT
 - Copyright: Max Bebök and contributors
-- Status: planned Gate 3 dependency; not vendored in this repository at Gate 2
+- Status: pinned public Git submodule at `vendor/tiny3d`; compiled from an archive of the exact gitlink inside ignored `build/`
 
-Tiny3D itself identifies additional third-party components used by its tooling, including cgltf (MIT), meshoptimizer (MIT), bvh (MIT), and TriStripper (zlib). Their notices must be preserved when those tools are integrated or redistributed.
+Tiny3D identifies or embeds tooling components including cgltf (MIT), meshoptimizer (MIT), bvh (MIT), TriStripper (zlib), lodepng (zlib), and nlohmann/json (MIT, with separately attributed Apache-2.0 utility fragments). Their upstream notices remain in the pinned source and must be preserved if the converter or a source/tool bundle is redistributed.
+
+### libdragon CLI and build container
+
+- CLI project: https://github.com/anacierdem/libdragon-docker
+- Pinned CLI: npm `libdragon` 12.2.1, repository commit `f8a16abc81263781cf684602bcea98a1d096fd2d`
+- CLI license: MIT
+- Container: `ghcr.io/dragonminded/libdragon@sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83`
+- Container platform: Linux AMD64; compiler/toolchain includes GCC 14.4.0, binutils 2.44, newlib 4.4.0.20231231, and GDB 16.2 under their respective upstream licenses
+- Use: external reproducible build environment; neither the CLI package, container image, nor compiler toolchain is redistributed with the ROM artifact
+
+The container's published provenance binds it to the pinned libdragon commit. Apple Silicon local builds use Docker's AMD64 emulation because this exact OCI index has no ARM64 runtime manifest.
+
+The locked CLI package graph also contains the following host-only npm dependencies: `ansi-styles`, `array-back`, `chalk`, `color-convert`, `color-name`, `command-line-usage`, `deep-extend`, `escape-string-regexp`, `has-flag`, `reduce-flatten`, `supports-color`, `table-layout`, `typical`, and `wordwrapjs` under MIT licenses, plus `zx` under Apache-2.0. Exact versions and registry integrity hashes are retained in `package-lock.json`; the packages are not bundled into the ROM or CI artifact.
 
 ## Gate 2 validation tooling
 
@@ -44,6 +58,8 @@ Tiny3D itself identifies additional third-party components used by its tooling, 
 - License: GNU GPL
 - Use: external content-production tool; Blender is not linked into the game ROM
 
+The observed host installation is Blender 5.2.0 LTS. Production authoring remains pinned to Blender 4.5.11 LTS because the selected Fast64 release does not declare compatibility with 5.2.0; the observed newer installation is not silently treated as the production exporter.
+
 ### Fast64
 
 - Project: https://github.com/Fast-64/fast64
@@ -55,11 +71,23 @@ Fast64 is an external authoring tool. Its source will not be copied into or link
 
 ### Ares
 
-- Project: https://ares-emu.net/
-- Planned version: 148, tag commit `0aafd85789215e84e1e43415c07d4c88461b7899`
-- License/notices: unresolved at Gate 2 because no Ares installation, source checkout, or authoritative local distribution notice is present
+- Project: https://github.com/ares-emulator/ares
+- Pinned version: v148, tag commit `0aafd85789215e84e1e43415c07d4c88461b7899`
+- Official macOS archive: `ares-macos-universal.zip`, SHA-256 `1ae232ab6de341210f171f51d84b311527eb1399060706589334a8a7de136bb0`
+- Pinned universal macOS executable SHA-256: `7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345`
+- Main license: ISC-style Ares license; official v148 source `LICENSE` SHA-256 `a1053dec5f15ee7c851abf7716634344b9d5740b414bf5893802f9910fdc7a97`
+- Bundled notices: the official source license consolidates Ares and third-party notices; the binary archive also carries shader/component licenses including MIT, zlib, LGPL-3.0, GPL-2.0, and GPL-3.0 material
 - Use: external emulator and initial certification target
-- Gate 3 blocker: before Ares is accepted for certification or redistributed, record the exact download/source provenance and verify the license and notices supplied by that exact version; no Ares code or binary may enter this repository until that evidence exists
+- Verification: official archive digest matched GitHub; app and native frameworks are universal ARM64/x86_64; deep code-signature, notarization, stapled-ticket, and Apple distribution-policy checks passed
+
+The Ares binary is installed outside the repository and is not redistributed with project artifacts. Anyone redistributing Ares itself must include the complete applicable upstream license/notices. The v148 binary ZIP omits the consolidated root source `LICENSE`, so copying that ZIP onward without a separate notice review is not authorized by this project.
+
+### Docker Desktop
+
+- Project: https://www.docker.com/products/docker-desktop/
+- Gate 3 observed install: 4.82.0 build 233772
+- Use: external macOS container engine for the pinned libdragon build image
+- Distribution: Docker Desktop is not committed or redistributed by this project and remains subject to Docker's own subscription/service terms
 
 ### FFmpeg / ffprobe
 

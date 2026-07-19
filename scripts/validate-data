@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+scripts/validate-data-c
+scripts/validate-dialogue-graph
+scripts/validate-condition-registry
+scripts/validate-id-locks

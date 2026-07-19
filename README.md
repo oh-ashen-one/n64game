@@ -4,9 +4,9 @@
 
 ## Current status
 
-**Preproduction — Gate 2: complete.**
+**Toolchain — Gate 3: in progress. Gate 2 is complete.**
 
-The repository does not contain a playable ROM yet. Gate 2 is the specification and production-contract stage for the clean-room boundary, art direction, technical architecture, production inventory, licensing, and evidence gates. Gate 3 will establish the pinned reproducible toolchain and first verified clean ROM. Status claims are updated only after the corresponding output has been verified.
+The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are now locked, with public gitlinks and stable build entry points under `scripts/`. The current ROM target is deliberately a Gate 3 toolchain/boot diagnostic, not the playable opening and not a full-game claim. Gate 3 remains open until a clean public-CI ROM artifact and a visually inspected Ares 148 boot are both recorded. Status claims are updated only after the corresponding output has been verified.
 
 The authoritative production contract is [docs/N64GAME_MASTER_SPEC.md](docs/N64GAME_MASTER_SPEC.md). The reusable goal prompt is [docs/N64GAME_GOAL_PROMPT.md](docs/N64GAME_GOAL_PROMPT.md).
 
@@ -22,7 +22,7 @@ The game uses an original retro desert-science-fiction setting:
 
 Pokémon XD: Gale of Darkness informs only the high-level pacing and functional rhythm of the opening. Pandemonium is an engineering and presentation reference. No Pokémon or Pandemonium code, characters, assets, maps, dialogue, music, UI, or protected expression may be copied into this project.
 
-## Planned technical target
+## Technical target
 
 - Standard 4 MB Nintendo 64; no Expansion Pak requirement
 - 320×240, 16-bit color, triple buffering, 30 FPS target
@@ -32,7 +32,7 @@ Pokémon XD: Gale of Darkness informs only the high-level pacing and functional 
 - Ares 148 Homebrew Mode as the first certification target
 - Public CI-generated `.z64` and SHA-256 artifacts
 
-Build and run instructions will be added after the pinned toolchain produces a verified clean ROM. Until then, this README intentionally does not provide speculative commands.
+The reproducible build contract and exact commands are documented in [docs/TOOLCHAIN.md](docs/TOOLCHAIN.md). Generated ROMs and reports stay under ignored `build/`; ROM binaries never enter normal Git history.
 
 ## Licensing
 

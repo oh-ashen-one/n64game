@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET="$ROOT/build"
+ROOT_ROM="$ROOT/n64game-gate3.z64"
+test "$TARGET" = "$ROOT/build"
+test "$ROOT_ROM" = "$ROOT/n64game-gate3.z64"
+rm -rf "$TARGET"
+rm -f "$ROOT_ROM"

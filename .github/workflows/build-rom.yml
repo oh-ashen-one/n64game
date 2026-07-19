@@ -1,0 +1,72 @@
+name: Build ROM
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-rom-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate3-rom:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DOCKER_DEFAULT_PLATFORM: linux/amd64
+      N64GAME_CI: "1"
+    steps:
+      - name: Checkout exact public source and LFS
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          lfs: true
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install exact Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+
+      - name: Install locked libdragon CLI
+        run: npm ci --ignore-scripts
+
+      - name: Validate source contracts
+        run: make validate
+
+      - name: Audit CI build host
+        run: scripts/bootstrap-check --ci
+
+      - name: Build clean pinned Tiny3D ROM
+        run: make rom
+
+      - name: Run host contract tests
+        run: make test
+
+      - name: Finalize checksums and reports
+        run: make report
+
+      - name: Verify build did not mutate tracked source
+        run: git diff --exit-code --ignore-submodules=none
+
+      - name: Upload ROM and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: n64game-gate3-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/game/n64game-gate3.z64
+            build/game/n64game-gate3.z64.sha256
+            build/game/n64game-gate3.map
+            build/game/n64game-gate3.elf.size.txt
+            build/reports/dependency-build-manifest.json
+            build/reports/rom-size.md
+            build/reports/validation-summary.md
+            build/reports/host-tests.txt

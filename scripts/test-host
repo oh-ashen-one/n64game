@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+mkdir -p build/reports
+python3 -m unittest discover -s test/host -p 'test_*.py' -v
+printf 'suite=gate3_build_contract\nresult=PASS\nscope=dependency pins, runtime manifest, ROM header parser, report contract; gameplay suites begin at Gate 5\n' > build/reports/host-tests.txt

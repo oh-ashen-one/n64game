@@ -1,0 +1,17 @@
+{
+  "name": "n64game-toolchain",
+  "version": "0.0.0-gate3",
+  "private": true,
+  "description": "Pinned local build wrapper for the n64game libdragon toolchain",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "toolchain:version": "libdragon version"
+  },
+  "dependencies": {
+    "libdragon": "12.2.1"
+  }
+}

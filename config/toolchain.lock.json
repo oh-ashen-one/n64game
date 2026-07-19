@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "libdragon": {
+    "repository": "https://github.com/DragonMinded/libdragon.git",
+    "branch": "preview",
+    "commit": "f13b48985edbf4310f07779c76d9a68c7605037b",
+    "license": "Unlicense"
+  },
+  "tiny3d": {
+    "repository": "https://github.com/HailToDodongo/tiny3d.git",
+    "commit": "e84172f29f719680ac3213a7f408c2f721ef7b24",
+    "license": "MIT"
+  },
+  "libdragon_cli": {
+    "version": "12.2.1",
+    "repository_commit": "f8a16abc81263781cf684602bcea98a1d096fd2d",
+    "npm_integrity": "sha512-z6POJAFlRgKvyDSamjA4rGdZUufoH26N4MEUKqqcr+m2FTFpu6KaGDFFmF5ztM1ebih+e63ZP6K351vojBF1NQ==",
+    "npm_shasum": "145abaed64efcecdc284057bef2964fd311a6b48",
+    "license": "MIT"
+  },
+  "container": {
+    "reference": "ghcr.io/dragonminded/libdragon@sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83",
+    "oci_index_digest": "sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83",
+    "linux_amd64_manifest_digest": "sha256:eeda0932b6742e2dd581e9e12368fd056b34483532298ce4e726298c74672762",
+    "platform": "linux/amd64",
+    "source_commit": "f13b48985edbf4310f07779c76d9a68c7605037b",
+    "gcc": "14.4.0",
+    "binutils": "2.44",
+    "newlib": "4.4.0.20231231",
+    "gdb": "16.2"
+  },
+  "docker_desktop": {
+    "verified_version": "4.82.0",
+    "verified_build": "233772",
+    "minimum_engine_version": "27.2.0",
+    "macos_app": "/Applications/Docker.app"
+  },
+  "ares": {
+    "version": "v148",
+    "tag_commit": "0aafd85789215e84e1e43415c07d4c88461b7899",
+    "release_url": "https://github.com/ares-emulator/ares/releases/tag/v148",
+    "macos_asset_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-macos-universal.zip",
+    "macos_asset_size": 79914130,
+    "macos_asset_sha256": "1ae232ab6de341210f171f51d84b311527eb1399060706589334a8a7de136bb0",
+    "macos_executable_sha256": "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345",
+    "source_archive_sha256": "06b053d0f407d33272222efd55446d46bfd61859eea46b6ae16c0cc4fa1e51e5",
+    "source_license_sha256": "a1053dec5f15ee7c851abf7716634344b9d5740b414bf5893802f9910fdc7a97",
+    "macos_user_relative_path": "Applications/Emulators/ares-v148/ares.app/Contents/MacOS/ares"
+  },
+  "authoring": {
+    "blender_target": "4.5.11 LTS",
+    "fast64_version": "2.5.3",
+    "fast64_commit": "8e9630c11824a9c00e9379279d43c64264eda87e"
+  },
+  "github_actions": {
+    "checkout_v7_0_0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    "setup_node_v7_0_0": "820762786026740c76f36085b0efc47a31fe5020",
+    "upload_artifact_v7_0_1": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "node": "24.18.0"
+  }
+}

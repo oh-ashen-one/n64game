@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT"
+
+if ! command -v docker >/dev/null 2>&1 && [[ -x /Applications/Docker.app/Contents/Resources/bin/docker ]]; then
+    export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+fi
+export DOCKER_DEFAULT_PLATFORM="linux/amd64"
+
+scripts/bootstrap-check --build
+scripts/clean-build
+scripts/prepare-dependencies
+
+IMAGE_REFERENCE="$(python3 -c 'import json; print(json.load(open("config/toolchain.lock.json", encoding="utf-8"))["container"]["reference"])')"
+CONTAINER_ID="$(node node_modules/libdragon/index.js start)"
+if [[ ! "$CONTAINER_ID" =~ ^[0-9a-f]{12}([0-9a-f]{52})?$ ]]; then
+    printf 'libdragon CLI returned an invalid container ID: %q\n' "$CONTAINER_ID" >&2
+    exit 1
+fi
+
+RUNNING="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_ID")"
+CONFIG_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$CONTAINER_ID")"
+CONTAINER_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$CONTAINER_ID")"
+LOCKED_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_REFERENCE")"
+MOUNT_FACTS="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/libdragon"}}{{printf "%s\t%s\t%t\n" .Type .Source .RW}}{{end}}{{end}}' "$CONTAINER_ID")"
+EXPECTED_MOUNT_FACTS="$(printf 'bind\t%s\ttrue' "$ROOT")"
+
+if [[ "$RUNNING" != "true" ]]; then
+    printf 'libdragon container is not running: %s\n' "$CONTAINER_ID" >&2
+    exit 1
+fi
+if [[ "$CONFIG_IMAGE" != "$IMAGE_REFERENCE" || "$CONTAINER_IMAGE_ID" != "$LOCKED_IMAGE_ID" ]]; then
+    printf 'libdragon container image does not match the immutable toolchain lock\n' >&2
+    exit 1
+fi
+if [[ "$MOUNT_FACTS" != "$EXPECTED_MOUNT_FACTS" ]]; then
+    printf 'libdragon container does not have the one expected RW project bind mount: %q\n' "$MOUNT_FACTS" >&2
+    exit 1
+fi
+
+# CLI 12.2.1 owns exact-image container creation/start. Execute the audited
+# project build directly so a fresh container cannot trigger CLI exec's hidden
+# full vendor build.sh path before our narrower pinned build contract.
+docker exec \
+    --workdir /libdragon \
+    --user "$(id -u):$(id -g)" \
+    --interactive \
+    "$CONTAINER_ID" \
+    ./scripts/container-build
+
+scripts/validate-rom build/game/n64game-gate3.z64

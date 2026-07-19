@@ -1,0 +1,5 @@
+{
+  "imageName": "ghcr.io/dragonminded/libdragon@sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83",
+  "vendorDirectory": "build/deps/libdragon",
+  "vendorStrategy": "manual"
+}

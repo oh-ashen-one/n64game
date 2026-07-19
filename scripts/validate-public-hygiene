@@ -3,10 +3,12 @@
 
 require "digest"
 require "fileutils"
+require "json"
 require "open3"
 require "pathname"
 require "set"
 require "tmpdir"
+require "uri"
 
 ROOT = Pathname.new(__dir__).join("..").expand_path
 MAX_GIT_BLOB_BYTES = 1024 * 1024
@@ -42,6 +44,29 @@ SAFE_GIT_ENVIRONMENT = {
   "GIT_NO_REPLACE_OBJECTS" => "1",
   "GIT_GRAFT_FILE" => nil
 }.freeze
+TOOLCHAIN_LOCK_PATH = "config/toolchain.lock.json"
+EXPECTED_SUBMODULES = {
+  "vendor/libdragon" => {
+    lock_key: "libdragon",
+    repository: "https://github.com/DragonMinded/libdragon.git",
+    commit: "f13b48985edbf4310f07779c76d9a68c7605037b"
+  }.freeze,
+  "vendor/tiny3d" => {
+    lock_key: "tiny3d",
+    repository: "https://github.com/HailToDodongo/tiny3d.git",
+    commit: "e84172f29f719680ac3213a7f408c2f721ef7b24"
+  }.freeze
+}.freeze
+
+class DuplicateJsonKeyError < StandardError; end
+
+class DuplicateRejectingHash < Hash
+  def []=(key, value)
+    raise DuplicateJsonKeyError, "duplicate JSON key #{key.inspect}" if key?(key)
+
+    super
+  end
+end
 
 def git_capture(root, *arguments, stdin_data: nil)
   stdout, stderr, status = Open3.capture3(
@@ -243,6 +268,199 @@ def add_artifact_findings(errors, label, path, bytes, scan_rejected_names: true)
   end
 end
 
+def strict_utf8_text(bytes, description)
+  text = bytes.to_s.b.dup.force_encoding(Encoding::UTF_8)
+  raise ArgumentError, "#{description} is not valid UTF-8" unless text.valid_encoding?
+  raise ArgumentError, "#{description} must not start with a byte-order mark" if text.start_with?("\uFEFF")
+  raise ArgumentError, "#{description} contains a NUL byte" if text.include?("\0")
+
+  text
+end
+
+def parse_gitmodules(bytes)
+  text = strict_utf8_text(bytes, ".gitmodules")
+  sections = {}
+  current = nil
+  text.each_line.with_index(1) do |raw_line, line_number|
+    line = raw_line.chomp
+    line = line.byteslice(0, line.bytesize - 1) if line.end_with?("\r")
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#", ";")
+
+    section_match = stripped.match(/\A\[submodule "([^"]+)"\]\z/)
+    if section_match
+      name = section_match[1]
+      raise ArgumentError, ".gitmodules line #{line_number} repeats section #{name.inspect}" if sections.key?(name)
+
+      current = {}
+      sections[name] = current
+      next
+    end
+
+    key_match = stripped.match(/\A([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*?)\s*\z/)
+    unless key_match && current
+      raise ArgumentError, ".gitmodules line #{line_number} is outside the accepted submodule syntax"
+    end
+
+    key = key_match[1]
+    value = key_match[2]
+    raise ArgumentError, ".gitmodules line #{line_number} repeats key #{key.inspect}" if current.key?(key)
+
+    current[key] = value
+  end
+  sections
+end
+
+def parse_toolchain_lock(bytes)
+  text = strict_utf8_text(bytes, TOOLCHAIN_LOCK_PATH)
+  JSON.parse(text, object_class: DuplicateRejectingHash, create_additions: false)
+rescue JSON::ParserError, DuplicateJsonKeyError => error
+  raise ArgumentError, "#{TOOLCHAIN_LOCK_PATH} is malformed: #{error.message}"
+end
+
+def safe_https_repository_url?(value)
+  return false unless value.is_a?(String)
+
+  uri = URI.parse(value)
+  uri.is_a?(URI::HTTPS) && uri.scheme == "https" && uri.host == "github.com" &&
+    uri.userinfo.nil? && uri.port == 443 && uri.query.nil? && uri.fragment.nil? &&
+    uri.path.match?(%r{\A/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git\z})
+rescue URI::InvalidURIError
+  false
+end
+
+def validate_submodule_snapshot(label, gitlinks, files, errors)
+  relevant = !gitlinks.empty? || files.key?(".gitmodules") || files.key?(TOOLCHAIN_LOCK_PATH)
+  return unless relevant
+
+  expected_paths = EXPECTED_SUBMODULES.keys.sort
+  actual_paths = gitlinks.keys.sort
+  (expected_paths - actual_paths).each do |path|
+    errors << "#{label} submodules: missing pinned gitlink #{path}"
+  end
+  (actual_paths - expected_paths).each do |path|
+    errors << "#{label} submodules: unexpected gitlink #{path.inspect}"
+  end
+  EXPECTED_SUBMODULES.each do |path, expected|
+    oid = gitlinks[path]
+    next unless oid
+
+    unless oid.match?(/\A[0-9a-f]{40}\z/)
+      errors << "#{label} submodules: gitlink #{path} has malformed SHA-1 object ID"
+      next
+    end
+    unless oid == expected[:commit]
+      errors << "#{label} submodules: gitlink #{path} is #{oid}, expected #{expected[:commit]}"
+    end
+  end
+
+  modules_file = files[".gitmodules"]
+  lock_file = files[TOOLCHAIN_LOCK_PATH]
+  errors << "#{label} submodules: missing .gitmodules" unless modules_file
+  errors << "#{label} submodules: missing #{TOOLCHAIN_LOCK_PATH}" unless lock_file
+
+  modules = nil
+  if modules_file
+    errors << "#{label} submodules: .gitmodules must be a regular non-executable 100644 blob" unless
+      modules_file[:mode] == "100644"
+    if modules_file[:bytes]
+      begin
+        modules = parse_gitmodules(modules_file[:bytes])
+      rescue ArgumentError => error
+        errors << "#{label} submodules: #{error.message}"
+      end
+    else
+      errors << "#{label} submodules: cannot inspect .gitmodules bytes"
+    end
+  end
+
+  if modules
+    names = modules.keys.sort
+    (expected_paths - names).each do |name|
+      errors << "#{label} submodules: .gitmodules is missing section #{name.inspect}"
+    end
+    (names - expected_paths).each do |name|
+      errors << "#{label} submodules: .gitmodules has unexpected section #{name.inspect}"
+    end
+    EXPECTED_SUBMODULES.each do |path, expected|
+      section = modules[path]
+      next unless section
+
+      unknown_keys = section.keys - %w[path url]
+      missing_keys = %w[path url] - section.keys
+      unknown_keys.sort.each do |key|
+        errors << "#{label} submodules: .gitmodules section #{path.inspect} has unsupported key #{key.inspect}"
+      end
+      missing_keys.each do |key|
+        errors << "#{label} submodules: .gitmodules section #{path.inspect} is missing key #{key.inspect}"
+      end
+      if section["path"] && section["path"] != path
+        errors << "#{label} submodules: .gitmodules section #{path.inspect} declares path #{section['path'].inspect}"
+      end
+      next unless section["url"]
+
+      unless safe_https_repository_url?(section["url"])
+        errors << "#{label} submodules: .gitmodules URL for #{path} is not a safe GitHub HTTPS repository URL"
+      end
+      unless section["url"] == expected[:repository]
+        errors << "#{label} submodules: .gitmodules URL for #{path} does not match the approved repository"
+      end
+    end
+  end
+
+  lock = nil
+  if lock_file
+    errors << "#{label} submodules: #{TOOLCHAIN_LOCK_PATH} must be a regular non-executable 100644 blob" unless
+      lock_file[:mode] == "100644"
+    if lock_file[:bytes]
+      begin
+        lock = parse_toolchain_lock(lock_file[:bytes])
+      rescue ArgumentError => error
+        errors << "#{label} submodules: #{error.message}"
+      end
+    else
+      errors << "#{label} submodules: cannot inspect #{TOOLCHAIN_LOCK_PATH} bytes"
+    end
+  end
+
+  if lock
+    unless lock.is_a?(Hash) && lock["schema_version"].is_a?(Integer) && lock["schema_version"] == 1
+      errors << "#{label} submodules: #{TOOLCHAIN_LOCK_PATH} must be a schema_version 1 JSON object"
+      lock = nil
+    end
+  end
+  return unless lock
+
+  EXPECTED_SUBMODULES.each do |path, expected|
+    dependency = lock[expected[:lock_key]]
+    unless dependency.is_a?(Hash)
+      errors << "#{label} submodules: #{TOOLCHAIN_LOCK_PATH} is missing object #{expected[:lock_key].inspect}"
+      next
+    end
+    repository = dependency["repository"]
+    commit = dependency["commit"]
+    unless safe_https_repository_url?(repository)
+      errors << "#{label} submodules: locked repository for #{path} is not a safe GitHub HTTPS URL"
+    end
+    unless repository == expected[:repository]
+      errors << "#{label} submodules: locked repository for #{path} does not match the approved repository"
+    end
+    unless commit.is_a?(String) && commit.match?(/\A[0-9a-f]{40}\z/)
+      errors << "#{label} submodules: locked commit for #{path} is not a lowercase 40-digit SHA-1"
+      next
+    end
+    unless commit == expected[:commit]
+      errors << "#{label} submodules: locked commit for #{path} is #{commit}, expected #{expected[:commit]}"
+    end
+    if gitlinks[path] && commit != gitlinks[path]
+      errors << "#{label} submodules: locked commit for #{path} does not match its gitlink"
+    end
+    if modules && modules.dig(path, "url") && repository != modules.dig(path, "url")
+      errors << "#{label} submodules: locked repository for #{path} does not match .gitmodules"
+    end
+  end
+end
+
 def reachable_object_records(root, errors, extra_roots = [])
   # Enumerate object IDs without path decorations. Git pathnames may contain
   # newlines, so line-parsing `rev-list --objects` output can otherwise detach
@@ -296,6 +514,7 @@ end
 
 def reachable_blob_paths(root, records, errors)
   paths_by_blob = Hash.new { |hash, oid| hash[oid] = Set.new }
+  entries_by_tree = {}
   seen_root_trees = Set.new
   records.select { |record| record[:type] == "commit" }.each do |record|
     tree_out, tree_error, tree_ok = git_capture(
@@ -315,19 +534,80 @@ def reachable_blob_paths(root, records, errors)
       errors << "history tree #{tree_oid}: cannot enumerate blob paths: #{stderr.strip}"
       next
     end
-    output.b.split("\0").reject(&:empty?).each_with_index do |entry, index|
-      metadata, raw_path = entry.split("\t", 2)
+    tree_entries = []
+    output.b.split("\0").reject(&:empty?).each_with_index do |serialized_entry, index|
+      metadata, raw_path = serialized_entry.split("\t", 2)
       match = metadata&.match(/\A([0-7]{6}) (blob|commit) ([0-9a-f]+)\z/)
       unless match && raw_path && !raw_path.empty?
         errors << "history tree #{tree_oid}: malformed recursive entry at row #{index + 1}"
         next
       end
+      mode = match[1]
+      type = match[2]
+      oid = match[3]
+      unless (type == "commit") == (mode == "160000")
+        errors << "history tree #{tree_oid}: entry #{raw_path.inspect} has inconsistent mode/type #{mode}/#{type}"
+        next
+      end
+      tree_entries << { mode: mode, type: type, oid: oid, path: raw_path }
       next unless match[2] == "blob"
 
-      paths_by_blob[match[3]] << raw_path
+      paths_by_blob[oid] << raw_path
     end
+    entries_by_tree[tree_oid] = tree_entries
   end
-  paths_by_blob
+  [paths_by_blob, entries_by_tree]
+end
+
+def tree_snapshot_file(root, tree_oid, entries, relative, errors)
+  entry = entries.find { |candidate| candidate[:path] == relative.b }
+  return nil unless entry
+
+  unless entry[:type] == "blob"
+    errors << "history tree #{tree_oid} submodules: #{relative} must be a regular blob"
+    return { mode: entry[:mode], bytes: nil }
+  end
+  bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", entry[:oid])
+  unless read_ok
+    errors << "history tree #{tree_oid} submodules: cannot read #{relative}: #{read_error.strip}"
+    return { mode: entry[:mode], bytes: nil }
+  end
+  if bytes.bytesize > MAX_GIT_BLOB_BYTES
+    errors << "history tree #{tree_oid} submodules: #{relative} exceeds 1 MiB"
+    return { mode: entry[:mode], bytes: nil }
+  end
+  { mode: entry[:mode], bytes: bytes }
+end
+
+def validate_historical_submodule_snapshots(root, entries_by_tree, errors)
+  entries_by_tree.each do |tree_oid, entries|
+    gitlinks = {}
+    entries.each do |entry|
+      next unless entry[:mode] == "160000"
+
+      gitlinks[entry[:path]] = entry[:oid]
+    end
+    # Gitlink pathnames are byte strings. The approved paths are ASCII; reject
+    # undecodable or non-exact paths instead of normalizing attacker-controlled
+    # bytes into an approved dependency name.
+    normalized_gitlinks = {}
+    gitlinks.each do |raw_path, oid|
+      path = raw_path.dup.force_encoding(Encoding::UTF_8)
+      if path.valid_encoding?
+        normalized_gitlinks[path] = oid
+      else
+        errors << "history tree #{tree_oid} submodules: gitlink pathname is not valid UTF-8"
+      end
+    end
+    files = {}
+    [".gitmodules", TOOLCHAIN_LOCK_PATH].each do |relative|
+      file = tree_snapshot_file(root, tree_oid, entries, relative, errors)
+      files[relative] = file if file
+    end
+    validate_submodule_snapshot(
+      "history tree #{tree_oid}", normalized_gitlinks, files, errors
+    )
+  end
 end
 
 def validate_no_legacy_grafts(root, errors)
@@ -496,7 +776,8 @@ def validate_reachable_history(root, errors)
   commit_roots = ref_commit_roots + worktree_commit_roots
   validate_reachable_history_paths(root, errors, commit_roots)
   records = reachable_object_records(root, errors, object_roots)
-  paths_by_blob = reachable_blob_paths(root, records, errors)
+  paths_by_blob, entries_by_tree = reachable_blob_paths(root, records, errors)
+  validate_historical_submodule_snapshots(root, entries_by_tree, errors)
   records.each do |record|
     blob_paths = record[:type] == "blob" ? paths_by_blob.fetch(record[:oid], Set.new) : Set.new
     nonexempt_blob_paths = blob_paths.reject { |path| rejected_name_exempt_path?(path) }
@@ -536,8 +817,10 @@ def validate_index(root, errors)
   output, stderr, success = git_capture(root, "ls-files", "--stage", "-z")
   unless success
     errors << "index: cannot enumerate entries: #{stderr.strip}"
-    return
+    return {}
   end
+  gitlinks = {}
+  snapshot_files = {}
   output.split("\0").reject(&:empty?).each do |entry|
     metadata, path = entry.split("\t", 2)
     mode, oid, stage = metadata.to_s.split
@@ -554,6 +837,17 @@ def validate_index(root, errors)
       errors << "#{label}: public candidate must not be a symlink"
       next
     end
+    if mode == "160000"
+      # A gitlink names a commit in an external repository. Its 40 hex bytes
+      # are validated against our immutable lock below; `cat-file` here would
+      # incorrectly claim that external history belongs to the superproject.
+      gitlinks[path] = oid
+      next
+    end
+    unless %w[100644 100755].include?(mode)
+      errors << "#{label}: unsupported staged Git mode #{mode}"
+      next
+    end
     bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", oid)
     unless read_ok
       errors << "#{label}: cannot read staged blob: #{read_error.strip}"
@@ -561,7 +855,15 @@ def validate_index(root, errors)
     end
     errors << "#{label}: staged Git blob exceeds 1 MiB (#{bytes.bytesize} bytes)" if bytes.bytesize > MAX_GIT_BLOB_BYTES
     add_artifact_findings(errors, label, path, bytes)
+    if [".gitmodules", TOOLCHAIN_LOCK_PATH].include?(path)
+      snapshot_files[path] = {
+        mode: mode,
+        bytes: bytes.bytesize <= MAX_GIT_BLOB_BYTES ? bytes : nil
+      }
+    end
   end
+  validate_submodule_snapshot("index", gitlinks, snapshot_files, errors)
+  gitlinks
 end
 
 def canonical_lfs_materialization?(root, relative, absolute)
@@ -664,12 +966,13 @@ def streamed_file_findings(relative, absolute)
   findings.uniq
 end
 
-def validate_worktree(root, errors)
+def validate_worktree(root, errors, index_gitlinks)
   output, stderr, success = git_capture(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
   unless success
     errors << "worktree: cannot enumerate tracked and unignored files: #{stderr.strip}"
     return
   end
+  snapshot_files = {}
   output.split("\0").sort.each do |relative|
     absolute = root.join(relative)
     label = "worktree:#{relative}"
@@ -677,6 +980,8 @@ def validate_worktree(root, errors)
 
     if absolute.symlink?
       errors << "#{label}: public candidate must not be a symlink"
+      snapshot_files[relative] = { mode: "120000", bytes: nil } if
+        [".gitmodules", TOOLCHAIN_LOCK_PATH].include?(relative)
       next
     end
     next unless absolute.file?
@@ -685,22 +990,36 @@ def validate_worktree(root, errors)
       errors << "#{label}: file exceeds 1 MiB and is not a canonical staged Git LFS materialization"
     end
     if absolute.size > MAX_GIT_BLOB_BYTES
+      if [".gitmodules", TOOLCHAIN_LOCK_PATH].include?(relative)
+        snapshot_files[relative] = {
+          mode: (File.stat(absolute).mode & 0o111).zero? ? "100644" : "100755",
+          bytes: nil
+        }
+      end
       begin
         streamed_file_findings(relative, absolute).each { |finding| errors << "#{label}: #{finding}" }
       rescue StandardError => stream_error
         errors << "#{label}: cannot scan complete worktree bytes: #{stream_error.message}"
       end
     else
-      add_artifact_findings(errors, label, relative, File.binread(absolute))
+      bytes = File.binread(absolute)
+      add_artifact_findings(errors, label, relative, bytes)
+      if [".gitmodules", TOOLCHAIN_LOCK_PATH].include?(relative)
+        snapshot_files[relative] = {
+          mode: (File.stat(absolute).mode & 0o111).zero? ? "100644" : "100755",
+          bytes: bytes
+        }
+      end
     end
   end
+  validate_submodule_snapshot("worktree", index_gitlinks, snapshot_files, errors)
 end
 
 def validate_public_hygiene(root)
   errors = []
   validate_reachable_history(root, errors)
-  validate_index(root, errors)
-  validate_worktree(root, errors)
+  index_gitlinks = validate_index(root, errors)
+  validate_worktree(root, errors, index_gitlinks)
   errors.uniq
 end
 
@@ -727,6 +1046,41 @@ end
 
 def fixture_commit!(root, message)
   fixture_git!(root, "add", "--all")
+  fixture_git!(root, "commit", "-q", "-m", message)
+end
+
+def fixture_gitmodules_bytes(url_overrides = {})
+  EXPECTED_SUBMODULES.map do |path, expected|
+    url = url_overrides.fetch(path, expected[:repository])
+    "[submodule \"#{path}\"]\n\tpath = #{path}\n\turl = #{url}\n"
+  end.join
+end
+
+def fixture_toolchain_lock_bytes(repository_overrides = {}, commit_overrides = {})
+  dependencies = EXPECTED_SUBMODULES.each_with_object({ "schema_version" => 1 }) do |(path, expected), lock|
+    lock[expected[:lock_key]] = {
+      "repository" => repository_overrides.fetch(path, expected[:repository]),
+      "commit" => commit_overrides.fetch(path, expected[:commit])
+    }
+  end
+  JSON.pretty_generate(dependencies) + "\n"
+end
+
+def fixture_stage_submodule_snapshot!(
+  root,
+  modules_bytes: fixture_gitmodules_bytes,
+  lock_bytes: fixture_toolchain_lock_bytes,
+  gitlinks: EXPECTED_SUBMODULES.transform_values { |expected| expected[:commit] }
+)
+  fixture_write(root, ".gitmodules", modules_bytes)
+  fixture_write(root, TOOLCHAIN_LOCK_PATH, lock_bytes)
+  fixture_git!(root, "add", ".gitmodules", TOOLCHAIN_LOCK_PATH)
+  gitlinks.each do |path, oid|
+    fixture_git!(root, "update-index", "--add", "--cacheinfo", "160000,#{oid},#{path}")
+  end
+end
+
+def fixture_commit_index!(root, message)
   fixture_git!(root, "commit", "-q", "-m", message)
 end
 
@@ -828,6 +1182,140 @@ def run_public_hygiene_self_tests
     fixture_commit!(root, "safe baseline")
     errors = validate_public_hygiene(root)
     assert.call(errors.empty?, "accepts a clean history, index, and worktree", errors.join("; "))
+  end
+
+  with_fixture_repo do |root|
+    fixture_stage_submodule_snapshot!(root)
+    fixture_commit_index!(root, "safe pinned submodule snapshot")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.empty?,
+      "accepts exact approved HTTPS submodules pinned by gitlinks and toolchain lock",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_stage_submodule_snapshot!(
+      root,
+      modules_bytes: fixture_gitmodules_bytes(
+        "vendor/libdragon" => "git@github.com:DragonMinded/libdragon.git"
+      )
+    )
+    errors = validate_public_hygiene(root)
+    assert.call(
+      %w[index worktree].all? do |surface|
+        errors.any? do |message|
+          message.include?("#{surface} submodules") &&
+            message.include?("not a safe GitHub HTTPS repository URL")
+        end
+      end,
+      "rejects an SSH submodule URL in both index and worktree snapshots",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    wrong_pin = "2" * 40
+    gitlinks = EXPECTED_SUBMODULES.transform_values { |expected| expected[:commit] }
+    gitlinks["vendor/tiny3d"] = wrong_pin
+    fixture_stage_submodule_snapshot!(root, gitlinks: gitlinks)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("index submodules: gitlink vendor/tiny3d is #{wrong_pin}")
+      end && errors.any? do |message|
+        message.include?("worktree submodules: locked commit for vendor/tiny3d does not match its gitlink")
+      end,
+      "rejects a gitlink that differs from the approved and locked commit",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    gitlinks = EXPECTED_SUBMODULES.transform_values { |expected| expected[:commit] }
+    gitlinks["vendor/unapproved"] = "1" * 40
+    fixture_stage_submodule_snapshot!(root, gitlinks: gitlinks)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("index submodules: unexpected gitlink \"vendor/unapproved\"")
+      end,
+      "rejects an unapproved extra gitlink without traversing its external object",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    duplicate_lock = fixture_toolchain_lock_bytes.sub(
+      /^(\s*"repository": [^\n]+,\n)/
+    ) { |line| line + line }
+    fixture_stage_submodule_snapshot!(root, lock_bytes: duplicate_lock)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      %w[index worktree].all? do |surface|
+        errors.any? do |message|
+          message.include?("#{surface} submodules") && message.include?("duplicate JSON key")
+        end
+      end,
+      "fails closed on duplicate keys in the toolchain lock JSON",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    unapproved_url = "https://github.com/example/libdragon.git"
+    fixture_stage_submodule_snapshot!(
+      root,
+      modules_bytes: fixture_gitmodules_bytes("vendor/libdragon" => unapproved_url),
+      lock_bytes: fixture_toolchain_lock_bytes("vendor/libdragon" => unapproved_url)
+    )
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("index submodules: .gitmodules URL for vendor/libdragon") &&
+          message.include?("does not match the approved repository")
+      end && errors.any? do |message|
+        message.include?("index submodules: locked repository for vendor/libdragon") &&
+          message.include?("does not match the approved repository")
+      end,
+      "does not let coordinated config changes self-authorize another HTTPS repository",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_stage_submodule_snapshot!(
+      root,
+      modules_bytes: fixture_gitmodules_bytes(
+        "vendor/tiny3d" => "ssh://github.com/HailToDodongo/tiny3d.git"
+      )
+    )
+    fixture_commit_index!(root, "historical unsafe submodule URL")
+    fixture_write(root, ".gitmodules", fixture_gitmodules_bytes)
+    fixture_git!(root, "add", ".gitmodules")
+    fixture_commit_index!(root, "replace unsafe historical submodule URL")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history tree") && message.include?("vendor/tiny3d") &&
+          message.include?("not a safe GitHub HTTPS repository URL")
+      end && errors.none? do |message|
+        message.include?("index submodules") || message.include?("worktree submodules")
+      end,
+      "rejects an unsafe submodule URL retained only in reachable history",
+      errors.join("; ")
+    )
   end
 
   with_fixture_repo do |root|
