@@ -14,6 +14,9 @@ enum {
     ACTOR_MATRIX_COUNT = 5,
 };
 
+static const char QUARRUNE_MODEL_PATH[] =
+    "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
+
 static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
     UINT32_C(0xD7A253FF),
     UINT32_C(0x79C9D4FF),
@@ -108,6 +111,62 @@ static void setup_actor_vertices(N64GameRenderer *renderer)
     }
 }
 
+static bool setup_quarrune(N64GameRenderer *renderer)
+{
+    if (!quarrune_render_assets_load(&renderer->quarrune_assets)) {
+        debugf("[quarrune] render-asset load failed\n");
+        return false;
+    }
+    renderer->quarrune_model = t3d_model_load(QUARRUNE_MODEL_PATH);
+    if (renderer->quarrune_model == NULL) {
+        debugf("[quarrune] model load failed: %s\n", QUARRUNE_MODEL_PATH);
+        return false;
+    }
+    if (t3d_model_get_skeleton(renderer->quarrune_model) == NULL) {
+        debugf("[quarrune] model has no skeleton\n");
+        return false;
+    }
+
+    renderer->quarrune_skeleton = t3d_skeleton_create_buffered(
+        renderer->quarrune_model, (int)renderer->buffer_count
+    );
+    if (renderer->quarrune_skeleton.bones == NULL ||
+        renderer->quarrune_skeleton.boneMatricesFP == NULL) {
+        debugf("[quarrune] skeleton allocation failed\n");
+        return false;
+    }
+    for (uint32_t index = 0U; index < renderer->buffer_count; ++index) {
+        t3d_skeleton_update(&renderer->quarrune_skeleton);
+    }
+
+    rspq_block_begin();
+    t3d_model_draw_custom(
+        renderer->quarrune_model,
+        (T3DModelDrawConf){
+            .userData = &renderer->quarrune_assets,
+            .dynTextureCb = quarrune_render_assets_dynamic_texture_cb,
+            .matrices = (const T3DMat4FP *)t3d_segment_placeholder(
+                T3D_SEGMENT_SKELETON
+            ),
+        }
+    );
+    renderer->quarrune_draw_block = rspq_block_end();
+    if (renderer->quarrune_draw_block == NULL) {
+        debugf("[quarrune] draw-block recording failed\n");
+        return false;
+    }
+    if (!quarrune_render_assets_callback_ok(&renderer->quarrune_assets)) {
+        debugf(
+            "[quarrune] dynamic-texture callback failed: callbacks=%u fault=%u\n",
+            (unsigned int)renderer->quarrune_assets.successful_body_callbacks,
+            renderer->quarrune_assets.callback_fault ? 1U : 0U
+        );
+        return false;
+    }
+    renderer->quarrune_ready = true;
+    return true;
+}
+
 bool n64game_renderer_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL) {
@@ -139,6 +198,7 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
         .outline_color = RGBA32(87, 226, 203, 255),
     });
     rdpq_text_register_font(FONT_ID, renderer->font);
+    renderer->font_registered = true;
 
     renderer->floor_vertices = malloc_uncached(sizeof(T3DVertPacked) * 2U);
     renderer->actor_vertices = malloc_uncached(
@@ -146,6 +206,7 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
     );
     renderer->buffer_count = display_get_num_buffers();
     if (renderer->buffer_count == 0U || renderer->buffer_count > UINT16_MAX) {
+        n64game_renderer_destroy(renderer);
         return false;
     }
     renderer->actor_matrices = malloc_uncached(
@@ -153,6 +214,7 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
     );
     if (renderer->floor_vertices == NULL || renderer->actor_vertices == NULL ||
         renderer->actor_matrices == NULL) {
+        n64game_renderer_destroy(renderer);
         return false;
     }
     const uint16_t up = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, 1.0f, 0.0f}});
@@ -166,7 +228,47 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
     };
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
+    if (renderer->viewport._matFP == NULL || !setup_quarrune(renderer)) {
+        n64game_renderer_destroy(renderer);
+        return false;
+    }
     return true;
+}
+
+void n64game_renderer_destroy(N64GameRenderer *renderer)
+{
+    if (renderer == NULL) {
+        return;
+    }
+    rspq_wait();
+    if (renderer->quarrune_draw_block != NULL) {
+        rspq_block_free(renderer->quarrune_draw_block);
+        renderer->quarrune_draw_block = NULL;
+    }
+    t3d_skeleton_destroy(&renderer->quarrune_skeleton);
+    if (renderer->quarrune_model != NULL) {
+        t3d_model_free(renderer->quarrune_model);
+    }
+    if (renderer->quarrune_assets.lifetime != NULL) {
+        (void)quarrune_render_assets_unload(&renderer->quarrune_assets);
+    }
+    t3d_viewport_destroy(&renderer->viewport);
+    if (renderer->actor_matrices != NULL) {
+        free_uncached(renderer->actor_matrices);
+    }
+    if (renderer->actor_vertices != NULL) {
+        free_uncached(renderer->actor_vertices);
+    }
+    if (renderer->floor_vertices != NULL) {
+        free_uncached(renderer->floor_vertices);
+    }
+    if (renderer->font_registered) {
+        rdpq_text_unregister_font(FONT_ID);
+    }
+    if (renderer->font != NULL) {
+        rdpq_font_free(renderer->font);
+    }
+    *renderer = (N64GameRenderer){0};
 }
 
 static void draw_floor(const N64GameRenderer *renderer)
@@ -188,6 +290,9 @@ static void draw_actor(
     float angle
 )
 {
+    rdpq_mode_tlut(TLUT_NONE);
+    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+    t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
     const float scales[3] = {scale, scale, scale};
     const float rotations[3] = {0.0f, angle, 0.0f};
     const float translation[3] = {x, y, z};
@@ -204,6 +309,31 @@ static void draw_actor(
     t3d_tri_draw(0, 2, 3);
     t3d_tri_draw(1, 3, 2);
     t3d_tri_sync();
+}
+
+static void draw_quarrune(
+    N64GameRenderer *renderer,
+    size_t matrix_index,
+    float x,
+    float y,
+    float z,
+    float scale,
+    float angle
+)
+{
+    assertf(renderer->quarrune_ready, "Quarrune renderer is not ready");
+    const float scales[3] = {scale, scale, scale};
+    const float rotations[3] = {0.0f, angle, 0.0f};
+    const float translation[3] = {x, y, z};
+    const size_t matrix_slot = matrix_index * (size_t)renderer->buffer_count +
+        (size_t)renderer->frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_skeleton_use(&renderer->quarrune_skeleton);
+    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
+    rspq_block_run(renderer->quarrune_draw_block);
+    t3d_matrix_pop(1);
 }
 
 static void begin_world_render(
@@ -316,14 +446,17 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
 {
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
-    const fm_vec3_t camera = {{player_x, 62.0f, player_z - 88.0f}};
-    const fm_vec3_t target = {{player_x, -4.0f, player_z + 6.0f}};
+    const fm_vec3_t camera = {{player_x, 62.0f, player_z + 88.0f}};
+    const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
     begin_world_render(renderer, &camera, &target);
     const float angle = (float)game->scene_ticks * 0.018f;
     draw_actor(renderer, 0U, 4U, player_x, -1.0f, player_z, 0.75f, angle);
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
     draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
-    draw_actor(renderer, 3U, 6U, 34.0f, -3.0f, 20.0f, 0.55f, angle * 1.7f);
+    draw_quarrune(
+        renderer, 3U, 34.0f, -18.0f, 20.0f, 0.40f,
+        0.12f + fm_sinf(angle * 1.4f) * 0.035f
+    );
     draw_actor(renderer, 4U, 6U, 74.0f, -6.0f, 40.0f, 0.72f, -angle);
 
     panel(8, 8, 250, 31);
@@ -429,19 +562,27 @@ static void draw_battle_menu(const N64GameCore *game)
 
 static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    const fm_vec3_t camera = {{0.0f, 56.0f, -112.0f}};
+    const fm_vec3_t camera = {{0.0f, 56.0f, 112.0f}};
     const fm_vec3_t target = {{0.0f, -4.0f, 0.0f}};
     begin_world_render(renderer, &camera, &target);
     static const float POSITIONS[4][3] = {
-        {-31.0f, -2.0f, -17.0f}, {26.0f, 0.0f, -8.0f},
-        {-28.0f, -2.0f, 27.0f}, {31.0f, -1.0f, 22.0f},
+        {-31.0f, -2.0f, -34.0f}, {26.0f, 0.0f, -30.0f},
+        {-28.0f, -2.0f, -76.0f}, {31.0f, -1.0f, -70.0f},
     };
     const float angle = (float)game->scene_ticks * 0.012f;
     for (uint8_t actor = 0U; actor < 4U; ++actor) {
         if (game->battle.actors[actor].hp > 0) {
-            draw_actor(renderer, actor, actor,
-                       POSITIONS[actor][0], POSITIONS[actor][1], POSITIONS[actor][2],
-                       0.82f, actor < 2U ? angle : -angle);
+            if (actor == 0U) {
+                draw_quarrune(
+                    renderer, actor,
+                    POSITIONS[actor][0], -18.0f, POSITIONS[actor][2],
+                    0.42f, 0.10f + fm_sinf(angle * 2.0f) * 0.035f
+                );
+            } else {
+                draw_actor(renderer, actor, actor,
+                           POSITIONS[actor][0], POSITIONS[actor][1], POSITIONS[actor][2],
+                           0.82f, actor < 2U ? angle : -angle);
+            }
         }
     }
     draw_battle_status(game);

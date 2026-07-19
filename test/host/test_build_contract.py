@@ -41,7 +41,7 @@ class BuildContractTests(unittest.TestCase):
         data = bytearray(int(value, 16) for value in re.findall(r"0x([0-9a-fA-F]{2})", ipl3_source))
         if len(data) != build.LIBDRAGON_IPL3_END:
             raise AssertionError("unexpected pinned libdragon IPL3 length")
-        data[0x20:0x34] = b"N64GAME GATE 3".ljust(20, b" ")
+        data[0x20:0x34] = b"N64GAME OPENING".ljust(20, b" ")
         data[0x34:0x38] = bytes(4)
         data[0x3B] = ord("N")
         data[0x3C:0x3E] = b"ED"
@@ -64,13 +64,26 @@ class BuildContractTests(unittest.TestCase):
         report = build.validate_runtime_assets()
         self.assertEqual(report["runtime_asset_count"], 0)
 
+    def test_quarrune_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
+        report = build.validate_runtime_candidates()
+        self.assertEqual(report["runtime_candidate_count"], 4)
+        self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
+        self.assertEqual(
+            [entry["kind"] for entry in report["entries"]],
+            ["model_glb", "texture_png", "texture_png", "texture_png"],
+        )
+        self.assertTrue(all(
+            entry["status"] == "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE"
+            for entry in report["entries"]
+        ))
+
     def test_pinned_structural_rom_fixture_is_accepted(self) -> None:
         data = self.pinned_rom_fixture()
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "test.z64"
             path.write_bytes(data)
             report = build.inspect_rom(path)
-        self.assertEqual(report["title"], "N64GAME GATE 3")
+        self.assertEqual(report["title"], "N64GAME OPENING")
         self.assertEqual(report["sha256"], hashlib.sha256(data).hexdigest())
 
     def test_validate_rom_command_rejects_a_symlink(self) -> None:
@@ -140,6 +153,7 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("DEPTH_16_BPP", source)
         self.assertIn("display_set_fps_limit(30.0f)", source)
         self.assertIn("t3d_init", source)
+        self.assertIn("dfs_init(DFS_DEFAULT_LOCATION)", source)
         self.assertIn("n64game_core_update", source)
         self.assertIn("n64game_renderer_draw", source)
         self.assertIn("n64game_save_decode", source)
@@ -159,6 +173,26 @@ class BuildContractTests(unittest.TestCase):
             "n64game_save.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
+
+    def test_quarrune_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("--base-scale=64 --asset-path=runtime-candidates", makefile)
+        self.assertIn("$(T3D_ROOT)/tools/gltf_importer", makefile)
+        for format_name, tile_size in (("CI8", "64,64"), ("CI4", "32,32"), ("IA8", "32,32")):
+            self.assertIn(
+                f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
+                makefile,
+            )
+        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
+        self.assertIn("$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs", makefile)
+        self.assertNotIn("mkasset", makefile)
+
+        renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
+        self.assertIn('"rom:/echo/echo.quarrune/quarrune_hero.t3dm"', renderer)
+        self.assertIn("t3d_model_draw_custom", renderer)
+        self.assertIn("quarrune_render_assets_dynamic_texture_cb", renderer)
+        self.assertIn("rspq_block_run(renderer->quarrune_draw_block)", renderer)
+        self.assertIn("n64game_renderer_destroy", renderer)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
