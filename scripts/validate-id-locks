@@ -336,6 +336,20 @@ def split_id_lock_c_top_level(source)
   fields.reject(&:empty?)
 end
 
+# A tagged typedef has both an enum tag and a typedef name.  Use its sole
+# durable-ID-shaped spelling as the registry domain; reject two different
+# durable spellings as ambiguous so neither alias can disappear from history.
+def id_lock_enum_domain_name(typedef, tag, trailing, index)
+  durable_names = [tag, trailing].compact.uniq.select { |name| name.match?(/Id(?:Value)?\z/) }
+  if durable_names.length > 1
+    raise ArgumentError, "enum has conflicting durable ID domain aliases: #{durable_names.join(' and ')}"
+  end
+  return durable_names.first if durable_names.length == 1
+  return trailing if typedef
+
+  tag || format("__anonymous_enum_%03d", index)
+end
+
 def numeric_enum_blocks(text, errors, label)
   c_blocks = text.scan(/^```c\s*$\n(.*?)^```\s*$/m).flatten
   if c_blocks.empty?
@@ -375,7 +389,12 @@ def numeric_enum_blocks(text, errors, label)
       errors << "#{label}: non-typedef enum has an illegal trailing name #{trailing}"
       next
     end
-    name = tag || trailing || format("__anonymous_enum_%03d", index)
+    begin
+      name = id_lock_enum_domain_name(typedef, tag, trailing, index)
+    rescue ArgumentError => enum_name_error
+      errors << "#{label}: #{enum_name_error.message}"
+      next
+    end
     begin
       entries = split_id_lock_c_top_level(strip_id_lock_c_comments(match[3])).map do |entry|
         entry_match = entry.match(/\A([A-Z][A-Z0-9_]*)(?:\s*=\s*(.+))?\z/m)
@@ -878,6 +897,14 @@ def run_numeric_enum_expression_self_tests
     enum SyntheticInlineBase { SYNTH_INLINE_BASE = 0x40 };
     enum SyntheticInlineIdValue { SYNTH_INLINE_FIRST = SYNTH_INLINE_BASE, SYNTH_INLINE_SECOND };
 
+    typedef enum HiddenStableTag {
+        SYNTH_HIDDEN_DURABLE_ID = 0xF001,
+    } HiddenIdValue;
+
+    typedef enum TaggedIdValue {
+        SYNTH_TAGGED_DURABLE_ID = 0xF002,
+    } HiddenStableAlias;
+
     enum StoryFlagIndex {
         SYNTH_STORY_FLAG = 0,
         STORY_FLAG_LOCKED_COUNT = 1,
@@ -920,6 +947,28 @@ def run_numeric_enum_expression_self_tests
     [64, "SYNTH_INLINE_FIRST"],
     [65, "SYNTH_INLINE_SECOND"]
   ]
+  hidden_rows = if valid_blocks.key?("HiddenIdValue")
+                  numeric_assignments(
+                    "HiddenIdValue",
+                    valid_blocks.fetch("HiddenIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_hidden_rows = [[0xF001, "SYNTH_HIDDEN_DURABLE_ID"]]
+  tagged_rows = if valid_blocks.key?("TaggedIdValue")
+                  numeric_assignments(
+                    "TaggedIdValue",
+                    valid_blocks.fetch("TaggedIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_tagged_rows = [[0xF002, "SYNTH_TAGGED_DURABLE_ID"]]
   registry_errors = []
   source_registry_rows = build_source_registry(
     valid_source,
@@ -932,6 +981,12 @@ def run_numeric_enum_expression_self_tests
     .map { |row| [row[:value], row[:symbol]] }
   locked_inline_rows = source_registry_rows
     .select { |row| row[:domain] == "SyntheticInlineIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_hidden_rows = source_registry_rows
+    .select { |row| row[:domain] == "HiddenIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_tagged_rows = source_registry_rows
+    .select { |row| row[:domain] == "TaggedIdValue" }
     .map { |row| [row[:value], row[:symbol]] }
 
   unresolved_errors = []
@@ -978,11 +1033,20 @@ def run_numeric_enum_expression_self_tests
     "repeated symbol fixture"
   )
 
+  conflicting_alias_errors = []
+  numeric_enum_blocks(
+    "```c\ntypedef enum FirstIdValue { SYNTH_CONFLICTING_ID = 1 } SecondIdValue;\n```\n",
+    conflicting_alias_errors,
+    "conflicting durable alias fixture"
+  )
+
   fixtures = {
     "resolves suffixes, cross-domain references, local expressions, implicit increments, and same-line enums" =>
       valid_errors.empty? && registry_errors.empty? && valid_rows == expected_rows &&
         locked_expression_rows == expected_rows && inline_rows == expected_inline_rows &&
-        locked_inline_rows == expected_inline_rows,
+        locked_inline_rows == expected_inline_rows && hidden_rows == expected_hidden_rows &&
+        locked_hidden_rows == expected_hidden_rows && tagged_rows == expected_tagged_rows &&
+        locked_tagged_rows == expected_tagged_rows,
     "rejects an unresolved identifier instead of omitting its enumerator" =>
       unresolved_errors.any? { |message| message.include?("unresolved enum dependency") },
     "rejects a duplicate value produced by a valid expression" =>
@@ -992,7 +1056,9 @@ def run_numeric_enum_expression_self_tests
     "rejects unconsumed enum syntax instead of omitting its domain" =>
       unconsumed_errors.any? { |message| message.include?("unparsed or unsupported enum syntax") },
     "rejects duplicate global enum symbols" =>
-      repeated_symbol_errors.any? { |message| message.include?("duplicate global enum symbol") }
+      repeated_symbol_errors.any? { |message| message.include?("duplicate global enum symbol") },
+    "rejects conflicting durable tag and typedef aliases" =>
+      conflicting_alias_errors.any? { |message| message.include?("conflicting durable ID domain aliases") }
   }
   failures = fixtures.reject { |_label, passed| passed }.keys
   raise "serialized-ID expression self-test failed: #{failures.join(', ')}" unless failures.empty?

@@ -274,6 +274,22 @@ def extract_data_enum_sources(source)
   enum_sources
 end
 
+# A tagged typedef has two C spellings for the same enum type.  Treat the one
+# and only durable-ID-shaped spelling as the contract domain, regardless of
+# whether it is the tag or the typedef name.  Two different durable spellings
+# are ambiguous and must fail closed instead of letting one alias evade the
+# serialized-ID registry.
+def data_enum_domain_name(typedef, tag, trailing, index)
+  durable_names = [tag, trailing].compact.uniq.select { |name| name.match?(/Id(?:Value)?\z/) }
+  if durable_names.length > 1
+    raise ArgumentError, "enum has conflicting durable ID domain aliases: #{durable_names.join(' and ')}"
+  end
+  return durable_names.first if durable_names.length == 1
+  return trailing if typedef
+
+  tag || format("__anonymous_enum_%03d", index)
+end
+
 def markdown_cells(line)
   bytes = line.b
   delimiters = []
@@ -419,6 +435,17 @@ begin
     abort("unsupported enum syntax self-test returned the wrong failure") unless
       fixture_error.message.include?("unparsed or unsupported enum syntax")
   end
+  abort("tagged typedef durable-domain self-test ignored the typedef name") unless
+    data_enum_domain_name(true, "HiddenStableTag", "HiddenIdValue", 0) == "HiddenIdValue"
+  abort("tagged typedef durable-domain self-test ignored the enum tag") unless
+    data_enum_domain_name(true, "HiddenIdValue", "HiddenStableAlias", 0) == "HiddenIdValue"
+  begin
+    data_enum_domain_name(true, "FirstIdValue", "SecondIdValue", 0)
+    abort("conflicting durable enum aliases self-test was silently accepted")
+  rescue ArgumentError => fixture_error
+    abort("conflicting durable enum aliases self-test returned the wrong failure") unless
+      fixture_error.message.include?("conflicting durable ID domain aliases")
+  end
   enum_sources = extract_data_enum_sources(code)
 rescue ArgumentError => enum_error
   abort(enum_error.message)
@@ -434,7 +461,11 @@ enum_rows = enum_sources.each_with_index.map do |enum_source, index|
   trailing = match[4]
   abort("typedef enum lacks trailing type name") if typedef && trailing.nil?
   abort("non-typedef enum has an illegal trailing name #{trailing}") if !typedef && trailing
-  name = tag || trailing || format("__anonymous_enum_%03d", index)
+  begin
+    name = data_enum_domain_name(typedef, tag, trailing, index)
+  rescue ArgumentError => enum_name_error
+    abort(enum_name_error.message)
+  end
   entries = split_c_top_level(strip_c_comments(match[3])).map do |entry|
     entry_match = entry.match(/\A([A-Z][A-Z0-9_]*)(?:\s*=\s*(.+))?\z/m)
     abort("cannot parse enumerator #{entry.inspect} in #{name}") unless entry_match

@@ -5,11 +5,15 @@ require "digest"
 require "fileutils"
 require "open3"
 require "pathname"
+require "set"
 require "tmpdir"
 
 ROOT = Pathname.new(__dir__).join("..").expand_path
 MAX_GIT_BLOB_BYTES = 1024 * 1024
 MAGIC_PREFIX_BYTES = 65_536
+STREAM_SCAN_CHUNK_BYTES = 65_536
+STREAM_SCAN_OVERLAP_BYTES = 1_024
+STREAM_SCAN_TEXT_OVERLAP_CHARS = 1_024
 BANNED_EXTENSIONS = %w[
   .z64 .n64 .v64 .rom .eep .sav .srm .state
   .bin .iso .img .dmg
@@ -241,16 +245,81 @@ def canonical_lfs_materialization?(root, relative, absolute)
   pointer[1] == Digest::SHA256.file(absolute).hexdigest
 end
 
-def bounded_file_bytes(path)
-  size = File.size(path)
-  return File.binread(path) if size <= MAX_GIT_BLOB_BYTES
-
-  prefix = File.binread(path, MAGIC_PREFIX_BYTES)
-  suffix_length = [512, size].min
-  File.open(path, "rb") do |file|
-    file.seek(-suffix_length, IO::SEEK_END)
-    prefix + file.read(suffix_length)
+def collect_stream_pattern_findings(window, scan_rejected_names, secret_labels, rejected_labels)
+  SECRET_PATTERNS.each do |label, pattern|
+    secret_labels << label if !secret_labels.include?(label) && window.match?(pattern)
   end
+  return unless scan_rejected_names
+
+  REJECTED_NAMES.each do |name|
+    rejected_labels << name if
+      !rejected_labels.include?(name) && window.match?(/\b#{Regexp.escape(name)}\b/i)
+  end
+end
+
+def streamed_file_findings(relative, absolute)
+  findings = path_findings(relative)
+  prefix = +"".b
+  suffix = +"".b
+  overlap = +"".b
+  decoded_overlap = +""
+  utf16_converter = nil
+  utf16_checked = false
+  secret_labels = Set.new
+  rejected_labels = Set.new
+  scan_rejected_names = !REJECTED_NAME_EXEMPT_PATHS.include?(relative.to_s)
+
+  File.open(absolute, "rb") do |file|
+    while (chunk = file.read(STREAM_SCAN_CHUNK_BYTES))
+      chunk = chunk.b
+      unless utf16_checked
+        utf16_converter = if chunk.start_with?("\xFF\xFE".b)
+                            Encoding::Converter.new(Encoding::UTF_16LE, Encoding::UTF_8)
+                          elsif chunk.start_with?("\xFE\xFF".b)
+                            Encoding::Converter.new(Encoding::UTF_16BE, Encoding::UTF_8)
+                          end
+        utf16_checked = true
+      end
+      remaining_prefix = MAGIC_PREFIX_BYTES - prefix.bytesize
+      prefix << chunk.byteslice(0, [remaining_prefix, chunk.bytesize].min) if remaining_prefix.positive?
+      suffix = (suffix + chunk).byteslice(-512, 512) || (suffix + chunk)
+
+      window = overlap + chunk
+      collect_stream_pattern_findings(
+        window, scan_rejected_names, secret_labels, rejected_labels
+      )
+      if utf16_converter
+        begin
+          decoded_window = decoded_overlap + utf16_converter.convert(chunk)
+          collect_stream_pattern_findings(
+            decoded_window, scan_rejected_names, secret_labels, rejected_labels
+          )
+          decoded_overlap = decoded_window[-STREAM_SCAN_TEXT_OVERLAP_CHARS,
+                                           STREAM_SCAN_TEXT_OVERLAP_CHARS] || decoded_window
+        rescue EncodingError
+          # Match decode_text semantics for malformed BOM-marked text: retain
+          # any earlier findings but stop treating subsequent bytes as text.
+          utf16_converter = nil
+        end
+      end
+      overlap = window.byteslice(-STREAM_SCAN_OVERLAP_BYTES, STREAM_SCAN_OVERLAP_BYTES) || window
+    end
+  end
+  if utf16_converter
+    begin
+      decoded_tail = decoded_overlap + utf16_converter.finish
+      collect_stream_pattern_findings(
+        decoded_tail, scan_rejected_names, secret_labels, rejected_labels
+      )
+    rescue EncodingError
+      # A trailing partial UTF-16 code unit makes the text malformed; raw-byte
+      # and prior complete decoded-window findings still remain authoritative.
+    end
+  end
+  magic_labels(prefix + suffix).each { |label| findings << label }
+  secret_labels.each { |label| findings << "possible #{label}" }
+  rejected_labels.each { |name| findings << "rejected working name remains: #{name}" }
+  findings.uniq
 end
 
 def validate_worktree(root, errors)
@@ -273,7 +342,15 @@ def validate_worktree(root, errors)
     if absolute.size > MAX_GIT_BLOB_BYTES && !canonical_lfs_materialization?(root, relative, absolute)
       errors << "#{label}: file exceeds 1 MiB and is not a canonical staged Git LFS materialization"
     end
-    add_artifact_findings(errors, label, relative, bounded_file_bytes(absolute))
+    if absolute.size > MAX_GIT_BLOB_BYTES
+      begin
+        streamed_file_findings(relative, absolute).each { |finding| errors << "#{label}: #{finding}" }
+      rescue StandardError => stream_error
+        errors << "#{label}: cannot scan complete worktree bytes: #{stream_error.message}"
+      end
+    else
+      add_artifact_findings(errors, label, relative, File.binread(absolute))
+    end
   end
 end
 
@@ -354,6 +431,46 @@ def run_public_hygiene_self_tests
     fixture_commit!(root, "safe baseline")
     errors = validate_public_hygiene(root)
     assert.call(errors.empty?, "accepts a clean history, index, and worktree", errors.join("; "))
+  end
+
+  with_fixture_repo do |root|
+    fixture_git!(root, "lfs", "install", "--local")
+    fixture_write(root, ".gitattributes", "*.dat filter=lfs diff=lfs merge=lfs -text\n")
+    middle_offset = (STREAM_SCAN_CHUNK_BYTES * 3) - 3
+    total_size = 1_100_042
+    secret_payload = "\n#{token}\n"
+    lfs_bytes = ("A" * middle_offset) + secret_payload +
+      ("B" * (total_size - middle_offset - secret_payload.bytesize))
+    fixture_write(root, "payload.dat", lfs_bytes)
+    utf16_text = ("A" * 100_000) + "\n#{token}\nMara Quill\n" + ("B" * 450_000)
+    fixture_write(root, "payload-le.dat", "\xFF\xFE".b + utf16_text.encode(Encoding::UTF_16LE).b)
+    fixture_write(root, "payload-be.dat", "\xFE\xFF".b + utf16_text.encode(Encoding::UTF_16BE).b)
+    fixture_commit!(root, "large LFS middle-content fixture")
+    status_out, status_error, status_success = git_capture(root, "status", "--porcelain=v1")
+    raise "large LFS fixture is not clean: #{status_error}" unless status_success && status_out.empty?
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("worktree:payload.dat") && message.include?("possible GitHub token")
+      end && errors.none? { |message| message.include?("not a canonical staged Git LFS materialization") },
+      "scans complete large canonical LFS worktree content across a middle chunk boundary",
+      errors.join("; ")
+    )
+    %w[payload-le.dat payload-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") && message.include?("possible GitHub token")
+        end && errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "scans complete large canonical #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
   end
 
   with_fixture_repo do |root|
