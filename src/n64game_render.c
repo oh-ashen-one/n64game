@@ -386,6 +386,14 @@ static const char *dialogue_speaker(N64GameDialogue dialogue)
         return "TAVI";
     case N64GAME_DIALOGUE_RELAY:
         return "FIELD RELAY";
+    case N64GAME_DIALOGUE_EXAMINE_SIM_RING:
+        return "SIMULATION RING";
+    case N64GAME_DIALOGUE_EXAMINE_ATRIUM_MAP:
+        return "ANNEX CARTOGRAPHY";
+    case N64GAME_DIALOGUE_EXAMINE_WORKSHOP_LOG:
+        return "WORKSHOP LOG 17";
+    case N64GAME_DIALOGUE_EXAMINE_OVERLOOK_SCOPE:
+        return "OVERLOOK SCOPE";
     case N64GAME_DIALOGUE_NONE:
         return "";
     }
@@ -421,6 +429,14 @@ static const char *dialogue_text(const N64GameCore *game)
         "Something enormous is answering from beneath the storm.",
         "We follow at first light.",
     };
+    static const char SIM_RING[] =
+        "Brass grooves record thirty years of paired Echoform trials. One ring is newly scorched.";
+    static const char ATRIUM_MAP[] =
+        "Old routes converge on Solace Pass. Every marker beyond it has gone dark.";
+    static const char WORKSHOP_LOG[] =
+        "The Relay heard a second pulse below the storm, then erased its own timestamp.";
+    static const char OVERLOOK_SCOPE[] =
+        "The sight is fixed on Solace Pass. Its brass housing is warm, though no one signed it out.";
     const uint8_t page = game->dialogue_page;
     switch (game->dialogue) {
     case N64GAME_DIALOGUE_SERA_INTRO: return SERA_INTRO[page];
@@ -429,6 +445,10 @@ static const char *dialogue_text(const N64GameCore *game)
     case N64GAME_DIALOGUE_TAVI_OPTIONAL: return TAVI[page];
     case N64GAME_DIALOGUE_BATTLE_VICTORY: return VICTORY[page];
     case N64GAME_DIALOGUE_BEACON_HOOK: return BEACON[page];
+    case N64GAME_DIALOGUE_EXAMINE_SIM_RING: return SIM_RING;
+    case N64GAME_DIALOGUE_EXAMINE_ATRIUM_MAP: return ATRIUM_MAP;
+    case N64GAME_DIALOGUE_EXAMINE_WORKSHOP_LOG: return WORKSHOP_LOG;
+    case N64GAME_DIALOGUE_EXAMINE_OVERLOOK_SCOPE: return OVERLOOK_SCOPE;
     case N64GAME_DIALOGUE_NONE: return "";
     }
     return "";
@@ -440,6 +460,191 @@ static void draw_dialogue(const N64GameCore *game)
     text_at(18.0f, 179.0f, STYLE_ACCENT, 280.0f, dialogue_speaker(game->dialogue));
     text_at(18.0f, 193.0f, STYLE_TEXT, 276.0f, dialogue_text(game));
     text_at(286.0f, 219.0f, STYLE_MUTED, 20.0f, "A");
+}
+
+static const char *annex_sector_name(N64GameAnnexSector sector)
+{
+    switch (sector) {
+    case N64GAME_ANNEX_ATRIUM: return "ATRIUM";
+    case N64GAME_ANNEX_SIMULATION: return "SIMULATION CHAMBER";
+    case N64GAME_ANNEX_WORKSHOP: return "RELAY WORKSHOP";
+    case N64GAME_ANNEX_OVERLOOK: return "STORM OVERLOOK";
+    case N64GAME_ANNEX_SECTOR_COUNT: return "MERIDIAN ANNEX";
+    }
+    return "MERIDIAN ANNEX";
+}
+
+static void draw_menu_item(float y, const char *label, bool selected)
+{
+    text_at(82.0f, y, selected ? STYLE_WARNING : STYLE_TEXT, 170.0f, label);
+}
+
+static void draw_pause_root(const N64GameCore *game)
+{
+    static const char *const ITEMS[] = { "PARTY", "HELP", "SAVE", "RESUME" };
+    panel(62, 38, 258, 215);
+    centered(48.0f, STYLE_ACCENT, "PAUSED");
+    text_at(77.0f, 67.0f, STYLE_MUTED, 170.0f, annex_sector_name(game->annex_sector));
+    for (uint8_t item = 0U; item < 4U; ++item) {
+        const char *label = ITEMS[item];
+        if (item == 2U && !game->relay_unlocked) {
+            label = "SAVE  LOCKED";
+        }
+        draw_menu_item(91.0f + (float)item * 22.0f, label, game->menu_cursor == item);
+    }
+    text_at(77.0f, 192.0f, STYLE_MUTED, 170.0f, "A SELECT / B BACK");
+}
+
+static void draw_relay_root(const N64GameCore *game)
+{
+    static const char *const ITEMS[] = {
+        "PARTY", "MESSAGES", "RESONANCE", "SAVE", "CLOSE"
+    };
+    panel(62, 26, 258, 220);
+    centered(36.0f, STYLE_ACCENT, "FIELD RELAY");
+    text_at(77.0f, 55.0f, STYLE_MUTED, 170.0f, "LINK STABLE / CHANNELS");
+    for (uint8_t item = 0U; item < 5U; ++item) {
+        draw_menu_item(78.0f + (float)item * 22.0f, ITEMS[item], game->menu_cursor == item);
+    }
+    text_at(77.0f, 198.0f, STYLE_MUTED, 170.0f, "A SELECT / B BACK");
+}
+
+static void draw_party_page(const N64GameCore *game)
+{
+    char status[48];
+    panel(28, 26, 292, 220);
+    centered(36.0f, STYLE_ACCENT, "PARTY / LINKED PAIR");
+
+    text_at(42.0f, 64.0f, STYLE_TEXT, 236.0f, "QUARRUNE / STRATA ANCHOR");
+    (void)snprintf(
+        status, sizeof(status), "HP %d / %d",
+        (int)game->party_hp[0], N64GAME_QUARRUNE_MAX_HP
+    );
+    text_at(42.0f, 81.0f, STYLE_MUTED, 90.0f, status);
+    hp_bar(138, 85, 136, game->party_hp[0], N64GAME_QUARRUNE_MAX_HP);
+
+    text_at(42.0f, 116.0f, STYLE_TEXT, 236.0f, "AYSELOR / GALE CARRIER");
+    (void)snprintf(
+        status, sizeof(status), "HP %d / %d",
+        (int)game->party_hp[1], N64GAME_AYSELOR_MAX_HP
+    );
+    text_at(42.0f, 133.0f, STYLE_MUTED, 90.0f, status);
+    hp_bar(138, 137, 136, game->party_hp[1], N64GAME_AYSELOR_MAX_HP);
+
+    text_at(42.0f, 169.0f, STYLE_ACCENT, 236.0f, "IDENTITY: MERIDIAN RESONANT PAIR");
+    text_at(42.0f, 198.0f, STYLE_MUTED, 236.0f, "A OR B  BACK");
+}
+
+static const char *relay_message(N64GameQuest quest)
+{
+    switch (quest) {
+    case N64GAME_QUEST_MEET_SERA:
+        return "SERA: Report to the west simulation chamber.";
+    case N64GAME_QUEST_RETRIEVE_RELAY:
+        return "SERA: Retrieve the Relay from the east workshop bench.";
+    case N64GAME_QUEST_RETURN_TO_SERA:
+        return "RELAY: Link established. Return to Sera for calibration.";
+    case N64GAME_QUEST_RESONANCE_TRIAL:
+        return "SERA: Hold the pair together. Let the true pattern answer.";
+    case N64GAME_QUEST_BEACON_OVERLOOK:
+        return "URGENT: Solace-band signal detected at the north overlook.";
+    case N64GAME_QUEST_COMPLETE:
+        return "SERA: Solace is moving. We depart at first light.";
+    }
+    return "NO NEW MESSAGES.";
+}
+
+static void draw_messages_page(const N64GameCore *game)
+{
+    panel(28, 34, 292, 214);
+    centered(44.0f, STYLE_ACCENT, "MESSAGES / PRIORITY");
+    text_at(44.0f, 78.0f, STYLE_TEXT, 232.0f, relay_message(game->quest));
+    text_at(44.0f, 160.0f, STYLE_MUTED, 232.0f, "ENCRYPTION: MERIDIAN / LOCAL");
+    text_at(44.0f, 192.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
+}
+
+static void draw_resonance_page(const N64GameCore *game)
+{
+    char status[40];
+    const int resonance = (int)game->battle.resonance;
+    panel(28, 30, 292, 218);
+    centered(40.0f, STYLE_ACCENT, "RESONANCE");
+    (void)snprintf(status, sizeof(status), "PAIR METER  %d / %d",
+                   resonance, N64GAME_RESONANCE_MAX);
+    text_at(44.0f, 71.0f, STYLE_TEXT, 232.0f, status);
+    hp_bar(44, 91, 232, resonance, N64GAME_RESONANCE_MAX);
+    text_at(
+        44.0f, 115.0f, STYLE_TEXT, 232.0f,
+        "Build 100 through linked actions. At 100, Quarrune can use HORIZON BREAK while Ayselor stands."
+    );
+    text_at(44.0f, 196.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
+}
+
+static void draw_save_page(void)
+{
+    panel(38, 48, 282, 204);
+    centered(58.0f, STYLE_ACCENT, "SAVE RESONANCE FILE");
+    text_at(
+        54.0f, 91.0f, STYLE_TEXT, 212.0f,
+        "Record your safe Annex checkpoint, objectives, and Field Relay discoveries."
+    );
+    text_at(54.0f, 156.0f, STYLE_WARNING, 212.0f, "A  SAVE");
+    text_at(54.0f, 178.0f, STYLE_MUTED, 212.0f, "B  BACK");
+}
+
+static void draw_help_page(void)
+{
+    panel(28, 24, 292, 222);
+    centered(34.0f, STYLE_ACCENT, "CONTROLS");
+    text_at(
+        44.0f, 63.0f, STYLE_TEXT, 232.0f,
+        "CONTROL STICK   MOVE\nHOLD B          RUN\nA               INTERACT\nSTART           PAUSE\nC-DOWN          FIELD RELAY"
+    );
+    text_at(44.0f, 199.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
+}
+
+static void draw_post_chapter_root(const N64GameCore *game)
+{
+    const uint8_t log_style = game->menu_cursor == 0U ? STYLE_WARNING : STYLE_TEXT;
+    const uint8_t party_style = game->menu_cursor == 1U ? STYLE_WARNING : STYLE_TEXT;
+    const uint8_t resonance_style = game->menu_cursor == 2U ? STYLE_WARNING : STYLE_TEXT;
+    panel(20, 178, 300, 232);
+    centered(184.0f, STYLE_ACCENT, "POST-CHAPTER ARCHIVE");
+    text_at(30.0f, 207.0f, log_style, 78.0f, "SIGNAL LOG");
+    text_at(125.0f, 207.0f, party_style, 52.0f, "PARTY");
+    text_at(202.0f, 207.0f, resonance_style, 88.0f, "RESONANCE");
+}
+
+static void draw_annex_menu(const N64GameCore *game)
+{
+    switch (game->menu) {
+    case N64GAME_MENU_CLOSED:
+        break;
+    case N64GAME_MENU_PAUSE_ROOT:
+        draw_pause_root(game);
+        break;
+    case N64GAME_MENU_FIELD_RELAY_ROOT:
+        draw_relay_root(game);
+        break;
+    case N64GAME_MENU_PARTY:
+        draw_party_page(game);
+        break;
+    case N64GAME_MENU_MESSAGES:
+        draw_messages_page(game);
+        break;
+    case N64GAME_MENU_RESONANCE:
+        draw_resonance_page(game);
+        break;
+    case N64GAME_MENU_SAVE:
+        draw_save_page();
+        break;
+    case N64GAME_MENU_HELP:
+        draw_help_page();
+        break;
+    case N64GAME_MENU_POST_CHAPTER_ROOT:
+        draw_post_chapter_root(game);
+        break;
+    }
 }
 
 static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
@@ -454,7 +659,7 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
     draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
     draw_quarrune(
-        renderer, 3U, 34.0f, -18.0f, 20.0f, 0.40f,
+        renderer, 3U, 52.0f, -18.0f, 18.0f, 0.40f,
         0.12f + fm_sinf(angle * 1.4f) * 0.035f
     );
     draw_actor(renderer, 4U, 6U, 74.0f, -6.0f, 40.0f, 0.72f, -angle);
@@ -466,10 +671,8 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         panel(74, 142, 246, 164);
         text_at(84.0f, 149.0f, STYLE_TEXT, 156.0f, prompt);
     }
-    if (game->paused) {
-        panel(72, 70, 248, 146);
-        centered(79.0f, STYLE_ACCENT, "FIELD RELAY");
-        text_at(92.0f, 99.0f, STYLE_TEXT, 140.0f, "PARTY\nMESSAGES\nSAVE\nRESUME  START");
+    if (game->menu != N64GAME_MENU_CLOSED) {
+        draw_annex_menu(game);
     } else if (game->dialogue != N64GAME_DIALOGUE_NONE) {
         draw_dialogue(game);
     }
@@ -501,7 +704,10 @@ static void draw_battle_menu(const N64GameCore *game)
 {
     const N64GameBattle *const battle = &game->battle;
     panel(8, 146, 178, 234);
-    if (battle->phase == N64GAME_BATTLE_COMMAND) {
+    if (battle->phase == N64GAME_BATTLE_INTRO) {
+        text_at(18.0f, 158.0f, STYLE_ACCENT, 150.0f, "RESONANCE TRIAL");
+        text_at(18.0f, 181.0f, STYLE_TEXT, 150.0f, "GYRECLAST + KIVARRAX\nPATTERN LINKING...");
+    } else if (battle->phase == N64GAME_BATTLE_COMMAND) {
         const uint8_t actor = battle->command_actor;
         text_at(16.0f, 153.0f, STYLE_ACCENT, 150.0f, echo_name(actor));
         for (uint8_t move = 0U; move < 4U; ++move) {
@@ -619,10 +825,12 @@ static void draw_opening(const N64GameCore *game, bool continue_available)
     if (game->scene == N64GAME_SCENE_BOOT) {
         centered(72.0f, STYLE_ACCENT, "N64GAME");
         centered(96.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
-        const int width = (int)(game->scene_ticks % 31U) * 6;
-        fill_rect(68, 132, 252, 136, RGBA32(24, 51, 60, 255));
-        fill_rect(68, 132, 68 + width, 136, RGBA32(87, 226, 203, 255));
-        centered(150.0f, STYLE_MUTED, "CALIBRATING RESONANCE");
+        const int phase = (int)(game->scene_ticks % 20U);
+        const int pulse = phase <= 10 ? phase : 20 - phase;
+        fill_rect(154, 126, 166, 138, RGBA32(87, 226, 203, 255));
+        fill_rect(136 - pulse, 130, 148 - pulse, 134, RGBA32(45, 126, 132, 255));
+        fill_rect(172 + pulse, 130, 184 + pulse, 134, RGBA32(45, 126, 132, 255));
+        centered(150.0f, STYLE_MUTED, "RESONANCE HANDSHAKE");
     } else {
         fill_rect(18, 18, 302, 222, RGBA32(22, 32, 44, 255));
         fill_rect(18, 18, 302, 22, RGBA32(183, 72, 154, 255));
@@ -659,7 +867,10 @@ static void draw_ending(const N64GameCore *game, bool save_busy, bool save_avail
     (void)snprintf(player_line, sizeof(player_line), "%s / %s",
                    game->player_name, save_state);
     centered(151.0f, STYLE_MUTED, player_line);
-    centered(196.0f, STYLE_TEXT, "THE STORM IS ANSWERING.");
+    centered(165.0f, STYLE_TEXT, "THE STORM IS ANSWERING.");
+    if (game->menu != N64GAME_MENU_CLOSED) {
+        draw_annex_menu(game);
+    }
 }
 
 void n64game_renderer_draw(

@@ -10,14 +10,162 @@ enum {
     TEST_SAVE_OFFSET_SCENE = 21,
     TEST_SAVE_OFFSET_QUEST = 22,
     TEST_SAVE_OFFSET_FLAGS = 23,
+    TEST_SAVE_OFFSET_ANNEX_SECTOR = 29,
+    TEST_SAVE_OFFSET_EXAMINE_FLAGS = 30,
+    TEST_SAVE_OFFSET_RELAY_PAGES = 31,
+    TEST_SAVE_OFFSET_ACTIVE_CONTROL_TICKS = 36,
+    TEST_SAVE_OFFSET_SETTINGS = 42,
     TEST_SAVE_OFFSET_CHECKSUM = 60,
     TEST_SAVE_FLAG_REWARD = UINT8_C(1) << 3,
     TEST_SAVE_FLAG_COMPLETE = UINT8_C(1) << 4,
+    TEST_ALL_ANNEX_SECTORS = (UINT8_C(1) << N64GAME_ANNEX_SECTOR_COUNT) - 1U,
+    TEST_ALL_EXAMINES = UINT8_C(0x0F),
+    TEST_ALL_RELAY_PAGES = N64GAME_RELAY_PAGE_PARTY |
+        N64GAME_RELAY_PAGE_MESSAGES |
+        N64GAME_RELAY_PAGE_RESONANCE |
+        N64GAME_RELAY_PAGE_SAVE,
 };
 
 static void update_pressed(N64GameCore *game, N64GameInputButton button)
 {
     n64game_core_update(game, (N64GameInput){.pressed = (uint16_t)button});
+}
+
+static void route_note_sector(const N64GameCore *game, uint8_t *sectors_seen)
+{
+    if (game->scene == N64GAME_SCENE_ANNEX) {
+        assert(game->annex_sector < N64GAME_ANNEX_SECTOR_COUNT);
+        *sectors_seen |= (uint8_t)(UINT8_C(1) << game->annex_sector);
+    }
+}
+
+static void route_tick(
+    N64GameCore *game,
+    N64GameInput input,
+    uint8_t *sectors_seen
+)
+{
+    n64game_core_update_controller(game, input, true, false);
+    route_note_sector(game, sectors_seen);
+}
+
+static void route_press(
+    N64GameCore *game,
+    N64GameInputButton button,
+    uint8_t *sectors_seen
+)
+{
+    route_tick(
+        game,
+        (N64GameInput){.pressed = (uint16_t)button},
+        sectors_seen
+    );
+}
+
+static int64_t magnitude_i32(int32_t value)
+{
+    return value < 0 ? -(int64_t)value : (int64_t)value;
+}
+
+static int8_t route_stick_axis(int32_t delta_q8)
+{
+    const int64_t distance = magnitude_i32(delta_q8);
+    if (distance <= 192) {
+        return 0;
+    }
+    int32_t magnitude = (int32_t)(distance / 96);
+    if (magnitude < 12) {
+        magnitude = 12;
+    } else if (magnitude > INT8_MAX) {
+        magnitude = INT8_MAX;
+    }
+    return (int8_t)(delta_q8 < 0 ? -magnitude : magnitude);
+}
+
+static void route_move_to(
+    N64GameCore *game,
+    int32_t target_x_q8,
+    int32_t target_z_q8,
+    uint8_t *sectors_seen
+)
+{
+    unsigned guard = 0U;
+    while (magnitude_i32(target_x_q8 - game->player_x_q8) > 192 ||
+           magnitude_i32(target_z_q8 - game->player_z_q8) > 192 ||
+           game->player_velocity_x_q8 != 0 || game->player_velocity_z_q8 != 0) {
+        const int8_t stick_x = route_stick_axis(target_x_q8 - game->player_x_q8);
+        const int8_t stick_z = route_stick_axis(target_z_q8 - game->player_z_q8);
+        route_tick(
+            game,
+            (N64GameInput){
+                .held = N64GAME_INPUT_CANCEL,
+                .stick_x = stick_x,
+                .stick_y = (int8_t)-stick_z,
+            },
+            sectors_seen
+        );
+        assert(game->scene == N64GAME_SCENE_ANNEX);
+        if (++guard >= 2400U) {
+            fprintf(
+                stderr,
+                "route stuck at (%ld,%ld), target (%ld,%ld), sector %u\n",
+                (long)game->player_x_q8,
+                (long)game->player_z_q8,
+                (long)target_x_q8,
+                (long)target_z_q8,
+                (unsigned)game->annex_sector
+            );
+            assert(guard < 2400U);
+        }
+    }
+    assert(n64game_annex_position_valid(game->player_x_q8, game->player_z_q8));
+}
+
+static void route_move_to_world(
+    N64GameCore *game,
+    int world_x,
+    int world_z,
+    uint8_t *sectors_seen
+)
+{
+    route_move_to(game, world_x * 256, world_z * 256, sectors_seen);
+}
+
+static void route_move_to_interaction(
+    N64GameCore *game,
+    N64GameAnnexInteraction interaction,
+    uint8_t *sectors_seen
+)
+{
+    int32_t x_q8 = 0;
+    int32_t z_q8 = 0;
+    assert(n64game_annex_interaction_point(interaction, &x_q8, &z_q8));
+    route_move_to(game, x_q8, z_q8, sectors_seen);
+    assert(n64game_annex_interaction_at(
+        game->player_x_q8, game->player_z_q8
+    ) == interaction);
+}
+
+static void route_dismiss_dialogue(N64GameCore *game, uint8_t *sectors_seen)
+{
+    unsigned guard = 0U;
+    assert(game->dialogue != N64GAME_DIALOGUE_NONE);
+    while (game->dialogue != N64GAME_DIALOGUE_NONE &&
+           game->scene == N64GAME_SCENE_ANNEX) {
+        route_press(game, N64GAME_INPUT_CONFIRM, sectors_seen);
+        assert(++guard < 8U);
+    }
+}
+
+static void focused_set_interaction_position(
+    N64GameCore *game,
+    N64GameAnnexInteraction interaction
+)
+{
+    int32_t x_q8 = 0;
+    int32_t z_q8 = 0;
+    assert(n64game_annex_interaction_point(interaction, &x_q8, &z_q8));
+    n64game_core_set_player_position(game, x_q8, z_q8);
 }
 
 static void rewrite_save_checksum(uint8_t bytes[N64GAME_SAVE_BYTES])
@@ -49,66 +197,309 @@ static void resolve_round(N64GameBattle *battle)
     }
 }
 
-static void test_name_annex_and_ending_flow(void)
+static void test_input_only_release_route(void)
 {
     N64GameCore game;
+    uint8_t sectors_seen = 0U;
     n64game_core_init(&game);
     assert(game.scene == N64GAME_SCENE_BOOT);
     for (unsigned tick = 0U; tick < 30U; ++tick) {
-        n64game_core_update(&game, (N64GameInput){0});
+        route_tick(&game, (N64GameInput){0}, &sectors_seen);
     }
     assert(game.scene == N64GAME_SCENE_OPENING_SLATE);
-    update_pressed(&game, N64GAME_INPUT_START);
+    route_press(&game, N64GAME_INPUT_START, &sectors_seen);
     assert(game.opening_cinematic_seen);
     assert(game.scene == N64GAME_SCENE_NAME_ENTRY);
 
-    game.name_cursor = 27U;
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    route_press(&game, N64GAME_INPUT_LEFT, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_UP, &sectors_seen);
+    assert(game.name_cursor == 27U);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
     assert(game.scene == N64GAME_SCENE_ANNEX);
     assert(game.name_length == 3U);
     assert(strcmp(game.player_name, "ARI") == 0);
 
-    n64game_core_set_player_position(&game, -38 * 256, -8 * 256);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_SERA, &sectors_seen
+    );
     assert(strcmp(n64game_core_interaction_label(&game), "TALK TO SERA") == 0);
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
-    dismiss_dialogue(&game);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
     assert(game.quest == N64GAME_QUEST_RETRIEVE_RELAY);
 
-    n64game_core_set_player_position(&game, 34 * 256, 20 * 256);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_EXAMINE_SIM_RING, &sectors_seen
+    );
+    assert(strcmp(
+        n64game_core_interaction_label(&game), "EXAMINE SIMULATION RING"
+    ) == 0);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert((game.examine_flags & UINT8_C(0x01)) != 0U);
+
+    route_move_to_world(&game, -30, 0, &sectors_seen);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_TAVI, &sectors_seen
+    );
+    assert(strcmp(n64game_core_interaction_label(&game), "TALK TO TAVI") == 0);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert(game.quest == N64GAME_QUEST_RETRIEVE_RELAY);
+
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_EXAMINE_ATRIUM_MAP, &sectors_seen
+    );
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert((game.examine_flags & UINT8_C(0x02)) != 0U);
+
+    route_move_to_world(&game, 24, 14, &sectors_seen);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_FIELD_RELAY, &sectors_seen
+    );
     assert(strcmp(n64game_core_interaction_label(&game), "TAKE FIELD RELAY") == 0);
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
-    dismiss_dialogue(&game);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
     assert(game.relay_unlocked);
     assert(game.save_requested);
     assert(game.quest == N64GAME_QUEST_RETURN_TO_SERA);
 
-    game.save_requested = false;
-    n64game_core_set_player_position(&game, -38 * 256, -8 * 256);
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
-    dismiss_dialogue(&game);
-    assert(game.scene == N64GAME_SCENE_BATTLE);
-    assert(game.battle.phase == N64GAME_BATTLE_COMMAND);
+    /* Consume the automatic Relay checkpoint solely through the save API. */
+    uint8_t save_bytes[N64GAME_SAVE_BYTES];
+    uint32_t save_sequence = 0U;
+    const N64GameAnnexSector relay_sector = game.annex_sector;
+    assert(n64game_save_encode(&game, UINT32_C(40), save_bytes));
+    assert(n64game_save_decode(save_bytes, &game, &save_sequence));
+    assert(save_sequence == 40U && game.annex_sector == relay_sector);
+    assert(!game.save_requested && game.quest == N64GAME_QUEST_RETURN_TO_SERA);
 
-    game.battle.actors[2].hp = 20;
-    game.battle.actors[3].hp = 20;
-    game.battle.resonance = N64GAME_RESONANCE_MAX;
-    assert(n64game_battle_commit_finisher(&game.battle));
-    resolve_round(&game.battle);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_EXAMINE_WORKSHOP_LOG, &sectors_seen
+    );
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert((game.examine_flags & UINT8_C(0x04)) != 0U);
+
+    route_move_to_world(&game, 62, 28, &sectors_seen);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_EXAMINE_OVERLOOK_SCOPE, &sectors_seen
+    );
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert(game.examine_flags == TEST_ALL_EXAMINES);
+    assert(sectors_seen == TEST_ALL_ANNEX_SECTORS);
+
+    route_press(&game, N64GAME_INPUT_RELAY, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_FIELD_RELAY_ROOT && game.paused);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_PARTY);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_MESSAGES);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_RESONANCE);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_DOWN, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_SAVE && !game.save_requested);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.save_requested);
+    assert(game.relay_pages_seen == TEST_ALL_RELAY_PAGES);
+
+    const N64GameAnnexSector manual_save_sector = game.annex_sector;
+    int32_t safe_x_q8 = 0;
+    int32_t safe_z_q8 = 0;
+    n64game_annex_safe_anchor(manual_save_sector, &safe_x_q8, &safe_z_q8);
+    const uint32_t manual_play_ticks = game.play_ticks;
+    const uint32_t manual_control_ticks = game.active_control_ticks;
+    assert(n64game_save_encode(&game, UINT32_C(41), save_bytes));
+    assert(n64game_save_decode(save_bytes, &game, &save_sequence));
+    assert(save_sequence == 41U);
+    assert(game.annex_sector == manual_save_sector);
+    assert(game.player_x_q8 == safe_x_q8 && game.player_z_q8 == safe_z_q8);
+    assert(game.play_ticks == manual_play_ticks);
+    assert(game.active_control_ticks == manual_control_ticks);
+    assert(game.menu == N64GAME_MENU_CLOSED && !game.paused && !game.save_requested);
+    assert(game.examine_flags == TEST_ALL_EXAMINES);
+    assert(game.relay_pages_seen == TEST_ALL_RELAY_PAGES);
+
+    route_move_to_world(&game, 62, 28, &sectors_seen);
+    route_move_to_world(&game, 52, 14, &sectors_seen);
+    route_move_to_world(&game, 24, 14, &sectors_seen);
+    route_move_to_world(&game, 0, 0, &sectors_seen);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_SERA, &sectors_seen
+    );
+    assert(strcmp(n64game_core_interaction_label(&game), "BEGIN TRIAL") == 0);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
+    assert(game.scene == N64GAME_SCENE_BATTLE);
+    assert(game.battle.phase == N64GAME_BATTLE_INTRO);
+
+    while (game.scene_ticks < 45U) {
+        route_tick(&game, (N64GameInput){0}, &sectors_seen);
+    }
+    assert(game.battle.phase == N64GAME_BATTLE_COMMAND);
+    unsigned battle_guard = 0U;
+    while (game.battle.phase != N64GAME_BATTLE_VICTORY) {
+        assert(game.battle.phase != N64GAME_BATTLE_DEFEAT);
+        if (game.battle.phase == N64GAME_BATTLE_COMMAND) {
+            const uint8_t actor = game.battle.command_actor;
+            assert(actor <= 1U && game.battle.actors[actor].hp > 0);
+            assert(game.battle_move_cursor == 0U);
+            route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+            assert(game.battle_selecting_target);
+            route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+        } else {
+            assert(game.battle.phase == N64GAME_BATTLE_PRESENT);
+            route_tick(&game, (N64GameInput){0}, &sectors_seen);
+        }
+        assert(++battle_guard < 1600U);
+    }
     assert(game.battle.phase == N64GAME_BATTLE_VICTORY);
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.battle.round <= 8U);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
     assert(game.scene == N64GAME_SCENE_ANNEX);
     assert(game.battle_won && game.battle_reward_claimed && !game.save_requested);
-    dismiss_dialogue(&game);
+    route_dismiss_dialogue(&game, &sectors_seen);
     assert(game.quest == N64GAME_QUEST_BEACON_OVERLOOK);
     assert(game.save_requested);
+    assert(game.party_hp[0] == N64GAME_QUARRUNE_MAX_HP);
+    assert(game.party_hp[1] == N64GAME_AYSELOR_MAX_HP);
 
-    game.save_requested = false;
-    n64game_core_set_player_position(&game, 74 * 256, 40 * 256);
-    update_pressed(&game, N64GAME_INPUT_CONFIRM);
-    dismiss_dialogue(&game);
+    /* Reloading preserves the rewarded checkpoint and its full-heal result. */
+    assert(n64game_save_encode(&game, UINT32_C(42), save_bytes));
+    assert(n64game_save_decode(save_bytes, &game, &save_sequence));
+    assert(save_sequence == 42U);
+    assert(game.battle_won && game.battle_reward_claimed);
+    assert(game.party_hp[0] == N64GAME_QUARRUNE_MAX_HP);
+    assert(game.party_hp[1] == N64GAME_AYSELOR_MAX_HP);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.quest == N64GAME_QUEST_BEACON_OVERLOOK);
+    assert(game.party_hp[0] == N64GAME_QUARRUNE_MAX_HP);
+    assert(game.party_hp[1] == N64GAME_AYSELOR_MAX_HP);
+
+    route_move_to_world(&game, -24, 0, &sectors_seen);
+    route_move_to_world(&game, 24, 14, &sectors_seen);
+    route_move_to_world(&game, 52, 14, &sectors_seen);
+    route_move_to_world(&game, 62, 28, &sectors_seen);
+    route_move_to_interaction(
+        &game, N64GAME_ANNEX_INTERACTION_BEACON, &sectors_seen
+    );
+    assert(strcmp(n64game_core_interaction_label(&game), "TRACE BEACON") == 0);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    route_dismiss_dialogue(&game, &sectors_seen);
     assert(game.scene == N64GAME_SCENE_END_CHAPTER);
     assert(game.quest == N64GAME_QUEST_COMPLETE);
     assert(game.slice_complete && game.save_requested);
+    assert(game.examine_flags == TEST_ALL_EXAMINES);
+    assert(game.relay_pages_seen == TEST_ALL_RELAY_PAGES);
+    assert(sectors_seen == TEST_ALL_ANNEX_SECTORS);
+    assert(game.active_control_ticks > 0U);
+    assert(game.menu == N64GAME_MENU_POST_CHAPTER_ROOT);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_MESSAGES);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_RIGHT, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_PARTY);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_RIGHT, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_RIGHT, &sectors_seen);
+    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_RESONANCE);
+    route_press(&game, N64GAME_INPUT_CANCEL, &sectors_seen);
+    assert(game.menu == N64GAME_MENU_POST_CHAPTER_ROOT);
+    assert(n64game_save_encode(&game, UINT32_C(43), save_bytes));
+    assert(n64game_save_decode(save_bytes, &game, &save_sequence));
+    assert(save_sequence == 43U && game.slice_complete);
+    assert(game.menu == N64GAME_MENU_POST_CHAPTER_ROOT && game.paused);
+}
+
+static void test_annex_acceleration_run_and_collision(void)
+{
+    N64GameCore walking;
+    N64GameCore running;
+    n64game_core_init(&walking);
+    n64game_core_init(&running);
+    walking.scene = N64GAME_SCENE_ANNEX;
+    running.scene = N64GAME_SCENE_ANNEX;
+
+    const int32_t start_x_q8 = walking.player_x_q8;
+    n64game_core_update(&walking, (N64GameInput){.stick_x = INT8_MAX});
+    assert(walking.player_velocity_x_q8 > 0);
+    assert(walking.player_velocity_x_q8 < 384);
+    for (unsigned tick = 1U; tick < 12U; ++tick) {
+        n64game_core_update(&walking, (N64GameInput){.stick_x = INT8_MAX});
+    }
+    for (unsigned tick = 0U; tick < 12U; ++tick) {
+        n64game_core_update(
+            &running,
+            (N64GameInput){
+                .held = N64GAME_INPUT_CANCEL,
+                .stick_x = INT8_MAX,
+            }
+        );
+    }
+    assert(walking.player_x_q8 > start_x_q8);
+    assert(running.player_x_q8 > walking.player_x_q8);
+    const int32_t moving_velocity_q8 = walking.player_velocity_x_q8;
+    n64game_core_update(&walking, (N64GameInput){0});
+    assert(walking.player_velocity_x_q8 < moving_velocity_q8);
+
+    n64game_core_set_player_position(&walking, 0, 30 * 256);
+    for (unsigned tick = 0U; tick < 80U; ++tick) {
+        n64game_core_update(
+            &walking,
+            (N64GameInput){
+                .held = N64GAME_INPUT_CANCEL,
+                .stick_y = -INT8_MAX,
+            }
+        );
+    }
+    assert(walking.player_z_q8 == 32 * 256);
+    assert(n64game_annex_position_valid(
+        walking.player_x_q8, walking.player_z_q8
+    ));
+}
+
+static void test_manual_save_requires_a_fresh_menu_entry(void)
+{
+    N64GameCore game;
+    n64game_core_init(&game);
+    game.scene = N64GAME_SCENE_ANNEX;
+    game.relay_unlocked = true;
+    update_pressed(&game, N64GAME_INPUT_RELAY);
+    for (unsigned item = 0U; item < 3U; ++item) {
+        update_pressed(&game, N64GAME_INPUT_DOWN);
+    }
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.menu == N64GAME_MENU_SAVE);
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.save_requested && game.manual_save_latched);
+
+    /* Simulate main consuming the request; the same Save page cannot repeat it. */
+    game.save_requested = false;
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(!game.save_requested && game.manual_save_latched);
+
+    update_pressed(&game, N64GAME_INPUT_CANCEL);
+    for (unsigned item = 0U; item < 3U; ++item) {
+        update_pressed(&game, N64GAME_INPUT_DOWN);
+    }
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.menu == N64GAME_MENU_SAVE && !game.manual_save_latched);
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.save_requested && game.manual_save_latched);
 }
 
 static void test_opening_slate_natural_timing_is_exact(void)
@@ -144,7 +535,7 @@ static void test_name_editing_movement_pause_and_optional_dialogue(void)
 
     game.name_cursor = 27U;
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
-    n64game_core_set_player_position(&game, 5 * 256, -34 * 256);
+    focused_set_interaction_position(&game, N64GAME_ANNEX_INTERACTION_TAVI);
     assert(strcmp(n64game_core_interaction_label(&game), "TALK TO TAVI") == 0);
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     dismiss_dialogue(&game);
@@ -166,12 +557,18 @@ static void test_controller_disconnect_freezes_and_reconnect_clears_edges(void)
     game.scene = N64GAME_SCENE_ANNEX;
     game.scene_ticks = 17U;
     game.play_ticks = 23U;
+    game.player_velocity_x_q8 = 160;
+    game.player_velocity_z_q8 = -96;
     const N64GameInput start = {.pressed = N64GAME_INPUT_START};
 
     n64game_core_update_controller(&game, start, false, false);
     assert(game.scene_ticks == 17U && game.play_ticks == 23U && !game.paused);
+    assert(game.player_velocity_x_q8 == 0 && game.player_velocity_z_q8 == 0);
+    game.player_velocity_x_q8 = 160;
+    game.player_velocity_z_q8 = -96;
     n64game_core_update_controller(&game, start, true, true);
     assert(game.scene_ticks == 17U && game.play_ticks == 23U && !game.paused);
+    assert(game.player_velocity_x_q8 == 0 && game.player_velocity_z_q8 == 0);
     n64game_core_update_controller(&game, start, true, false);
     assert(game.scene_ticks == 18U && game.play_ticks == 24U && game.paused);
 
@@ -214,15 +611,23 @@ static void test_battle_legality_order_retarget_and_retry(void)
     N64GameCore game;
     n64game_core_init(&game);
     game.scene = N64GAME_SCENE_BATTLE;
+    game.party_hp[0] = 51;
+    game.party_hp[1] = 44;
+    game.prebattle_resonance = 17U;
     n64game_battle_begin(&game.battle);
+    game.battle.resonance = 83U;
     game.battle.phase = N64GAME_BATTLE_DEFEAT;
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     assert(game.battle.phase == N64GAME_BATTLE_COMMAND);
-    assert(game.battle.actors[0].hp == game.battle.actors[0].max_hp);
+    assert(game.battle.actors[0].hp == 51 && game.battle.actors[1].hp == 44);
+    assert(game.battle.resonance == 17U);
+    game.battle.resonance = 74U;
     game.battle.phase = N64GAME_BATTLE_DEFEAT;
     update_pressed(&game, N64GAME_INPUT_CANCEL);
     assert(game.scene == N64GAME_SCENE_ANNEX);
     assert(game.quest == N64GAME_QUEST_RETURN_TO_SERA);
+    assert(game.battle.phase == N64GAME_BATTLE_INACTIVE);
+    assert(game.battle.resonance == 17U);
 }
 
 static void test_battle_controller_selection_and_presentation_cadence(void)
@@ -281,11 +686,15 @@ static void test_trial_entry_selects_a_living_player_or_defeats(void)
     game.relay_unlocked = true;
     game.party_hp[0] = 0;
     game.party_hp[1] = 31;
-    n64game_core_set_player_position(&game, -38 * 256, -8 * 256);
+    focused_set_interaction_position(&game, N64GAME_ANNEX_INTERACTION_SERA);
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     assert(game.dialogue == N64GAME_DIALOGUE_SERA_TRIAL);
     dismiss_dialogue(&game);
     assert(game.scene == N64GAME_SCENE_BATTLE);
+    assert(game.battle.phase == N64GAME_BATTLE_INTRO);
+    for (unsigned tick = 0U; tick < 45U; ++tick) {
+        n64game_core_update(&game, (N64GameInput){0});
+    }
     assert(game.battle.phase == N64GAME_BATTLE_COMMAND);
     assert(game.battle.command_actor == 1U);
 
@@ -295,7 +704,7 @@ static void test_trial_entry_selects_a_living_player_or_defeats(void)
     game.relay_unlocked = true;
     game.party_hp[0] = 0;
     game.party_hp[1] = 0;
-    n64game_core_set_player_position(&game, -38 * 256, -8 * 256);
+    focused_set_interaction_position(&game, N64GAME_ANNEX_INTERACTION_SERA);
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     dismiss_dialogue(&game);
     assert(game.scene == N64GAME_SCENE_BATTLE);
@@ -335,6 +744,15 @@ static void test_save_round_trip_and_corruption_deaths(void)
     game.party_hp[0] = 61;
     game.party_hp[1] = 55;
     game.battle.resonance = 44U;
+    game.annex_sector = N64GAME_ANNEX_WORKSHOP;
+    n64game_annex_safe_anchor(
+        game.annex_sector, &game.player_x_q8, &game.player_z_q8
+    );
+    game.examine_flags = UINT8_C(0x0B);
+    game.relay_pages_seen = TEST_ALL_RELAY_PAGES;
+    game.settings_flags = N64GAME_SETTING_INVERT_Y | N64GAME_SETTING_RUMBLE;
+    game.play_ticks = 900U;
+    game.active_control_ticks = 600U;
 
     uint8_t bytes[N64GAME_SAVE_BYTES];
     N64GameCore decoded;
@@ -345,6 +763,32 @@ static void test_save_round_trip_and_corruption_deaths(void)
     assert(n64game_save_encode(&game, UINT32_C(75), bytes));
     assert(n64game_save_decode(bytes, &decoded, &sequence));
     assert(sequence == 75U && decoded.quest == N64GAME_QUEST_RETURN_TO_SERA);
+    assert(decoded.annex_sector == N64GAME_ANNEX_WORKSHOP);
+    assert(decoded.examine_flags == UINT8_C(0x0B));
+    assert(decoded.relay_pages_seen == TEST_ALL_RELAY_PAGES);
+    assert(decoded.settings_flags == (N64GAME_SETTING_INVERT_Y | N64GAME_SETTING_RUMBLE));
+    assert(decoded.play_ticks == 900U && decoded.active_control_ticks == 600U);
+
+    bytes[TEST_SAVE_OFFSET_ANNEX_SECTOR] = (uint8_t)N64GAME_ANNEX_SECTOR_COUNT;
+    rewrite_save_checksum(bytes);
+    assert(!n64game_save_decode(bytes, &decoded, &sequence));
+    assert(n64game_save_encode(&game, UINT32_C(75), bytes));
+    bytes[TEST_SAVE_OFFSET_EXAMINE_FLAGS] |= UINT8_C(0x80);
+    rewrite_save_checksum(bytes);
+    assert(!n64game_save_decode(bytes, &decoded, &sequence));
+    assert(n64game_save_encode(&game, UINT32_C(75), bytes));
+    bytes[TEST_SAVE_OFFSET_RELAY_PAGES] |= UINT8_C(0x80);
+    rewrite_save_checksum(bytes);
+    assert(!n64game_save_decode(bytes, &decoded, &sequence));
+    assert(n64game_save_encode(&game, UINT32_C(75), bytes));
+    bytes[TEST_SAVE_OFFSET_SETTINGS] |= UINT8_C(0x80);
+    rewrite_save_checksum(bytes);
+    assert(!n64game_save_decode(bytes, &decoded, &sequence));
+    assert(n64game_save_encode(&game, UINT32_C(75), bytes));
+    bytes[TEST_SAVE_OFFSET_ACTIVE_CONTROL_TICKS] = UINT8_C(0x7F);
+    rewrite_save_checksum(bytes);
+    assert(!n64game_save_decode(bytes, &decoded, &sequence));
+    assert(n64game_save_encode(&game, UINT32_C(75), bytes));
 
     bytes[TEST_SAVE_OFFSET_QUEST] = (uint8_t)N64GAME_QUEST_RESONANCE_TRIAL;
     rewrite_save_checksum(bytes);
@@ -374,6 +818,7 @@ static void test_save_round_trip_and_corruption_deaths(void)
     assert(decoded.slice_complete && decoded.battle_reward_claimed);
     assert(decoded.party_hp[0] == 61);
     assert(decoded.battle.resonance == 44U);
+    assert(decoded.menu == N64GAME_MENU_POST_CHAPTER_ROOT && decoded.paused);
 
     bytes[TEST_SAVE_OFFSET_SCENE] = (uint8_t)N64GAME_SCENE_ANNEX;
     rewrite_save_checksum(bytes);
@@ -466,7 +911,9 @@ static void test_save_journal_survives_each_copy_on_write_boundary(void)
 
 int main(void)
 {
-    test_name_annex_and_ending_flow();
+    test_input_only_release_route();
+    test_annex_acceleration_run_and_collision();
+    test_manual_save_requires_a_fresh_menu_entry();
     test_opening_slate_natural_timing_is_exact();
     test_name_editing_movement_pause_and_optional_dialogue();
     test_controller_disconnect_freezes_and_reconnect_clears_edges();

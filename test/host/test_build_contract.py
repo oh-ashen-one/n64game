@@ -168,6 +168,7 @@ class BuildContractTests(unittest.TestCase):
 
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for object_name in (
+            "n64game_annex.o",
             "n64game_core.o",
             "n64game_render.o",
             "n64game_save.o",

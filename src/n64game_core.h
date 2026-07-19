@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "n64game_annex.h"
+
 #define N64GAME_NAME_CAPACITY 8
 #define N64GAME_BATTLE_ACTOR_COUNT 4
 #define N64GAME_BATTLE_MOVE_COUNT 4
@@ -41,6 +43,10 @@ typedef enum {
     N64GAME_DIALOGUE_TAVI_OPTIONAL,
     N64GAME_DIALOGUE_BATTLE_VICTORY,
     N64GAME_DIALOGUE_BEACON_HOOK,
+    N64GAME_DIALOGUE_EXAMINE_SIM_RING,
+    N64GAME_DIALOGUE_EXAMINE_ATRIUM_MAP,
+    N64GAME_DIALOGUE_EXAMINE_WORKSHOP_LOG,
+    N64GAME_DIALOGUE_EXAMINE_OVERLOOK_SCOPE,
 } N64GameDialogue;
 
 typedef enum {
@@ -52,13 +58,40 @@ typedef enum {
     N64GAME_INPUT_CANCEL = UINT16_C(1) << 5,
     N64GAME_INPUT_START = UINT16_C(1) << 6,
     N64GAME_INPUT_PAUSE = UINT16_C(1) << 7,
+    N64GAME_INPUT_RELAY = UINT16_C(1) << 8,
 } N64GameInputButton;
 
 typedef struct {
     uint16_t pressed;
+    uint16_t held;
     int8_t stick_x;
     int8_t stick_y;
 } N64GameInput;
+
+typedef enum {
+    N64GAME_MENU_CLOSED = 0,
+    N64GAME_MENU_PAUSE_ROOT,
+    N64GAME_MENU_FIELD_RELAY_ROOT,
+    N64GAME_MENU_PARTY,
+    N64GAME_MENU_MESSAGES,
+    N64GAME_MENU_RESONANCE,
+    N64GAME_MENU_SAVE,
+    N64GAME_MENU_HELP,
+    N64GAME_MENU_POST_CHAPTER_ROOT,
+} N64GameMenu;
+
+typedef enum {
+    N64GAME_RELAY_PAGE_PARTY = UINT8_C(1) << 0,
+    N64GAME_RELAY_PAGE_MESSAGES = UINT8_C(1) << 1,
+    N64GAME_RELAY_PAGE_RESONANCE = UINT8_C(1) << 2,
+    N64GAME_RELAY_PAGE_SAVE = UINT8_C(1) << 3,
+} N64GameRelayPageFlag;
+
+typedef enum {
+    N64GAME_SETTING_INVERT_X = UINT8_C(1) << 0,
+    N64GAME_SETTING_INVERT_Y = UINT8_C(1) << 1,
+    N64GAME_SETTING_RUMBLE = UINT8_C(1) << 2,
+} N64GameSettingFlag;
 
 typedef enum {
     N64GAME_ECHO_QUARRUNE = 0,
@@ -161,15 +194,26 @@ typedef struct {
     N64GameBattle battle;
     uint32_t scene_ticks;
     uint32_t play_ticks;
+    uint32_t active_control_ticks;
     int32_t player_x_q8;
     int32_t player_z_q8;
+    int32_t player_velocity_x_q8;
+    int32_t player_velocity_z_q8;
     int16_t party_hp[2];
+    N64GameAnnexSector annex_sector;
+    N64GameMenu menu;
+    N64GameMenu menu_parent;
     uint8_t name_cursor;
     uint8_t name_length;
     uint8_t dialogue_page;
     uint8_t battle_move_cursor;
     uint8_t battle_target_cursor;
     uint8_t battle_present_delay;
+    uint8_t menu_cursor;
+    uint8_t examine_flags;
+    uint8_t relay_pages_seen;
+    uint8_t settings_flags;
+    uint8_t prebattle_resonance;
     char player_name[N64GAME_NAME_CAPACITY + 1];
     bool opening_cinematic_seen;
     bool relay_unlocked;
@@ -179,6 +223,7 @@ typedef struct {
     bool paused;
     bool battle_selecting_target;
     bool save_requested;
+    bool manual_save_latched;
 } N64GameCore;
 
 void n64game_core_init(N64GameCore *game);
