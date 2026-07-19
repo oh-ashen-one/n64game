@@ -1,12 +1,12 @@
 # N64GAME
 
-`n64game` is an original Nintendo 64 creature-battler being built with libdragon and Tiny3D. The locked target is a polished, complete 18–25 minute opening chapter with two cinematic 2v2 battles, two explorable locations, world-map travel, a companion-return sequence, saving/retries, and an original corruption mystery.
+`n64game` is an original Nintendo 64 creature-battler being built with libdragon and Tiny3D. The user-authorized one-week release target is a polished, complete 6–8 minute opening chapter with one finished Meridian Research Annex environment, one full 2v2 Resonance battle, saving/retry, and an original Solace-beacon corruption hook.
 
 ## Current status
 
-**Next: Visual benchmark — Gate 4. Gates 1–3 are complete.**
+**Next: finish the visual benchmark, then build the reduced playable spine. Gates 1–3 and the N64 runtime contracts are complete; visual approval is not.**
 
-The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are locked, with public gitlinks and stable build entry points under `scripts/`. A clean Docker Desktop build and fresh public CI build produced the same ROM bytes, and those exact bytes rendered advancing frames in pinned Ares 148; the audit is recorded in [docs/GATE3_BOOT_EVIDENCE.md](docs/GATE3_BOOT_EVIDENCE.md). The current ROM remains deliberately a Gate 3 diagnostic, not the playable opening and not a full-game claim. Gate 4 is the next ordered gate and will establish the representative in-engine visual bar before any mass asset production.
+The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are locked, with public gitlinks and stable build entry points under `scripts/`. A clean Docker Desktop build and fresh public CI build produced the same ROM bytes, and those exact bytes rendered advancing frames in pinned Ares 148; the audit is recorded in [docs/GATE3_BOOT_EVIDENCE.md](docs/GATE3_BOOT_EVIDENCE.md). The current ROM remains deliberately a Gate 3 diagnostic, not playable game content and not a release claim. The reduced scope cuts the Estate, world map, second battle, follower system, and extra four Echoforms so remaining work can concentrate on a coherent finished slice without lowering the art bar.
 
 The authoritative production contract is [docs/N64GAME_MASTER_SPEC.md](docs/N64GAME_MASTER_SPEC.md). The reusable goal prompt is [docs/N64GAME_GOAL_PROMPT.md](docs/N64GAME_GOAL_PROMPT.md).
 
@@ -22,7 +22,8 @@ The game uses an original retro desert-science-fiction setting:
 - Team energy: **Resonance**
 - Corrupted creatures: **Fractured** Echoforms
 - Home: **Meridian Research Annex**
-- Second destination: **Veyra Observatory Estate**
+- Player team: **Quarrune** and **Ayselor**
+- Simulation opponents: **Gyreclast** and **Kivarrax**
 
 Pokémon XD: Gale of Darkness informs only the high-level pacing and functional rhythm of the opening. Pandemonium is an engineering and presentation reference. No Pokémon or Pandemonium code, characters, assets, maps, dialogue, music, UI, or protected expression may be copied into this project.
 
