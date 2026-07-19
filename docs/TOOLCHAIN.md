@@ -165,6 +165,33 @@ The destination is fixed as `review/<scope>/g2/AUTHORING_STACK_RECEIPT.txt` or `
 
 The receipt is deterministic workflow evidence, not a standalone cryptographic claim that can defeat a malicious repository author: its fields are public and therefore could be hand-written. Acceptance also requires the independently reviewed gate graph, the complete deterministic conversion/in-engine evidence, and the signed public benchmark approval whose pinned external key covers the payload bytes. Until that trust anchor and the canonical clean-staging exporter exist, the receipt cannot by itself unlock G5 or global approval. The validator freezes the full approved lock-file and checker/producer-bundle digests so ordinary code/pin drift cannot self-authorize a matching receipt.
 
+## Quarrune Tiny3D package prerequisite
+
+`lib/n64game/tiny3d_package_contract.rb` is the fail-closed package reader for the pinned Tiny3D commit. It is a narrow Gate-5 prerequisite, not a converter, a visual review, or proof that Quarrune is finished. The live validator invokes it in all four lifecycle paths: preapproval, approved payload, unchanged postapproval, and changed postapproval. Preapproval permits neither package to exist yet, but never permits a one-sided package; every later path requires the pair.
+
+The model owner `echo.quarrune` directly owns exactly these reserved Tiny3D model members:
+
+| Path | Manifest role | Storage |
+| --- | --- | --- |
+| `review/echo.quarrune/g5/quarrune_distance.t3dm` | `output.tiny3d.model` | canonical Git LFS |
+| `review/echo.quarrune/g5/quarrune_hero.t3dm` | `output.tiny3d.model` | canonical Git LFS |
+
+The animation owner `anm.echo.quarrune` directly owns this paired package:
+
+| Path | Manifest role | Storage |
+| --- | --- | --- |
+| `review/anm.echo.quarrune/g5/anm_echo_quarrune.t3dm` | `output.tiny3d.animation_header` | canonical Git LFS |
+| `review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata` through `.8.sdata` | `output.tiny3d.animation_stream` | canonical Git LFS |
+| `review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv` | `output.skeleton_binding` | ordinary Git, UTF-8/LF text |
+
+The nine stream ordinals are fixed as `brace_relay`, `entrance`, `hit`, `horizon_break`, `idle_a`, `idle_b`, `knockout`, `reposition`, and `ridge_ram`. Their embedded ROM paths are exactly `rom:/anm/anm.echo.quarrune/anm_echo_quarrune.<ordinal>.sdata`. Reserved roles on any other path, extra `.t3dm` or `.sdata` members, nested-only package members, cross-owner streams, ordinary-Git binary payloads, executable modes, missing LFS objects, and unequal model/animation build IDs fail. Other nonreserved `echo.quarrune` output members remain legal only when the existing exact selector allowlist owns them; this package census does not create texture, rig, or blob-shadow authority.
+
+The binding has exactly these 15 ordered TAB keys and one final LF: `schema`, `tiny3d_commit`, `model_production_id`, `animation_production_id`, `hero_model_path`, `hero_model_sha256`, `distance_model_path`, `distance_model_sha256`, `animation_header_path`, `animation_header_sha256`, `animation_stream_set_sha256`, `skeleton_signature_sha256`, `bone_count`, `animation_names`, and `build_id`. It pins both model hashes, the animation-header hash, a domain-separated ordered stream-set hash, the shared build, and a domain-separated signature over all 20 bone ordinals, names, parents, depths, and raw big-endian rest SRT bytes. A digest-correct but semantically stale binding fails.
+
+The reader bounds-checks the Tiny3D v4 header, chunk table, alignment and zero padding; exact model/animation chunk order; packed vertex source ranges and object/model AABBs; loaded vertex-cache domains; indexed, unindexed-sequence, and restart-strip triangle counts; strip DMA safety; optional BVH graph/object coverage and descendant AABBs; material runtime fields and bound texture path/hash pairs; the exact 20-joint, fully weighted Quarrune skeleton; animation mappings; and every compressed stream record, size flag, packed-quaternion radicand, channel coverage, and global writer order. Tests build independent big-endian fixtures, materialize real Git LFS pointers/objects, parse real committed output manifests, and mutate these boundaries.
+
+This prerequisite deliberately does **not** certify the final Quarrune art budget. Canonical texture and blob-shadow output filenames/roles plus a pinned `.sprite` byte contract are not yet defined, so review `.sprite` files remain ignored and are not represented as validated output. The current reader also does not by itself prove the inventory's hero/distance triangle targets, three used materials, 64×64 CI8 plus 32×32 CI4 texture package, blob shadow, silhouette quality, deformation quality, native readability, performance, or seven review passes. Those requirements must be bound before Gate 5 can unlock. `GATE5_EXPORT_IMPLEMENTED=false`, `APPROVED_GATE5_EXPORTER_SHA256=PENDING`, and the absent canonical exporter remain unchanged.
+
 ## Public CI
 
 `.github/workflows/build-rom.yml` uses an explicit Ubuntu 24.04 runner, commit-pinned GitHub Actions, Node 24.18.0, recursive submodules, Git LFS, non-persisted checkout credentials, the same stable entry points, a clean-source diff check, and an artifact upload containing the ROM, checksum, linker map, ELF size output, dependency manifest, host-test report, and validation summary. Report generation fails closed if the map, ELF size output, or exact host-test PASS contract is missing. A successful workflow proves a fresh public build candidate; it still does not replace the local Ares boot inspection and is never labeled a boot proof by CI alone.

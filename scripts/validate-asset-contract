@@ -17,6 +17,7 @@ ROOT = Pathname.new(__dir__).join("..").expand_path
 require ROOT.join("lib/n64game/asset_lifecycle_contract").to_s
 require ROOT.join("lib/n64game/authoring_stack_receipt").to_s
 require ROOT.join("lib/n64game/public_commit_authority").to_s
+require ROOT.join("lib/n64game/tiny3d_package_contract").to_s
 ERRORS = []
 
 def error(message)
@@ -387,6 +388,7 @@ PUBLIC_AUTHORITY_EXECUTION_PATHS = %w[
   lib/n64game/asset_lifecycle_contract.rb
   lib/n64game/authoring_stack_receipt.rb
   lib/n64game/public_commit_authority.rb
+  lib/n64game/tiny3d_package_contract.rb
 ].freeze
 PUBLIC_GIT_BINARY = "/usr/bin/git".freeze
 PUBLIC_CLONE_PATH = "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".freeze
@@ -496,7 +498,7 @@ COMPLETE_SUBSET_IDS = Set.new(%w[
 ]).freeze
 INVENTORY_PRODUCTION_ID_COUNT = 381
 INVENTORY_PRODUCTION_ID_SET_SHA256 = "b32202371a31494d5f9a755c543042f7fa6fe624f2a074902fdee5e9b4db5688"
-BINARY_LFS_EXTENSIONS = %w[.blend .fbx .glb .gltf .psd .kra .xcf .png .jpg .jpeg .webp .qoi .mp4 .mov .mkv .wav .flac .aiff .ogg].freeze
+BINARY_LFS_EXTENSIONS = %w[.blend .fbx .glb .gltf .psd .kra .xcf .png .jpg .jpeg .webp .qoi .mp4 .mov .mkv .wav .flac .aiff .ogg .t3dm .sdata].freeze
 CAPTURE_NAMES = %w[attack_anticipation dialogue exploration impact support target_selection].freeze
 EVIDENCE_SPECS = {
   "ev.benchmark.native" => {
@@ -3692,6 +3694,10 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
     row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
     rows[row["production_id"]] = row
   end
+  historical_quarrune_tiny3d_outputs = {
+    "echo.quarrune" => quarrune_tiny3d_output(historical_by_id["echo.quarrune"]),
+    "anm.echo.quarrune" => quarrune_tiny3d_output(historical_by_id["anm.echo.quarrune"])
+  }
   historical_ledger_by_id = historical_ledger_entries.each_with_object({}) do |entry, rows|
     rows[entry[:id]] = entry
   end
@@ -3792,6 +3798,12 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
       label: "current unchanged post-approval authoring receipts",
       inherited_contexts: [historical_context]
     )
+    validate_quarrune_tiny3d_pair(
+      model_output: historical_quarrune_tiny3d_outputs["echo.quarrune"],
+      animation_output: historical_quarrune_tiny3d_outputs["anm.echo.quarrune"],
+      payload_context: historical_context, commit: local_head, fresh_clone: clone,
+      label: "current unchanged post-approval Quarrune Tiny3D package pair", outputs_required: true
+    )
     return
   end
 
@@ -3844,6 +3856,8 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
       owned_paths[child_id].merge(paths)
     end
   end
+
+  current_quarrune_tiny3d_outputs = historical_quarrune_tiny3d_outputs.dup
 
   payload_entries.select { |entry| %w[source converted review approved].include?(entry[:status]) }.each do |entry|
     production_id = entry[:id]
@@ -3925,6 +3939,15 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
                else
                  "-"
                end
+    if %w[echo.quarrune anm.echo.quarrune].include?(production_id)
+      current_quarrune_tiny3d_outputs[production_id] = if has_output
+                                                        {
+                                                          manifest_path: output_path,
+                                                          manifest_sha256: output_digest,
+                                                          build_id: build_id
+                                                        }
+                                                      end
+    end
     validate_gate_record(
       gate_binding, "#{label} gate record", scope: production_id, profile: profile, tier: tier,
       source_digest: source_digest, output_digest: output_digest, build_id: build_id,
@@ -3941,6 +3964,14 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
       owned_paths[production_id].merge(manifest_owned_paths(context, output_path))
     end
   end
+
+  validate_quarrune_tiny3d_pair(
+    model_output: current_quarrune_tiny3d_outputs["echo.quarrune"],
+    animation_output: current_quarrune_tiny3d_outputs["anm.echo.quarrune"],
+    payload_context: context, fallback_context: historical_context,
+    commit: local_head, fresh_clone: clone,
+    label: "current post-approval Quarrune Tiny3D package pair", outputs_required: true
+  )
 
   validate_concept_entries(
     payload_entries, owned_paths, commit: local_head, fresh_clone: clone, payload_context: context
@@ -5420,6 +5451,90 @@ def manifest_owned_paths(context, manifest_path, seen = Set.new)
   paths
 end
 
+def quarrune_tiny3d_output(row)
+  return nil unless row.is_a?(Hash)
+  return nil unless %w[echo.quarrune anm.echo.quarrune].include?(row["production_id"])
+  return nil unless row["output_manifest_path"].to_s.match?(/\Areview\/(?:echo|anm\.echo)\.quarrune\/g5\/OUTPUT_MANIFEST\.sha256\z/) &&
+                    row["output_manifest_sha256"].to_s.match?(HEX64)
+
+  {
+    manifest_path: row["output_manifest_path"],
+    manifest_sha256: row["output_manifest_sha256"],
+    build_id: row["build_id"]
+  }
+end
+
+def validate_quarrune_tiny3d_pair(model_output:, animation_output:, payload_context:, commit:, fresh_clone:,
+                                  label:, outputs_required:, fallback_context: nil)
+  if model_output.nil? && animation_output.nil?
+    error("#{label}: both Quarrune Tiny3D packages are required") if outputs_required
+    return
+  end
+  if model_output.nil? || animation_output.nil?
+    error("#{label}: Quarrune model and animation packages must become concrete atomically")
+    return
+  end
+  unless commit&.match?(HEX40) && fresh_clone
+    error("#{label}: Tiny3D package validation requires one reviewed commit and fresh public clone")
+    return
+  end
+
+  expected_paths = {
+    model_output => "review/echo.quarrune/g5/OUTPUT_MANIFEST.sha256",
+    animation_output => "review/anm.echo.quarrune/g5/OUTPUT_MANIFEST.sha256"
+  }
+  contexts = [payload_context, fallback_context].compact
+  normalized = {}
+  bytes_by_path = {}
+  expected_paths.each do |output, expected_path|
+    unless output[:manifest_path] == expected_path && output[:manifest_sha256].to_s.match?(HEX64)
+      error("#{label}: Tiny3D output-manifest identity is malformed for #{expected_path}")
+      next
+    end
+    context = contexts.find { |candidate| candidate[:manifests].key?(output[:manifest_path]) }
+    unless context
+      error("#{label}: Tiny3D output manifest is absent from current/historical payload graph: #{expected_path}")
+      next
+    end
+    if context[:manifest_digests][expected_path] != output[:manifest_sha256]
+      error("#{label}: Tiny3D output-manifest digest differs from the selected lifecycle row: #{expected_path}")
+    end
+    direct_entries = context[:manifests].fetch(expected_path, [])
+    direct_paths = direct_entries.map { |entry| entry[:path] }.to_set
+    manifest_owned_paths(context, expected_path).each do |path|
+      entry = context[:entries][path]
+      relevant = %w[.t3dm .sdata].include?(File.extname(path).downcase) ||
+                 path == N64Game::Tiny3DPackageContract::SKELETON_BINDING_PATH ||
+                 entry && [
+                   N64Game::Tiny3DPackageContract::MODEL_ROLE,
+                   N64Game::Tiny3DPackageContract::ANIMATION_HEADER_ROLE,
+                   N64Game::Tiny3DPackageContract::ANIMATION_STREAM_ROLE,
+                   N64Game::Tiny3DPackageContract::SKELETON_BINDING_ROLE
+                 ].include?(entry[:role])
+      error("#{label}: Tiny3D package member must be a direct output-manifest member: #{path}") if
+        relevant && !direct_paths.include?(path)
+    end
+    normalized[expected_path] = direct_entries.map do |entry|
+      material = materialized_commit_file(
+        entry[:path], commit, "#{label} Tiny3D package member #{entry[:path]}",
+        fresh_clone: fresh_clone, allow_lfs: true
+      )
+      bytes_by_path[entry[:path]] = material[:bytes] if material
+      entry.merge(kind: material && material[:kind], mode: material && material[:mode])
+    end
+  end
+  return unless normalized.length == 2
+
+  N64Game::Tiny3DPackageContract.validate_pair(
+    model_entries: normalized.fetch("review/echo.quarrune/g5/OUTPUT_MANIFEST.sha256"),
+    animation_entries: normalized.fetch("review/anm.echo.quarrune/g5/OUTPUT_MANIFEST.sha256"),
+    bytes_by_path: bytes_by_path,
+    model_build_id: model_output[:build_id], animation_build_id: animation_output[:build_id]
+  ).each { |issue| error("#{label}: #{issue}") }
+rescue StandardError => exception
+  error("#{label}: controlled Tiny3D pair validation failure: #{exception.class}: #{exception.message}")
+end
+
 def validate_manifest_member_roots(context, manifest_path, allowed_roots, label)
   manifest_owned_paths(context, manifest_path).each do |path|
     next if allowed_roots.any? { |root| path.start_with?(root) }
@@ -6189,7 +6304,7 @@ inventory = read("docs/ASSET_INVENTORY.md")
 ledger = read("docs/ASSET_LEDGER.md")
 reviews = read("docs/ASSET_REVIEW_TEMPLATES.md")
 benchmark = read("docs/VISUAL_BENCHMARK_APPROVAL.md")
-error("Gate 5 must remain locked until the audited exporter and typed Tiny3D package validator land atomically") unless
+error("Gate 5 must remain locked until the remaining texture/blob-shadow contract and audited exporter are implemented, pinned, and deliberately enabled") unless
   N64Game::AuthoringStackReceipt::GATE5_EXPORT_IMPLEMENTED == false &&
   N64Game::AuthoringStackReceipt::APPROVED_GATE5_EXPORTER_SHA256 == "PENDING"
 toolchain = read("docs/TOOLCHAIN.md")
@@ -6983,6 +7098,7 @@ active_state_by_id = authorization_rows.to_h { |cells| [cells[1], cells[7]] }
 owned_paths_by_id = Hash.new { |hash, key| hash[key] = Set.new }
 preapproval_asset_owner_ids = Set.new
 current_subset_allowlists = {}
+preapproval_quarrune_tiny3d_outputs = {}
 registry_rows = []
 if decision != "APPROVED" && preapproval_registry_binding && preapproval_commit && preapproval_fresh_clone
   registry_rows = parse_tsv(
@@ -7132,7 +7248,18 @@ registry_rows.each_with_index do |fields, index|
     owned_paths_by_id[production_id] << row["output_manifest_path"]
     owned_paths_by_id[production_id].merge(manifest_owned_paths(preapproval_payload_context, row["output_manifest_path"]))
   end
+  if %w[echo.quarrune anm.echo.quarrune].include?(production_id)
+    preapproval_quarrune_tiny3d_outputs[production_id] = has_output ? quarrune_tiny3d_output(row) : nil
+  end
 end
+
+validate_quarrune_tiny3d_pair(
+  model_output: preapproval_quarrune_tiny3d_outputs["echo.quarrune"],
+  animation_output: preapproval_quarrune_tiny3d_outputs["anm.echo.quarrune"],
+  payload_context: preapproval_payload_context,
+  commit: preapproval_commit, fresh_clone: preapproval_fresh_clone,
+  label: "preapproval Quarrune Tiny3D package pair", outputs_required: false
+) if decision != "APPROVED"
 
 preapproval_kernel_rollups = preapproval_rollup_bindings.map do |binding, _path_field, scope, profile, tier|
   unless binding && preapproval_commit && preapproval_fresh_clone
@@ -7927,6 +8054,7 @@ if decision == "APPROVED"
   approved_benchmark_owned_paths = Set.new([
     payload_path, registry_path, identity["ROM build recipe path"]
   ])
+  approved_benchmark_owned_paths.merge(AUTHORING_ROOT_REQUIRED_MODES.keys)
   asset_owner_ids = Set.new
   approved_gate_paths = []
   approved_registry_rows.each_with_index do |fields, index|
@@ -8017,6 +8145,16 @@ if decision == "APPROVED"
     error("#{basis}: approved rights evidence is not source-manifest-owned") unless
       manifest_owned_paths(payload_context, row["source_manifest_path"]).include?(rights_path)
   end
+  approved_quarrune_rows = approved_registry_rows.each_with_object({}) do |fields, rows|
+    row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
+    rows[row["production_id"]] = row if %w[echo.quarrune anm.echo.quarrune].include?(row["production_id"])
+  end
+  validate_quarrune_tiny3d_pair(
+    model_output: quarrune_tiny3d_output(approved_quarrune_rows["echo.quarrune"]),
+    animation_output: quarrune_tiny3d_output(approved_quarrune_rows["anm.echo.quarrune"]),
+    payload_context: payload_context, commit: payload_commit, fresh_clone: fresh_clone,
+    label: "approved Quarrune Tiny3D package pair", outputs_required: true
+  )
   error("approved external registry must contain all #{BENCHMARK_WHITELIST_COUNT} valid rows") unless
     approved_registry_rows.length == BENCHMARK_WHITELIST_COUNT
   validate_move_pair_atomicity(
