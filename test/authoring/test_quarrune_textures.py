@@ -59,7 +59,9 @@ class QuarruneTextureAuthoringTests(unittest.TestCase):
             left_report = textures.generate(left)
             right_report = textures.generate(right)
             self.assertEqual(left_report["body_palette_colors"], 64)
+            self.assertEqual(left_report["body_rgba5551_colors"], 64)
             self.assertEqual(left_report["accent_palette_colors"], 12)
+            self.assertEqual(left_report["accent_rgba5551_colors"], 12)
             self.assertGreaterEqual(left_report["shadow_alpha_levels"], 16)
             for name in (textures.BODY_NAME, textures.ACCENT_NAME, textures.SHADOW_NAME):
                 left_bytes = (left / name).read_bytes()
@@ -75,12 +77,24 @@ class QuarruneTextureAuthoringTests(unittest.TestCase):
             self.assertEqual(body_header, (64, 64, 8, 3, 1))
             self.assertEqual(len(body_chunks[b"PLTE"][0]), 64 * 3)
             self.assertEqual(set(b"".join(body_rows)), set(range(64)))
+            body_palette = body_chunks[b"PLTE"][0]
+            body_words = {
+                textures.rgba5551_word(tuple(body_palette[index : index + 3]))
+                for index in range(0, len(body_palette), 3)
+            }
+            self.assertEqual(len(body_words), 64)
 
             accent_chunks = png_chunks(left / textures.ACCENT_NAME)
             accent_header, accent_rows = decoded_rows(left / textures.ACCENT_NAME)
             self.assertEqual(accent_header, (32, 32, 8, 3, 1))
             self.assertEqual(len(accent_chunks[b"PLTE"][0]), 12 * 3)
             self.assertEqual(set(b"".join(accent_rows)), set(range(12)))
+            accent_palette = accent_chunks[b"PLTE"][0]
+            accent_words = {
+                textures.rgba5551_word(tuple(accent_palette[index : index + 3]))
+                for index in range(0, len(accent_palette), 3)
+            }
+            self.assertEqual(len(accent_words), 12)
 
     def test_blob_shadow_has_zero_perimeter_ramp_and_one_connected_footprint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

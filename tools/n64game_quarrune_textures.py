@@ -118,6 +118,62 @@ def gradient_palette(stops: Sequence[tuple[int, int, int]], count: int) -> list[
     return colors
 
 
+def rgba5551_word(color: tuple[int, int, int]) -> int:
+    """Return the opaque N64 palette word produced by pinned mksprite."""
+    red, green, blue = color
+    return ((red >> 3) << 11) | ((green >> 3) << 6) | ((blue >> 3) << 1) | 1
+
+
+def unique_rgba5551_palette(
+    colors: Sequence[tuple[int, int, int]],
+) -> list[tuple[int, int, int]]:
+    """Resolve only colors that collide after N64's 5-bit quantization.
+
+    Author colors that already occupy a unique RGBA5551 cell remain byte exact.
+    A colliding color moves to the nearest unused cell, and each channel is
+    clamped to the closest byte inside that cell.  This keeps the authored ramp
+    visually stable while making the runtime palette contract truthful.
+    """
+    resolved: list[tuple[int, int, int]] = []
+    used_words: set[int] = set()
+    for color in colors:
+        base = tuple(channel >> 3 for channel in color)
+        selected: tuple[int, int, int] | None = None
+        for radius in range(32):
+            choices: list[tuple[int, int, tuple[int, int, int]]] = []
+            for red in range(max(0, base[0] - radius), min(31, base[0] + radius) + 1):
+                for green in range(max(0, base[1] - radius), min(31, base[1] + radius) + 1):
+                    for blue in range(max(0, base[2] - radius), min(31, base[2] + radius) + 1):
+                        if max(
+                            abs(red - base[0]),
+                            abs(green - base[1]),
+                            abs(blue - base[2]),
+                        ) != radius:
+                            continue
+                        word = (red << 11) | (green << 6) | (blue << 1) | 1
+                        if word in used_words:
+                            continue
+                        candidate = tuple(
+                            max(cell * 8, min(cell * 8 + 7, channel))
+                            for cell, channel in zip((red, green, blue), color)
+                        )
+                        error = sum(
+                            (candidate[index] - color[index]) ** 2 for index in range(3)
+                        )
+                        choices.append((error, word, candidate))
+            if choices:
+                selected = min(choices)[2]
+                break
+        if selected is None:
+            raise ValueError("N64 palette has no unused opaque RGBA5551 cell")
+        word = rgba5551_word(selected)
+        if word in used_words:
+            raise AssertionError("RGBA5551 collision resolver selected a used cell")
+        used_words.add(word)
+        resolved.append(selected)
+    return resolved
+
+
 def authored_noise(x: int, y: int, salt: int) -> int:
     value = (x * 0x45D9F3B + y * 0x119DE1F3 + salt * 0x27D4EB2D) & 0xFFFFFFFF
     value ^= value >> 16
@@ -142,7 +198,7 @@ def body_texture() -> tuple[list[tuple[int, int, int]], list[int]]:
         ((34, 30, 32), (70, 57, 51), (126, 78, 48), (190, 132, 67)),
         32,
     )
-    palette = ceramic + underbody
+    palette = unique_rgba5551_palette(ceramic + underbody)
     pixels: list[int] = []
     for y in range(64):
         for x in range(64):
@@ -184,9 +240,11 @@ def body_texture() -> tuple[list[tuple[int, int, int]], list[int]]:
 
 
 def accent_texture() -> tuple[list[tuple[int, int, int]], list[int]]:
-    palette = gradient_palette(
-        ((19, 30, 62), (39, 58, 104), (49, 78, 150), (90, 129, 205)),
-        12,
+    palette = unique_rgba5551_palette(
+        gradient_palette(
+            ((19, 30, 62), (39, 58, 104), (49, 78, 150), (90, 129, 205)),
+            12,
+        )
     )
     pixels: list[int] = []
     center = 15.5
@@ -261,7 +319,9 @@ def generate(output_dir: Path) -> dict[str, object]:
     return {
         "schema": "n64game-quarrune-texture-authoring-v1",
         "body_palette_colors": len(set(body_indices)),
+        "body_rgba5551_colors": len({rgba5551_word(color) for color in body_palette}),
         "accent_palette_colors": len(set(accent_indices)),
+        "accent_rgba5551_colors": len({rgba5551_word(color) for color in accent_palette}),
         "shadow_alpha_levels": len({alpha for _, alpha in shadow_pixels}),
         "shadow_nonzero_pixels": sum(1 for _, alpha in shadow_pixels if alpha > 0),
         "outputs": {

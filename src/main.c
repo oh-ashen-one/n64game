@@ -178,6 +178,10 @@ int main(void)
 {
     debug_init_emulog();
     debug_init_usblog();
+    assertf(
+        dfs_init(DFS_DEFAULT_LOCATION) == DFS_ESUCCESS,
+        "N64GAME ROM filesystem initialization failed"
+    );
     display_init(
         RESOLUTION_320x240,
         DEPTH_16_BPP,

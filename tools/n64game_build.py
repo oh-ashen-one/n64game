@@ -24,6 +24,11 @@ MAP_PATH = ROOT / "build" / "game" / "n64game-gate3.map"
 ELF_SIZE_PATH = ROOT / "build" / "game" / "n64game-gate3.elf.size.txt"
 RUNTIME_ASSET_PATH = ROOT / "config" / "runtime-assets.tsv"
 RUNTIME_ASSET_HEADER = "asset_id\tkind\tsource_path\truntime_path\tsha256\tstatus\n"
+RUNTIME_CANDIDATE_PATH = ROOT / "config" / "runtime-candidates.tsv"
+RUNTIME_CANDIDATE_HEADER = (
+    "candidate_id\tkind\tsource_path\truntime_path\tsource_sha256\tstatus"
+)
+RUNTIME_CANDIDATE_STATUS = "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE"
 N64_MAGIC = bytes.fromhex("80371240")
 ROM_LIMIT = 16 * 1024 * 1024
 LIBDRAGON_IPL3_END = 6444
@@ -32,7 +37,7 @@ TOC_OFFSET = (LIBDRAGON_IPL3_END + 15) & ~15
 EXPECTED_HOST_TEST_REPORT = (
     "suite=n64game_host_contracts\n"
     "result=PASS\n"
-    "scope=dependency pins, runtime manifest, ROM header parser, report contract, boot-capture manifest, semantic snapshot, production-shared lifecycle branch/death tests, exact opening timing, controller disconnect freeze, battle UI, one-survivor victory, retry, canonical checkpoints, corruption rejection, and dual-slot copy-on-write save recovery (live adapters and emulator interaction excluded; not release approval evidence)\n"
+    "scope=dependency pins, production and candidate runtime manifests, ROM header parser, report contract, boot-capture manifest, semantic snapshot, production-shared lifecycle branch/death tests, exact opening timing, controller disconnect freeze, battle UI, one-survivor victory, retry, canonical checkpoints, corruption rejection, and dual-slot copy-on-write save recovery (live adapters and emulator interaction excluded; not release approval evidence)\n"
 )
 
 
@@ -144,7 +149,7 @@ def inspect_rom(path: Path) -> dict[str, Any]:
     if len(header) != 64 or header[:4] != N64_MAGIC:
         raise ContractError("ROM does not have the canonical big-endian N64 header")
     title = header[0x20:0x34].decode("ascii", errors="strict").rstrip(" \x00")
-    if title != "N64GAME GATE 3":
+    if title != "N64GAME OPENING":
         raise ContractError(f"unexpected N64 ROM title: {title!r}")
     # libdragon's open IPL3 deliberately does not use the legacy commercial-ROM
     # checksum. Its pinned n64tool output leaves both words at zero.
@@ -229,6 +234,90 @@ def validate_runtime_assets() -> dict[str, Any]:
     }
 
 
+def validate_runtime_candidates() -> dict[str, Any]:
+    data = RUNTIME_CANDIDATE_PATH.read_text(encoding="utf-8")
+    if not data.endswith("\n") or "\r" in data:
+        raise ContractError("runtime candidate manifest must be canonical UTF-8/LF text")
+    lines = data.splitlines()
+    if not lines or lines[0] != RUNTIME_CANDIDATE_HEADER:
+        raise ContractError("runtime candidate manifest header is not canonical")
+
+    expected = (
+        (
+            "candidate.echo.quarrune.hero",
+            "model_glb",
+            "runtime-candidates/echo/echo.quarrune/quarrune_hero.glb",
+            "rom:/echo/echo.quarrune/quarrune_hero.t3dm",
+        ),
+        (
+            "candidate.echo.quarrune.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.png",
+            "rom:/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.quarrune.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.png",
+            "rom:/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.quarrune.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite",
+        ),
+    )
+    rows: list[dict[str, str]] = []
+    observed_identity: list[tuple[str, str, str, str]] = []
+    runtime_paths: set[str] = set()
+    source_paths: set[str] = set()
+    for line_number, line in enumerate(lines[1:], start=2):
+        fields = line.split("\t")
+        if len(fields) != 6:
+            raise ContractError(f"runtime candidate row {line_number} has the wrong field count")
+        candidate_id, kind, source_path, runtime_path, source_digest, status = fields
+        observed_identity.append((candidate_id, kind, source_path, runtime_path))
+        if status != RUNTIME_CANDIDATE_STATUS:
+            raise ContractError(f"runtime candidate row {line_number} has an approval-like status")
+        if len(source_digest) != 64 or any(character not in "0123456789abcdef" for character in source_digest):
+            raise ContractError(f"runtime candidate row {line_number} has an invalid SHA-256")
+        if source_path in source_paths or runtime_path in runtime_paths:
+            raise ContractError(f"runtime candidate row {line_number} duplicates a source or runtime path")
+        source_paths.add(source_path)
+        runtime_paths.add(runtime_path)
+        if not source_path.startswith("runtime-candidates/") or ".." in Path(source_path).parts:
+            raise ContractError(f"runtime candidate row {line_number} escapes its temporary source root")
+        source = ROOT / source_path
+        if not source.is_file() or source.is_symlink():
+            raise ContractError(f"runtime candidate source is not one regular file: {source_path}")
+        if sha256_file(source) != source_digest:
+            raise ContractError(f"runtime candidate source hash mismatch: {source_path}")
+        attributes = git("check-attr", "filter", "--", source_path).split(": ")
+        if len(attributes) != 3 or attributes[-1] != "lfs":
+            raise ContractError(f"runtime candidate binary is not assigned to Git LFS: {source_path}")
+        rows.append(
+            {
+                "candidate_id": candidate_id,
+                "kind": kind,
+                "source_path": source_path,
+                "runtime_path": runtime_path,
+                "source_sha256": source_digest,
+                "status": status,
+            }
+        )
+    if tuple(observed_identity) != expected:
+        raise ContractError("runtime candidate identity/path census is not the exact Quarrune proof set")
+    return {
+        "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
+        "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
+        "runtime_candidate_count": len(rows),
+        "status": RUNTIME_CANDIDATE_STATUS,
+        "scope": "Quarrune static in-engine proof only; not Gate evidence or production approval",
+        "entries": rows,
+    }
+
+
 def source_identity() -> dict[str, Any]:
     status = git("status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none")
     return {
@@ -256,6 +345,7 @@ def required_nonempty_file(path: Path, label: str) -> dict[str, Any]:
 def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
     pins = verify_pins()
     assets = validate_runtime_assets()
+    candidates = validate_runtime_candidates()
     rom = inspect_rom(rom_path)
     lock = load_lock()
     source = source_identity()
@@ -272,13 +362,14 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
     host_status = "PASS"
     manifest = {
         "schema_version": 1,
-        "artifact_kind": "gate3_toolchain_build_candidate",
+        "artifact_kind": "runtime_integration_candidate",
         "full_game_claim": False,
         "ares_boot": "NOT_RUN",
         "source": source,
         "pins": pins,
         "toolchain": lock,
         "runtime_assets": assets,
+        "runtime_candidates": candidates,
         "rom": rom,
         "linker_map": map_info,
         "elf_size_report": elf_size_info,
@@ -292,6 +383,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
             "rom_budget": "PASS",
             "dependency_pins": "PASS",
             "production_runtime_asset_count": 0,
+            "runtime_candidate_asset_count": candidates["runtime_candidate_count"],
             "ares_boot": "NOT_RUN",
         },
     }
@@ -331,7 +423,8 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- ROM budget: PASS ({rom['size_bytes']} bytes)\n"
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
-        f"- Runtime production assets: 0 (visual production remains locked for Gate 4)\n"
+        f"- Runtime production assets: 0 (production approval remains locked)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune static proof; not Gate evidence)\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",
@@ -454,7 +547,10 @@ def main() -> int:
         if args.command == "verify-pins":
             print(json.dumps(verify_pins(), sort_keys=True))
         elif args.command == "validate-assets":
-            print(json.dumps(validate_runtime_assets(), sort_keys=True))
+            print(json.dumps({
+                "production": validate_runtime_assets(),
+                "candidates": validate_runtime_candidates(),
+            }, sort_keys=True))
         elif args.command == "validate-rom":
             rom_argument = Path(args.rom)
             if rom_argument.is_symlink():
