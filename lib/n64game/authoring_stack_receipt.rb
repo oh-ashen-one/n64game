@@ -20,6 +20,8 @@ module N64Game
     PROBE_MODE = "ISOLATED_COPY_ENABLED_LOADED_NO_INHERITED_ENV".freeze
     CHECKER_BUNDLE_DOMAIN = "n64game-authoring-checker-bundle-v1\n".b.freeze
     CHECKER_BUNDLE_PATHS = %w[
+      lib/n64game/libdragon_sprite_contract.rb
+      lib/n64game/tiny3d_package_contract.rb
       scripts/check-authoring-stack
       scripts/export-gate5-asset
       scripts/record-authoring-stack-receipt
@@ -46,8 +48,8 @@ module N64Game
     BLENDER_EXECUTABLE_SHA256 = "8156431a9b9ec1daf49bccea4bd92f327f6efc1ca330d5103881580f3e7773ef".freeze
     FAST64_SOURCE_MANIFEST_SHA256 = "14bb6c7b527ba364fa5e2a5011779ddd24c61f998c79c120f28d895d92e62e6b".freeze
     FAST64_COMMIT = "8e9630c11824a9c00e9379279d43c64264eda87e".freeze
-    APPROVED_TOOLCHAIN_LOCK_SHA256 = "818a0232394f58698906c30c3ebcd9ca84bb6f35c5bae8fb3bed297d78628f80".freeze
-    APPROVED_CHECKER_BUNDLE_SHA256 = "f0a34ee7ae9b7bfd09c94d270724f2fe82126c3ac109b6f3d9166db8413fbfb5".freeze
+    APPROVED_TOOLCHAIN_LOCK_SHA256 = "f97df3bf33e6a0e42e4c064e3c5cc92f5427a62cde9d78a5ccff3162969b0cc9".freeze
+    APPROVED_CHECKER_BUNDLE_SHA256 = "1b18d192beed8e17c8e49fbfbc916742ecee47c7bab53acc288a8b01082d67ce".freeze
     GATE5_EXPORT_IMPLEMENTED = false
     APPROVED_GATE5_EXPORTER_SHA256 = "PENDING".freeze
     HEX64 = /\A[0-9a-f]{64}\z/.freeze

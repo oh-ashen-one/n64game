@@ -191,6 +191,8 @@ class AuthoringReceiptAdapterTests(unittest.TestCase):
         }
         checker_paths = sorted(
             (
+                "lib/n64game/libdragon_sprite_contract.rb",
+                "lib/n64game/tiny3d_package_contract.rb",
                 "scripts/check-authoring-stack",
                 "scripts/export-gate5-asset",
                 "scripts/record-authoring-stack-receipt",

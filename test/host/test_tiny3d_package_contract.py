@@ -801,9 +801,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
             "animation_build_id": BUILD_ID,
         }
 
-    def test_pinned_importer_roundtrips_exact_producible_material_state(self) -> None:
-        build_root = ROOT / "build"
-        build_root.mkdir(parents=True, exist_ok=True)
+    def build_pinned_importer(self, stage: Path) -> Path:
         vendor = ROOT / "vendor" / "tiny3d"
         archive = subprocess.run(
             ["/usr/bin/git", "-C", str(vendor), "archive", "--format=tar", TINY3D_COMMIT,
@@ -814,23 +812,78 @@ class Tiny3DPackageContractTests(unittest.TestCase):
             env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
         )
         self.assertEqual(archive.returncode, 0, archive.stderr.decode(errors="replace"))
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as source:
+            source.extractall(stage)
+        importer_dir = stage / "tools" / "gltf_importer"
+        completed = subprocess.run(
+            ["/usr/bin/make", "-C", str(importer_dir), "-j2"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=300,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        importer = importer_dir / "gltf_to_t3d"
+        self.assertTrue(importer.is_file())
+        return importer
+
+    def assert_quarrune_material_contract(self, data: bytes, label: str) -> None:
+        materials = tiny3d_material_records(data)
+        self.assertEqual(
+            set(materials), {"QR_Ceramic", "QR_Resonator", "QR_CobaltLattice"}, label
+        )
+        expected_state = bytes.fromhex(
+            "001218248833ffff"  # one-cycle TEX0 x SHADE
+            "0000000000000000"  # OtherMode value: point/opaque
+            "0000300000000001"  # writer-owned sample plus alpha-compare masks
+            "00000000"          # opaque blend mode
+            "00000007"          # depth, textured, shaded
+            "00010000"          # reserved, disabled fog, no colors, ordinary UVs
+            "000000000000000000000000"  # zero primitive/environment/blend colors
+        )
+        for name, record in materials.items():
+            with self.subTest(model=label, material=name):
+                self.assertEqual(record[:0x30], expected_state)
+                self.assertEqual(record[0x60:0x8C], bytes(0x2C), "TILE1 must remain empty")
+
+        expected_textures = {
+            "QR_Ceramic": (BODY_TOP_REFERENCE, None, 64, 32),
+            "QR_Resonator": (BODY_BOTTOM_REFERENCE, None, 64, 32),
+            "QR_CobaltLattice": (0, ACCENT_TEXTURE_ROM_PATH, 32, 32),
+        }
+        string_offset = struct.unpack_from(">I", data, 0x18)[0]
+        strings = data[string_offset:]
+        for name, (expected_reference, expected_path, width, height) in expected_textures.items():
+            record = materials[name]
+            reference, path_offset, texture_hash, runtime, actual_width, actual_height = \
+                struct.unpack_from(">IIIIHH", record, 0x34)
+            self.assertEqual(
+                (reference, runtime, actual_width, actual_height),
+                (expected_reference, 0, width, height),
+            )
+            if expected_path is None:
+                self.assertEqual((path_offset, texture_hash), (0, expected_reference))
+            else:
+                end = strings.index(b"\0", path_offset)
+                self.assertEqual(strings[path_offset:end].decode(), expected_path)
+                self.assertEqual(texture_hash, tiny3d_string_hash(expected_path))
+            self.assertEqual(
+                struct.unpack_from(">ffbbBB", record, 0x48),
+                (0.0, float(width - 1), 0, 0, 0, 1),
+            )
+            self.assertEqual(
+                struct.unpack_from(">ffbbBB", record, 0x54),
+                (0.0, float(height - 1), 0, 0, 0, 1),
+            )
+
+    def test_pinned_importer_roundtrips_exact_producible_material_state(self) -> None:
+        build_root = ROOT / "build"
+        build_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="tiny3d-material-", dir=build_root) as temporary:
             stage = Path(temporary)
-            with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as source:
-                source.extractall(stage)
-            importer_dir = stage / "tools" / "gltf_importer"
-            completed = subprocess.run(
-                ["/usr/bin/make", "-C", str(importer_dir), "-j2"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-                timeout=300,
-                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
-            )
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            importer = importer_dir / "gltf_to_t3d"
-            self.assertTrue(importer.is_file())
+            importer = self.build_pinned_importer(stage)
             gltf, asset_path = write_tiny3d_material_probe(stage)
             outputs: list[bytes] = []
             for index in range(2):
@@ -849,47 +902,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
                 self.assertEqual(converted.returncode, 0, converted.stdout + converted.stderr)
                 outputs.append(output.read_bytes())
             self.assertEqual(outputs[0], outputs[1], "pinned importer material output is not deterministic")
-
-            data = outputs[0]
-            materials = tiny3d_material_records(data)
-            self.assertEqual(set(materials), {"QR_Ceramic", "QR_Resonator", "QR_CobaltLattice"})
-            expected_state = bytes.fromhex(
-                "001218248833ffff"  # one-cycle TEX0 x SHADE
-                "0000000000000000"  # OtherMode value: point/opaque
-                "0000300000000001"  # writer-owned sample plus alpha-compare masks
-                "00000000"          # opaque blend mode
-                "00000007"          # depth, textured, shaded
-                "00010000"          # reserved, disabled fog, no colors, ordinary UVs
-                "000000000000000000000000"  # zero primitive/environment/blend colors
-            )
-            for name, record in materials.items():
-                with self.subTest(material=name):
-                    self.assertEqual(record[:0x30], expected_state)
-                    self.assertEqual(record[0x60:0x8C], bytes(0x2C), "TILE1 must remain empty")
-
-            expected_textures = {
-                "QR_Ceramic": (BODY_TOP_REFERENCE, None, 64, 32),
-                "QR_Resonator": (BODY_BOTTOM_REFERENCE, None, 64, 32),
-                "QR_CobaltLattice": (0, ACCENT_TEXTURE_ROM_PATH, 32, 32),
-            }
-            string_offset = struct.unpack_from(">I", data, 0x18)[0]
-            strings = data[string_offset:]
-            for name, (expected_reference, expected_path, width, height) in expected_textures.items():
-                record = materials[name]
-                reference, path_offset, texture_hash, runtime, actual_width, actual_height = \
-                    struct.unpack_from(">IIIIHH", record, 0x34)
-                self.assertEqual((reference, runtime, actual_width, actual_height),
-                                 (expected_reference, 0, width, height))
-                if expected_path is None:
-                    self.assertEqual((path_offset, texture_hash), (0, expected_reference))
-                else:
-                    end = strings.index(b"\0", path_offset)
-                    self.assertEqual(strings[path_offset:end].decode(), expected_path)
-                    self.assertEqual(texture_hash, tiny3d_string_hash(expected_path))
-                self.assertEqual(struct.unpack_from(">ffbbBB", record, 0x48),
-                                 (0.0, float(width - 1), 0, 0, 0, 1))
-                self.assertEqual(struct.unpack_from(">ffbbBB", record, 0x54),
-                                 (0.0, float(height - 1), 0, 0, 0, 1))
+            self.assert_quarrune_material_contract(outputs[0], "synthetic_probe")
 
     def test_exact_two_model_nine_stream_pair_passes_and_reports_decoded_contract(self) -> None:
         values = fixture()
