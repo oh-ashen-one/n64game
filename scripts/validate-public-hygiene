@@ -44,6 +44,9 @@ SAFE_GIT_ENVIRONMENT = {
   "GIT_NO_REPLACE_OBJECTS" => "1",
   "GIT_GRAFT_FILE" => nil
 }.freeze
+NONPUBLIC_WORKSPACE_REF_PREFIXES = %w[
+  refs/codex/turn-diffs/
+].freeze
 TOOLCHAIN_LOCK_PATH = "config/toolchain.lock.json"
 EXPECTED_SUBMODULES = {
   "vendor/libdragon" => {
@@ -654,9 +657,14 @@ def validate_public_ref_roots(root, errors)
   object_roots = []
   commit_roots = []
   output.b.each_line.map(&:chomp).reject(&:empty?).sort.each do |refname|
+    nonpublic_workspace_ref = NONPUBLIC_WORKSPACE_REF_PREFIXES.any? do |prefix|
+      refname.start_with?(prefix)
+    end
     display_name = refname.dup.force_encoding(Encoding::UTF_8)
     display_name = refname.inspect unless display_name.valid_encoding?
-    path_findings(refname).each { |finding| errors << "ref #{display_name}: #{finding}" }
+    unless nonpublic_workspace_ref
+      path_findings(refname).each { |finding| errors << "ref #{display_name}: #{finding}" }
+    end
 
     object, object_error, object_ok = git_capture(
       root, "rev-parse", "--verify", "--quiet", "#{refname}^{object}"
@@ -667,6 +675,11 @@ def validate_public_ref_roots(root, errors)
       detail = object_error.strip.empty? ? "" : ": #{object_error.strip}"
       errors << "ref #{display_name}: cannot resolve public history root object#{detail}"
     end
+
+    # Codex stores local turn-diff snapshots as tree refs. Keep their objects
+    # inside the secret/large-file scan, but do not require these nonpublic UI
+    # snapshots to peel to commits or participate in public path history.
+    next if nonpublic_workspace_ref
 
     commit, _peel_error, peel_ok = git_capture(
       root, "rev-parse", "--verify", "--quiet", "#{refname}^{commit}"
@@ -1746,6 +1759,53 @@ def run_public_hygiene_self_tests
           message.include?("does not recursively peel to a commit")
       end,
       "fails closed when a public ref roots history at a standalone tree",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe Codex-local snapshot baseline")
+    tree_out, tree_error, tree_ok = git_capture(root, "rev-parse", "HEAD^{tree}")
+    raise "cannot resolve Codex-local snapshot fixture tree: #{tree_error}" unless tree_ok
+    fixture_git!(
+      root,
+      "update-ref",
+      "refs/codex/turn-diffs/captures/self-test/base",
+      tree_out.strip
+    )
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.empty?,
+      "accepts a safe Codex-local tree snapshot without treating it as public commit history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe Codex-local scan baseline")
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "credential=#{token}\n"
+    )
+    raise "cannot create Codex-local secret fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\tsnapshot.txt\0"
+    )
+    raise "cannot create Codex-local secret fixture tree: #{tree_error}" unless tree_ok
+    refname = "refs/codex/turn-diffs/captures/self-test/base"
+    fixture_git!(root, "update-ref", refname, tree_out.strip)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history blob") && message.include?("possible GitHub token")
+      end && errors.none? do |message|
+        message.include?(refname) && message.include?("does not recursively peel to a commit")
+      end,
+      "scans Codex-local snapshot objects without classifying their tree ref as public history",
       errors.join("; ")
     )
   end
