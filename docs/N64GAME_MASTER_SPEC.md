@@ -1,399 +1,305 @@
-# N64GAME Master Production Prompt
+# N64GAME One-Week Master Production Prompt
 
-This document is the authoritative execution contract for `n64game`. It is intentionally comprehensive. Any short goal prompt, chat message, task description, or progress summary is subordinate to this file unless the user explicitly changes a requirement. Read this document completely before planning, coding, generating assets, evaluating completion, or delegating work.
+This document is the authoritative execution contract for `n64game`. It remains intentionally more detailed than the short `/goal` launcher. Read it completely before planning, coding, generating assets, evaluating completion, or delegating work.
+
+Revision authority: on 2026-07-19 the user explicitly asked to shrink the project so a finished release could be delivered within the remaining one-week usage window. This revision replaces the former 18–25 minute, two-location, two-battle opening. Where older preproduction documents describe that larger plan, this document wins. Preserve useful compatible work, but do not spend the one-week window implementing or mechanically rewriting out-of-scope content.
 
 ## 1. Mission and Definition of Done
 
-Create a polished, original-IP Nintendo 64 game with a genuine 18–25 minute first-time playthrough. The result must feel like a small finished commercial-quality game opening, not a prototype, technical demo, greybox, asset test, or collection of disconnected systems.
+Create a polished, original-IP Nintendo 64 game with a genuine 6–8 minute first-time playthrough. The result is a complete small opening chapter: one finished explorable destination, one complete 2v2 battle, a resolved immediate objective, and a strong corruption-related hook. It must feel authored and release-ready, not like a greybox, disconnected systems demo, asset test, or 20%-finished larger game.
 
-The public repository must be:
+The public repository is:
 
 - GitHub: `https://github.com/oh-ashen-one/n64game`
 - Local checkout: `/Users/midir/Documents/New project 8`
 - Default branch: `main`
-- Repository visibility: public
+- Visibility: public
 
-The game must run as an N64 ROM in Ares 148 Homebrew Mode, provide two complete playable battles, two complete explorable destinations, a world-map transition, a companion-return sequence, a resolved opening objective, and a final corruption-related story hook. A compiled ROM alone is not completion. A 20%-finished game, a “vertical slice” containing placeholders, or a polished room surrounded by unfinished content is not completion.
+The release must run as an N64 ROM in Ares 148 Homebrew Mode and include a polished boot/loading presentation, the approved `INSERT CUTSCENE HERE` slot, 1–8 character name entry, analog exploration, dialogue, one complete 2v2 Resonance battle, defeat/retry, save/load, a stable ending, and the user-facing GPT Image storyboard package.
 
-Quality takes priority over speed. Do not shorten the experience, simplify the visual promise, reduce asset quality, or silently remove a system to finish sooner. If a locked requirement is genuinely impossible because of N64 hardware, licensing, or unavailable authority, collect evidence, explain the exact conflict, and ask the user. Never reduce scope silently.
+Scope is reduced by cutting breadth, never finish quality. This release does **not** include Veyra Observatory Estate, a world map, Rusk/Ivo, a second battle, a companion-follow system, an elevator network, or the old missing-person round trip. Do not leave doors, menus, dialogue, or UI that falsely promise those systems. They may be future work only after this release is complete.
 
 ## 2. Authoritative References and Clean-Room Boundary
 
-Study these sources deeply before production:
+The engineering and presentation references remain:
 
-1. Pandemonium v0.71 release: `https://github.com/Boxingbruin/Pandemonium/releases/tag/v0.71`
+1. Pandemonium v0.71: `https://github.com/Boxingbruin/Pandemonium/releases/tag/v0.71`
 2. Shared Pandemonium Drive folder: `https://drive.google.com/drive/folders/1C1MZRS5iU9Pia12RhdLhsx9giqJ6z4TF`
 3. Tiny3D: `https://github.com/HailToDodongo/tiny3d`
-4. The opening 20 minutes of Pokémon XD: Gale of Darkness, using gameplay footage and walkthroughs to understand pacing and functional beats.
+4. The opening rhythm of Pokémon XD: Gale of Darkness, used only to study pacing and presentation.
 
-Record reference findings in `docs/reference-study.md`, covering presentation, loading screens, cinematics, environment density, player control, animation coverage, battle staging, camera work, UI cadence, asset conversion, memory management, and technical architecture.
+Use recorded findings in `docs/reference-study.md`. Do not repeat broad research unless a concrete implementation question requires it.
 
-These references are inspiration and engineering research, not source material to copy:
+These are references, not content sources:
 
-- Implement original code from a clean Tiny3D/libdragon foundation. Do not copy, closely paraphrase, or translate Pandemonium GPL code into this MIT-licensed project.
-- Do not reuse Pandemonium art, models, textures, animation, music, sound, writing, or other protected assets. Its asset license permits viewing and preservation builds, not incorporation into a new game.
-- Do not copy Pokémon names, creatures, recognizable silhouettes, characters, dialogue, map layouts, logos, UI, music, animations, story expression, terminology, or branded mechanics.
-- Downloaded reference material must remain outside the public repository.
-- Every production asset must have ownership and provenance recorded before public release.
-
-The project may follow Pokémon XD’s high-level opening rhythm—abduction mystery, name entry, simulated battle, research base, missing-person errand, second location, mistaken-intruder battle, reunion, return, and larger threat—while expressing every detail through an original world and original audiovisual design.
+- Implement original code on libdragon/Tiny3D. Do not copy or translate Pandemonium GPL code into this MIT project.
+- Do not reuse Pandemonium or Pokémon art, models, textures, animation, audio, writing, names, layouts, UI, story expression, or branded mechanics.
+- Keep downloaded reference material outside the public repository.
+- Record provenance and rights for every released asset.
+- All characters, Echoforms, locations, factions, props, dialogue, and audiovisual expression must be original.
 
 ## 3. Locked Creative Direction
 
 Working ROM title: `N64GAME`.
 
-Art direction: retro desert science fiction with the confident, authored low-poly presentation of a late-1990s/early-2000s console RPG. Use sun-bleached stone, ochre dust, oxidized metal, dark teal machinery, warm practical lights, cobalt night shadows, and controlled magenta-violet corruption accents. Shapes should combine chunky field equipment, analog screens, sweeping observatory geometry, cloth shade structures, antennae, ceramic panels, and readable creature silhouettes.
+Art direction: authored late-1990s/early-2000s console RPG presentation in a retro desert-science-fiction world. Use sun-bleached ceramic, ochre dust, oxidized metal, dark teal machinery, warm practical lights, cobalt shadows, and controlled magenta-violet Fracture accents. Environments should combine analog research equipment, cloth shade, antennae, layered ceramic panels, readable signage icons, and purposeful wear.
 
 World vocabulary:
 
-- Creatures are called **Echoforms**.
-- The relationship energy shared by a trainer and team is **Resonance**.
-- Corrupted Echoforms are **Fractured**.
-- The home location is **Meridian Research Annex**.
-- The second destination is **Veyra Observatory Estate**.
-- The hostile organization teased in the opening is **the Severance**.
-- The customizable protagonist has no voiced name; the default entry is `ARI`.
-- The missing younger companion is **Tavi**.
-- The research guardian is **Dr. Sera Venn**.
-- The Annex director is **Director Oren Saye**.
-- The eccentric inventor is **Ivo Veyra**.
-- The estate assistant and mistaken-intruder opponent is **Rusk**.
+- Creatures: **Echoforms**
+- Cooperative trainer/team energy: **Resonance**
+- Corrupted Echoforms: **Fractured**
+- Playable location: **Meridian Research Annex**
+- Hostile organization: **the Severance**
+- Research carrier: **Solace**
+- Default protagonist name: `ARI`
+- Research guardian: **Dr. Sera Venn**
+- Younger Annex resident: **Tavi**
 
-The opening cinematic depicts the Severance intercepting the research carrier **Solace** above the desert at dusk. A colossal Fractured Echoform bends light and gravity around the carrier while glider craft attach restraint lines. The Solace vanishes into a violet storm, leaving one emergency beacon falling toward the wastes. The cinematic cuts to the player-name interface and battle simulation.
+The cinematic premise remains: Severance gliders intercept Solace over the desert at dusk while a colossal Fractured Echoform bends light and gravity. Solace disappears into a violet storm and one emergency beacon falls toward the wastes. Do not create the final video in this goal. Reserve its exact playback point and provide a coherent storyboard for the user’s later AI-video animation.
 
-Do not make the final cinematic video during this goal. The game must reserve its exact playback point and the storyboard package must enable the user to create the AI video later.
+## 4. Locked 6–8 Minute Experience
 
-## 4. Locked 20-Minute Experience
+Measure from cold boot to the stable end screen. The temporary slate counts for at most five seconds. A normal first-time playthrough must take 6–8 minutes excluding idle time, with at least four minutes of player control. Dialogue may not pad runtime.
 
-Measure playtime from cold boot to the end of the closing hook. The temporary cinematic slate counts for no more than five seconds. A normal first-time playthrough must take 18–25 minutes, excluding time spent idling. At least 15 minutes must be player-controlled gameplay. Dialogue cannot be bloated to reach the runtime.
+### Segment A — Boot, Loading, and Cinematic Slot (0:00–0:25)
 
-### Segment A — Boot, Loading Presentation, and Cinematic Slot (0:00–0:30)
+- Show an original studio/game mark and branded loading treatment that hides only real work.
+- Fade to a polished 4:3 slate reading exactly `INSERT CUTSCENE HERE`.
+- Hold for three seconds or allow A/Start to skip immediately.
+- Watched and skipped paths set the same `opening_cinematic_seen` flag and reach name entry safely.
+- The slate is the only intentionally temporary visual allowed in the accepted ROM.
 
-- Display an original studio/game mark and an attractive branded loading treatment that hides only real loading work.
-- Fade into a polished 4:3 slate reading `INSERT CUTSCENE HERE`.
-- Hold the slate for three seconds or allow A/Start to skip immediately.
-- Whether watched or skipped, set the same `opening_cinematic_seen` flag and continue safely to name entry.
-- Use final UI styling, transitions, sound cue, and color treatment. The slate is the only intentionally temporary visual allowed in the accepted build.
+### Segment B — Name Entry and Annex Arrival (0:25–1:20)
 
-### Segment B — Name Entry and Battle Simulation (0:30–4:30)
+- Provide a final-styled 1–8 uppercase character name interface with default `ARI`, backspace, confirmation, and cancel protection.
+- Transition into the Meridian Research Annex with a short authored camera reveal.
+- Dr. Sera Venn welcomes `{PLAYER}` and identifies Tavi at the observation rail.
+- Quarrune and Ayselor are introduced in-world as the player’s real team; they are not granted through a debug menu.
 
-- Present a polished character-name interface supporting 1–8 uppercase characters, backspace, default `ARI`, confirmation, and cancel protection.
-- Enter a visually complete simulation arena with a short camera fly-in.
-- Run a scripted but interactive 2v2 tutorial using four loaned Echoforms.
-- Teach command selection, legal target selection, move information, turn order, HP, effectiveness feedback, Resonance gain, and one duo finisher.
-- The tutorial must accept reasonable alternate commands while guaranteeing that the player learns the required actions.
-- Losing or reaching an impossible state restarts the simulation cleanly; it never corrupts story progress.
-- End with the arena dissolving into the Meridian Research Annex simulation chamber.
+### Segment C — Focused Annex Exploration (1:20–3:00)
 
-### Segment C — Meridian Research Annex (4:30–10:30)
+- Give the player free control through one coherent, finished Annex environment containing a simulation chamber, central research atrium, compact workshop/relay station, and exterior beacon overlook. These may be connected sectors of one scene.
+- Support analog walk/run, stable camera, collision, two concise required conversations, at least four optional examine points, pause, party view, control help, and save.
+- The immediate objective is to retrieve and calibrate the **Field Relay**. It exposes Party, Messages, Resonance, and Save; it does not expose a disabled world map.
+- Tavi and Sera use staged idle/talk/reaction animation. Navigation must remain clear without invisible corridors or intrusive quest arrows.
+- Activating the calibrated relay opens the simulation chamber and starts the required battle.
 
-- Return control in a complete two-level research outpost containing the simulation room, central atrium, director’s lab, player room, clinic/creature bay, workshop, elevator, exterior threshold, and optional examine points.
-- Introduce Dr. Sera Venn and Director Oren Saye through concise dialogue and staged character animation.
-- Reveal the player’s real two-Echoform starter team; the starters must be visible in the world or presented through an authored onboarding sequence.
-- Send the player to retrieve the **Field Relay**, the project’s handheld interface for party, messages, Resonance records, and map destinations.
-- Let the player explore, speak to optional NPCs, inspect props, learn controls, save, pause, and view the party.
-- Establish that Tavi left during a hide-and-seek errand and may be at Veyra Observatory Estate.
-- Unlock the estate on the world map and guide the player to the outpost exit without an invisible forced corridor.
+### Segment D — Complete 2v2 Resonance Battle (3:00–6:20)
 
-### Segment D — World Map and Estate Arrival (10:30–11:30)
+- Use the persistent player pair Quarrune and Ayselor against simulation opponents Gyreclast and Kivarrax. These are the only four required battle-capable Echoforms for this release.
+- Establish all four actors with a short camera fly-in and readable battle staging.
+- Teach command selection, legal targets, move information, speed order, HP, affinity feedback, partner support, Resonance gain, and the `Horizon Break` duo finisher while retaining reasonable player agency.
+- Each Echoform has four data-driven moves. The player can win through multiple legal strategies; enemy AI chooses understandable legal actions and demonstrates one support interaction.
+- Include intro, command/target selection, queue construction, animation/VFX/audio presentation, damage/status resolution, knockout, victory/defeat, and exit.
+- Defeat restores a pre-battle snapshot and offers Retry or Return to Annex. Retrying never duplicates rewards or flags. The tutorial may gently bias the encounter but may not fake unearned inputs or silently prevent legal choices.
+- Victory applies progression once, restores a sensible post-battle state, and returns control to the Annex.
 
-- Transition through a responsive original desert map with the Annex and Estate as visible nodes.
-- Selecting the Estate shows a short travel animation and branded loading transition.
-- Preserve player name, party, settings, quest state, HP rules, and save state across the transition.
+### Segment E — Beacon Hook and Stable Ending (6:20–8:00)
 
-### Segment E — Veyra Observatory Estate and Real Battle (11:30–16:30)
+- The calibrated Field Relay receives the Solace emergency-beacon signature.
+- Sera, Tavi, the player, Quarrune, and Ayselor stage a concise reaction at the exterior overlook or Resonance monitor.
+- A violet Fracture pulse briefly interrupts the Annex instruments; do not reveal an unfinished creature model in gameplay.
+- Save the completed state, display an authored `END OF OPENING CHAPTER` treatment, and return to a stable title/post-chapter menu.
+- The immediate objective—calibrate the relay and complete the Resonance trial—is resolved. The Solace beacon is the future-story hook, not a broken doorway.
 
-- Provide a complete exterior courtyard with observatory landmark, kinetic invention props, fountain or energy apparatus, vegetation/dust dressing, strong navigation, and environmental storytelling.
-- Rusk mistakes the player for a Severance intruder. Use blocking, facial/body animation, camera cuts, and concise dialogue before battle.
-- Run the first real 2v2 battle using the player’s actual starter team against Rusk’s two Echoforms.
-- The player can win through multiple valid command choices. Enemy AI must choose legal, understandable actions and demonstrate one support interaction.
-- Support victory, defeat, retry, pause, camera transitions, animation/VFX/audio synchronization, experience or progression feedback, and correct post-battle state.
-- On defeat, restore the pre-battle snapshot and offer Retry or Return to Annex. Retry must not duplicate rewards or flags.
-
-### Segment F — Estate Interior and Reunion (16:30–20:30)
-
-- After victory, Rusk apologizes and opens the estate.
-- Include a foyer/gallery, invention hall, observatory study, and Tavi’s discovery scene with Ivo Veyra.
-- Allow optional inspection of several eccentric inventions and environmental details.
-- Tavi joins as a visible following companion. The follower must navigate doors, avoid obvious clipping, recover from separation, and never block the player.
-- Return through the world map to Meridian Research Annex.
-
-### Segment G — Resolution and Hook (20:30–23:00 target, variable by player)
-
-- Resolve the missing-person objective with Dr. Sera Venn and Director Oren Saye.
-- Deliver a new Field Relay message containing the Solace emergency beacon signature.
-- Briefly show a Resonance monitor reacting to an unknown Fractured Echoform.
-- Save progress, display a final authored title/hook screen, and return to a stable menu or post-slice state.
-- Do not promise inaccessible content through a broken door or crash. A tasteful `End of opening chapter` treatment is acceptable.
-
-The segment estimates are pacing targets, not forced timers. Three first-playthrough-style certification runs must have a median between 18 and 25 minutes.
+Two first-playthrough-style certification runs must each fall between 6 and 10 minutes, with a median between 6 and 8 minutes.
 
 ## 5. Gameplay and Data Contract
 
 ### Exploration
 
-Implement analog movement, acceleration/deceleration, authored idle/walk/run animation, a stable follow camera, camera collision or safe clamping, world collision, slopes/steps appropriate to the environments, interaction prompts, doors, elevators, dialogue, examine points, pause/resume, controller reconnect handling, companion following, loading transitions, and world-map travel.
+Implement analog movement, acceleration/deceleration, authored idle/walk/run animation, stable follow camera, safe camera clamping/collision, world collision, appropriate slopes/steps, interaction prompts, dialogue, examine points, pause/resume, controller reconnect handling, and honest loading transitions.
 
-The player must not become trapped behind props, fall outside collision, lose control after dialogue, or trigger a scene twice. All mandatory interaction targets require clear visual composition and prompt placement without intrusive arrows covering the screen.
+The player must not become trapped behind props, leave collision, lose control after dialogue, trigger one-shot scenes twice, or save a half-applied transition. Required interaction targets need strong visual composition and readable prompts at 320×240.
 
 ### Battle
 
-Use a deterministic state machine with these phases: intro, command selection, target selection, turn queue construction, action presentation, damage/status resolution, knockout replacement if applicable, round cleanup, victory/defeat, and exit.
+Use a deterministic state machine with intro, command selection, target selection, turn queue, presentation, damage/status resolution, round cleanup, victory/defeat, and exit.
 
 Required mechanics:
 
-- Two active Echoforms per side.
-- Four moves per creature, with at least one attack, one support or debuff option, and differentiated target rules.
-- Speed-based order with stable tie-breaking.
-- Legal target validation and graceful recovery if a target becomes invalid.
-- HP, damage, simple affinity/effectiveness, one temporary status family, knockout, and battle-end detection.
-- Enemy AI that scores legal moves and targets without cheating.
-- Shared player Resonance meter earned through complementary actions and successful play.
-- A duo finisher that requires full Resonance, uses both active creatures, has a bespoke camera/animation/VFX sequence, and cannot fire in invalid states.
-- Tutorial gates that teach without disabling all agency.
-- Complete animation, VFX, UI, and audio synchronization.
+- Two active Echoforms per side and no reserve slots.
+- Four moves per creature, including damage and support/debuff choices with differentiated target rules.
+- Speed order with stable tie-breaking and legal-target recovery.
+- HP, damage, simple affinities, one temporary status family, knockout, and battle-end detection.
+- Enemy AI that scores legal moves/targets without hidden information.
+- Shared Resonance earned by complementary play.
+- `Horizon Break`, requiring both allies conscious and full Resonance, with bespoke camera, animation, VFX, and audio.
+- Complete synchronization between logic, animation, VFX, UI, and audio.
 
-Create data-driven definitions for creatures, moves, encounters, dialogue, and story flags. Gameplay logic may not depend on asset filenames scattered through scene code.
+Definitions for Echoforms, moves, encounter, dialogue, and flags must be data-driven. Scene code may not scatter asset filenames or story constants.
 
 ### Save Data
 
-Use EEPROM4K with a versioned, checksummed schema containing player name, settings, current location, party composition, party HP/progression, Field Relay unlock, completed tutorial, battle rewards, story flags, cinematic-seen flag, and slice-complete flag. Write safely, detect invalid or incompatible data, and fall back to a new-game path without crashing. Debounce writes and never save a half-applied transition.
+Use EEPROM4K with a versioned checksummed schema containing name, settings, Annex checkpoint, party composition/HP/progression, Relay unlock, battle result/reward state, cinematic flag, and slice-complete flag. Invalid/incompatible data falls back safely to New Game. Debounce writes.
 
-Required behavior must be defined and tested for dialogue skipping, slate skipping, losing either battle, retrying, loading mid-arc, controller disconnects, invalid saves, revisiting rooms, repeated world-map travel, and attempting completed objectives again.
+Test slate skipping, battle defeat/retry, save/reboot/resume, controller disconnect, invalid saves, repeated interactions, and re-entering the completed state.
 
 ## 6. Technical Architecture
 
-Use libdragon preview and Tiny3D with original project code. Initial dependency pins:
+Use the existing pinned foundation:
 
-- libdragon preview: `f13b48985edbf4310f07779c76d9a68c7605037b`
-- Tiny3D main: `e84172f29f719680ac3213a7f408c2f721ef7b24`
-- libdragon CLI: `12.2.1`
-- primary emulator certification target: Ares 148 with Homebrew Mode enabled
-
-If a pin cannot build together, record the exact incompatibility and move to a mutually compatible explicit commit set. Never float production dependencies on `latest` or an unpinned branch.
+- libdragon preview `f13b48985edbf4310f07779c76d9a68c7605037b`
+- Tiny3D `e84172f29f719680ac3213a7f408c2f721ef7b24`
+- libdragon CLI `12.2.1`
+- Ares 148 Homebrew Mode certification target
 
 Targets:
 
-- Standard 4 MB Nintendo 64; no Expansion Pak requirement.
-- 320×240 output, 16-bit color, triple buffering.
-- 30 FPS target during exploration and battles, with no sustained sequence below the approved budget.
+- Standard 4 MB N64; no Expansion Pak requirement.
+- 320×240, 16-bit color, triple buffering.
+- 30 FPS target with no sustained approved sequence below budget.
 - EEPROM4K saves.
-- ROM target below 16 MiB; hard ceiling 32 MiB only if evidence shows the original target cannot retain required quality.
-- At least 512 KiB free heap at the measured peak.
-- No persistent heap reduction across twenty complete scene-transition loops.
+- ROM below 16 MiB; 32 MiB hard ceiling only with evidence.
+- At least 512 KiB free heap at measured peak.
+- No persistent heap reduction across ten complete title/Annex/battle transition loops.
 
-Use a scene controller with explicit `enter`, `update`, `fixed_update`, `draw`, and `exit` ownership. Scene-owned models, matrices, display lists, skeletons, animations, sprites, and audio handles must be released during exit after appropriate RSP/RDP synchronization. Use scene arenas or equivalent ownership accounting so leaks and double frees are visible.
+Use explicit scene lifecycle ownership (`enter`, `update`, `fixed_update`, `draw`, `exit`). Scene-owned models, matrices, blocks, skeletons, sprites, and audio must synchronize and release safely. Preserve the reviewed Quarrune CI8 split-upload/TLUT/runtime-lifetime contract.
 
-Define stable interfaces equivalent to:
+Stable data interfaces include `GameScene`, `GameState`, `CutsceneEvent`, `CreatureDef`, `MoveDef`, `BattleActor`, `BattleState`, `DialogueNode`, and fixed-width `SaveData` without runtime pointers.
 
-- `GameScene`: lifecycle callbacks and scene identifier.
-- `GameState`: global progression, transition request, settings, and save snapshot.
-- `CutsceneEvent`: timestamp/type/payload records for camera, animation, dialogue, fade, audio, and flags.
-- `CreatureDef`: identity, stats, affinity, model, animation set, moves, portrait, and audio.
-- `MoveDef`: targeting, power/effect, Resonance contribution, animation, VFX, and audio.
-- `BattleActor` and `BattleState`: runtime combat state separated from immutable definitions.
-- `DialogueNode`: speaker, text, next node, optional condition, optional action.
-- `SaveData`: fixed-width versioned serialization independent of runtime pointers.
-
-Use Docker Desktop and libdragon CLI for reproducible local builds. Provide scripts for toolchain bootstrap checks, clean build, ROM build, Ares launch, asset validation, and checksum creation. GitHub Actions must perform a fresh public build and upload the `.z64`, SHA-256 checksum, map/size report, and validation summary as artifacts.
-
-Do not commit generated build directories or ROM binaries to normal Git history. Use Git LFS only for appropriate editable binary sources such as `.blend`, selected `.glb`, and lossless source audio; keep optimized runtime outputs reproducible from sources.
+Provide reproducible Docker/libdragon scripts, clean ROM builds, asset validation, Ares launch, checksums, and public CI artifacts. Never commit ROMs or build directories to ordinary Git. Use Git LFS only for appropriate editable binary sources and keep runtime outputs reproducible.
 
 ## 7. Art Direction and Anti-Slop Contract
 
-The visual-quality bar is non-negotiable. The game must resemble an actual carefully authored release comparable in care, density, atmosphere, animation coverage, and presentation to the Pandemonium reference. It does not need to imitate Pandemonium’s dark-fantasy style. “N64 low-poly” is a technical and aesthetic constraint, not permission for crude shapes, generic generated characters, default materials, flat lighting, empty rooms, stiff animation, or unfinished presentation.
+Visual quality remains non-negotiable. The game should resemble an actual carefully authored console release in composition, density, animation, lighting, and presentation. “N64 low-poly” is not permission for crude primitives, generic generated characters, default materials, flat lighting, empty rooms, stiff animation, noisy AI textures, or unfinished UI.
 
-Before mass asset production, create `docs/ART_BIBLE.md` containing:
+`docs/ART_BIBLE.md` remains the style authority where compatible with this reduced roster. Existing full-game rows outside the release inventory are future reference, not release obligations.
 
-- Shape language for humans, Echoforms, Severance technology, Annex equipment, and Veyra inventions.
-- Character and creature proportion rules.
-- Palette with environment, skin/fabric/metal, UI, Resonance, and Fracture swatches.
-- Material and vertex-color rules.
-- Texture-density and resolution rules.
-- Lighting, shadow, fog, and color-grading approach.
-- UI typography, panels, icons, spacing, and 4:3 safe-area rules.
-- VFX rules for hits, support moves, Resonance, Fracture, transitions, and loading.
-- Animation principles, pose clarity, anticipation, impact, recovery, and idle personality.
-- Scale chart and gameplay-camera readability examples.
-- Explicit good/bad examples and prohibited shortcuts.
+Every production model requires an original readable silhouette, purposeful topology, clean normals, deliberate UVs, consistent texel density, authored vertex colors/materials, correct scale, meaningful naming, efficient rigging where needed, and no visible generation defects. Optimize for N64 limits without destroying the design.
 
-### Asset Standards
+Suggested visible budgets remain approximately 700–1,200 triangles for hero humanoids, 700–1,500 for battle Echoforms, and 20–400 for ordinary props. Primarily use 32×32 and 64×64 textures, split only when a visual benchmark proves the need. Use vertex colors for form and material richness.
 
-Every production model must have a distinctive original silhouette, purposeful topology, clean normals, deliberate UVs, consistent texel density, authored vertex colors/materials, readable features, correct scale, meaningful naming, an efficient rig where required, and no visible generation defects. Optimize for N64 limitations without destroying the design.
+### Reduced Release Inventory
 
-Suggested starting budgets, to be validated in the representative benchmark:
+Produce and track only what the release needs:
 
-- Player and hero NPCs: roughly 700–1,200 visible triangles.
-- Supporting NPCs: roughly 450–900 visible triangles.
-- Battle Echoforms: roughly 700–1,500 visible triangles depending on silhouette and effects.
-- Small props: roughly 20–400 triangles; landmark props may exceed this when justified.
-- Keep visible scene complexity within the verified 30 FPS and memory budget using culling, segmentation, and disciplined material/texture use.
+- One player model with exploration, dialogue, command, reaction, and ending coverage.
+- Dr. Sera Venn and Tavi with authored idle, talk, gesture, reaction, and scene performances.
+- Four polished battle-capable Echoforms: Quarrune, Ayselor, Gyreclast, and Kivarrax.
+- One coherent Meridian Annex environment with four connected functional sectors: simulation chamber, atrium, relay workshop, and exterior overlook.
+- At least twelve purposeful props distributed for composition, navigation, and storytelling.
+- Complete title/loading, name-entry, dialogue, pause, party, Field Relay, battle, save, result, and end-chapter UI.
+- VFX/audio for all implemented moves, Resonance, `Horizon Break`, Annex ambience, dust, loading/transitions, beacon hook, and feedback.
+- Portraits/icons required by the selected UI direction.
 
-Textures should primarily use 32×32 and 64×64 sources, with larger or split textures only when a visual benchmark proves the need and performance remains compliant. Use vertex colors to add form, material variation, and lighting richness. Do not hide weak modeling beneath noisy AI textures.
+Do not build the old Estate, world map, extra four Echoforms, Rusk/Ivo/Oren/supporting cast, follower system, or their assets during this release.
 
-### Required Production Inventory
+Minimum humanoid animation: idle variations, walk/run for the player, direction handling, interaction, talk gestures, reaction, battle command where applicable, and locked story poses.
 
-At minimum, produce and track:
+Minimum Echoform animation: idle variations, entrance, reposition, at least two move performances, support, hit, knockout, victory, and duo-finisher participation where applicable. Reuse is allowed only when anatomically and directionally intentional.
 
-- One customizable-name player model with complete exploration and dialogue animation coverage.
-- Tavi, Dr. Sera Venn, Director Oren Saye, Ivo Veyra, Rusk, and at least three supporting Annex NPCs.
-- Eight polished battle-capable Echoforms: two real starters, two player-side simulation loaners, two simulation opponents, and two estate opponents.
-- Meridian Annex exterior threshold and complete two-level interior set.
-- Veyra Estate courtyard/exterior plus complete foyer, invention hall, and observatory study.
-- An original world map and location-node presentation.
-- At least 25 purposeful environment props across the two destinations.
-- Complete dialogue, pause, Field Relay, battle, loading, save, name-entry, and result UI.
-- Battle and environment VFX for all implemented moves, Resonance, duo finisher, Fracture hook, dust, transitions, and feedback.
-- Portraits/icons as required by the selected UI direction.
+### Asset Quality Gates
 
-Minimum humanoid animation coverage: idle variations, walk, run, turn or direction handling, interaction, talk gestures, reaction, battle-command pose where applicable, and scene-specific performances.
+Keep the established seven-gate pipeline because its infrastructure already exists; reduce asset count instead of weakening quality:
 
-Minimum Echoform animation coverage: idle variations, entrance, locomotion or repositioning, at least two distinct move performances, support performance where applicable, hit reaction, knockout, victory, and participation in the duo finisher. Reusing an animation is permitted only when it remains visually intentional and anatomically correct.
+1. Concept/orthographic and palette review.
+2. Blender topology, normals, UV, scale, rig, and deformation review.
+3. Textured turntable review.
+4. Animation timing/clipping/weight review.
+5. Tiny3D conversion review with no unexplained warning.
+6. In-engine 320×240 camera, lighting, memory, and performance review.
+7. Final consistency review after integration.
 
-### Asset Review Gates
+Hero assets require two deliberate post-integration polish passes. Reviews may be batched into evidence packets and need not be redundantly repeated after an unchanged passing artifact. Raw image-generation output is never shipped uncritically. Correct anatomy, identity drift, malformed geometry, fake text, perspective errors, palette drift, and baked-lighting mistakes before production use.
 
-Image generation may be used for concept exploration, orthographic sheets, texture source material, portraits, UI motifs, color scripts, and storyboards. Raw generated output must never be dropped into the game uncritically. Remove malformed anatomy, random detail, fake text, inconsistent costume elements, perspective errors, lighting baked into the wrong texture, and identity drift. Translate approved concepts into purpose-built Blender models.
-
-Every major asset must pass all seven gates:
-
-1. Concept and orthographic review: front/side/back or equivalent construction information, palette, materials, and readable silhouette.
-2. Blender technical review: topology, normals, UVs, scale, origin, naming, rig, weights, and deformation.
-3. Textured turntable review: attractive from all major angles under neutral and representative lighting.
-4. Animation review: expressive timing, no unacceptable clipping, foot sliding, broken weights, or dead poses.
-5. Tiny3D conversion review: correct materials, textures, skeletons, animation playback, and no converter warnings left unexplained.
-6. In-engine review: correct appearance under real gameplay cameras, resolution, lighting, culling, memory, and performance.
-7. Final consistency review: matches the art bible and surrounding cast/environment after integration.
-
-Require at least two deliberate polish passes after the first in-engine appearance of each hero asset. Reject and rebuild assets that are generic, anatomically broken, visually inconsistent, unexpressive, poorly textured, under-detailed for their camera distance, or attractive from only one angle.
-
-Greybox primitives and temporary materials are allowed only during tracked development milestones. Before acceptance, search the repository and game for every placeholder marker and visually inspect every scene. Remove all temporary content except the explicitly approved `INSERT CUTSCENE HERE` slate.
-
-Maintain `docs/ASSET_LEDGER.md` with asset ID, owner, source prompt or source file, transformations, license, Blender source, runtime output, review status, and reviewer evidence. Maintain turntables and representative in-engine captures under an organized review directory without bloating runtime assets.
+Maintain `docs/ASSET_LEDGER.md` and review evidence. Remove every placeholder before acceptance except the approved cutscene slate.
 
 ## 8. Storyboard and Future Cutscene Handoff
 
-The opening-cinematic storyboard is a required user-facing deliverable. Generate it with GPT Image only after the art bible and hero designs are stable enough to preserve continuity. The storyboard must use original designs and match the final game’s visual language.
+The opening storyboard remains a required direct user deliverable. Generate it with GPT Image after the continuity designs are stable.
 
 Create:
 
-- Eighteen numbered high-resolution 4:3 storyboard panels.
+- Twelve numbered high-resolution 4:3 panels, minimum 1600×1200.
 - Individual panel files in story order.
-- One high-resolution contact sheet with readable panel numbers.
+- One high-resolution numbered contact sheet.
 - `storyboard/opening/SHOT_LIST.md`.
-- A continuity sheet for protagonist-related visual context, Severance figures, the colossal Fractured Echoform, Solace carrier, glider craft, and key environment elements.
-- A concise color script showing the progression from warm desert dusk to violet Fracture storm to cool simulation interface.
+- One continuity sheet covering Solace, Severance figures, gliders, the colossal Fractured Echoform, beacon, and desert sky.
+- One concise warm-dusk-to-violet-storm-to-cool-interface color script.
 
-The panels must collectively establish the Solace, its research purpose, the desert scale, the Severance interception, the colossal creature’s power, the crew’s danger, the falling beacon, and the visual transition into name entry/battle simulation. They must form an animatable sequence, not eighteen unrelated illustrations.
+The twelve panels must form one animatable 45–60 second sequence establishing Solace, desert scale, interception, restraint lines, Fracture distortion, crew danger, the falling beacon, and transition into name entry. They cannot be unrelated illustrations.
 
-For every shot, the shot list must specify:
+Each shot-list row specifies duration, framing/lens, camera height/movement, blocking/action, performance, lighting/color/atmosphere, transition, audio intent, and CRT-safe 4:3 notes. Document the future ROM asset path, audio pairing, playback callback, skip behavior, and state handoff that replace the temporary slate.
 
-- Panel and shot number.
-- Intended duration and total target runtime.
-- Framing, virtual lens, camera height, and camera movement.
-- Subject blocking and action.
-- Character/creature performance.
-- Lighting, color, atmosphere, and continuity notes.
-- Transition in/out.
-- Dialogue or on-screen text, if any.
-- Sound design and music intent.
-- 320×240 and CRT-safe framing notes.
-
-Target a future cutscene length of 60–90 seconds. The eventual playback format will be selected during video integration, but framing must be designed natively for 4:3 N64 presentation. Clearly document the exact ROM asset path, expected audio pairing, playback callback, skip behavior, and state handoff that will replace the temporary slate.
-
-Visually inspect every generated panel. Identity changes, malformed anatomy, incoherent action, unreadable staging, fake text, vehicle redesigns between panels, palette drift, or incorrect aspect ratio are failures. Regenerate or edit failed panels before delivery. Provide the final storyboard files to the user directly at handoff; merely committing prompts is insufficient.
+Visually inspect every panel. Regenerate or edit identity changes, malformed forms, incoherent action, unreadable staging, fake text, vehicle redesign, palette drift, and wrong aspect ratio. Deliver actual final image files to the user, not prompts alone.
 
 ## 9. Audio, UI, Loading, and Presentation
 
-Create an original cohesive audio identity. Use compressed mono or otherwise N64-appropriate sources, typically around 22 kHz where suitable. Provide separate music treatment for title/loading, simulation battle, Annex exploration, Estate exploration, real battle, victory, and closing hook, while reusing motifs intentionally. Include footsteps, UI feedback, doors/elevator, ambient machinery, creature vocals, every move, impacts, Resonance, duo finisher, battle transitions, and save feedback.
+Create a cohesive original audio identity with N64-appropriate mono sources, normally around 22 kHz where suitable. Required cue families: boot/loading, Annex exploration, battle, victory/beacon hook. Required SFX include UI, footsteps, Relay, machinery, Echoform vocals, all moves, impacts, Resonance, finisher, battle transitions, save, and Fracture pulse.
 
-Loading screens must be branded, attractive, and honest. Do not add fake long waits. Use a consistent logo/graphic motif, animated indicator where performance allows, location title, and smooth fade. Loading presentation must never expose a raw framebuffer, debug text, uninitialized asset, or frozen last frame.
+Loading screens must be branded, attractive, and honest; never expose a raw framebuffer, debug text, frozen prior frame, or fake long wait.
 
-All UI must remain readable at 320×240 on a CRT-safe 4:3 frame. Test long allowed player names, low HP, status icons, two-versus-two target selection, dialogue wrapping, button prompts, and color contrast. Do not use tiny modern-desktop typography.
+All UI must remain readable at 320×240 within CRT-safe 4:3 margins. Test the longest eight-character name, low HP, status icons, 2v2 targeting, dialogue wrapping, button prompts, pause/resume, and color contrast. Avoid tiny desktop typography.
 
 ## 10. Repository, Licensing, and Public Hygiene
 
-Required public files:
+Keep `README.md`, MIT `LICENSE` for original code, `ASSET_LICENSE.md` for protected project content, `THIRD_PARTY_NOTICES.md`, this master prompt, the sub-4000-character goal prompt, art bible, asset ledger, build documentation, and release evidence current.
 
-- `README.md` with screenshots, build/run instructions, controls, project status, and license summary.
-- `LICENSE` containing the MIT License for original source code.
-- `ASSET_LICENSE.md` stating that original/generated art, models, animation, audio, writing, characters, creature designs, world, and other non-code content are All Rights Reserved unless a ledger entry says otherwise.
-- `THIRD_PARTY_NOTICES.md` with Tiny3D, libdragon, tooling, fonts, and every other dependency’s notices.
-- `docs/N64GAME_MASTER_SPEC.md` and `docs/N64GAME_GOAL_PROMPT.md`.
-- `docs/ASSET_LEDGER.md`, `docs/ART_BIBLE.md`, reference study, test evidence, and build documentation as production progresses.
+Never commit credentials, browser data, downloaded reference media, extracted commercial assets, Pandemonium assets, unlicensed fonts, or ambiguous media. Run secret, license, and large-file checks before public pushes. Public visibility does not place original art/audio under MIT.
 
-Never commit credentials, browser data, copyrighted reference downloads, extracted Pokémon assets, Pandemonium assets, unlicensed fonts, or ambiguous media. Run secret and large-file checks before every public push. The repository being public does not place protected project assets under MIT; keep code and asset licensing explicitly separate.
+## 11. Ordered One-Week Production Gates
 
-## 11. Ordered Production Gates
+Work in this order and stop expanding scope:
 
-Work through these gates in order. Maintain an evidence-backed checklist. Files existing do not prove features work.
+1. **Scope reconciliation:** record this reduction and map only retained story/data/assets to the release.
+2. **Visual benchmark completion:** finish the existing Annex/player/Quarrune/Ayselor/Gyreclast/Kivarrax representative set and approve real 320×240 presentation.
+3. **Playable spine:** implement cold boot through stable ending with final state flow, battle logic, save/retry, timing, and tracked temporary content.
+4. **Production replacement:** replace every temporary retained-scope asset through the seven gates; do not create cut content.
+5. **Presentation and storyboard:** finish UI, loading, audio, VFX, animation, camera staging, environment dressing, and the twelve-panel package.
+6. **Certification and release:** run performance, soak, timing, save/retry, visual, license, fresh-build, and public-CI checks; publish verified artifacts and direct storyboard files.
 
-1. **Reference and legal audit:** study sources, record lessons, establish clean-room and asset-license boundaries.
-2. **Preproduction:** lock the story beat sheet, pacing map, technical architecture, art bible, data schemas, asset inventory, and review templates.
-3. **Toolchain:** install and pin Docker/libdragon/Tiny3D, compile a clean ROM, configure Ares, and establish public CI.
-4. **Visual benchmark:** complete one representative environment corner, one hero Echoform, one humanoid, final lighting, representative UI, one battle animation, and one VFX event. Do not mass-produce assets until this benchmark passes the visual bar in-engine.
-5. **End-to-end greybox:** make the full cold-boot-to-ending state flow playable with tracked temporary assets, both battles, saves, retries, transitions, and timing instrumentation.
-6. **Gameplay completion:** finish battle rules, AI, exploration, camera, collision, dialogue, companion, world map, save/load, and edge cases before final asset replacement obscures logic bugs.
-7. **Production assets:** replace every tracked placeholder through the seven-gate asset pipeline.
-8. **Presentation polish:** finish animation, audio, UI, VFX, lighting, loading, camera staging, environmental dressing, and transitions.
-9. **Storyboard package:** create, review, and deliver the complete GPT Image storyboard and future-video integration contract.
-10. **Certification:** conduct performance profiling, transition soak, clean builds, timed full playthroughs, save/retry testing, public-license audit, and final visual review.
-11. **Release handoff:** publish verified artifacts, screenshots, captures, checksums, known limitations, and direct links without falsely claiming real-hardware validation that did not occur.
-
-Do not move past a gate with hidden critical failures. It is acceptable to iterate backward. It is not acceptable to call a missing production asset “good enough” because the system works.
+Do not redo passed infrastructure work without a demonstrated defect. Prefer one evidence-backed implementation pass plus focused fixes. Compilation alone is never completion.
 
 ## 12. Test and Evidence Matrix
 
-Automate host-side tests where feasible for battle ordering, legal targets, damage/status logic, Resonance, story flags, save serialization/checksum, invalid-save fallback, and deterministic AI inputs. Use compiler warnings and static checks appropriate to the toolchain. Asset validation must check required files, dimensions/formats, naming, missing animations, conversion errors, and accidental placeholder markers.
+Automate battle order, legal targets, damage/status, Resonance, rewards, story flags, save checksum/version, invalid-save fallback, deterministic AI, and progression idempotence.
 
-Ares certification must cover:
+Ares certification covers:
 
-- Cold boot, new game, default and custom names.
+- Cold boot; default and custom names.
 - Slate watched and skipped.
-- Tutorial alternate inputs and restart path.
-- Every required/optional Annex interaction.
-- Save, quit/reboot, and resume at supported progress points.
-- World-map travel in both directions.
-- Estate victory and defeat/retry paths.
-- Companion follow through doors, transitions, obstruction, separation, and return.
-- Dialogue skipping and rapid confirm/cancel input.
+- Required/optional Annex interactions.
+- Save, quit/reboot, and resume at supported checkpoints.
+- Battle legal alternate inputs, victory, defeat, retry, and Return to Annex.
+- Duo-finisher legal and illegal states.
+- Dialogue skipping and rapid confirm/cancel.
 - Controller disconnect/reconnect during exploration, menus, dialogue, and battle.
 - Corrupted EEPROM data.
-- Re-entering completed rooms and attempting completed objectives.
-- Full ending and stable post-slice state.
+- Re-entering completed sectors and repeating completed interactions.
+- Full hook and stable post-chapter state.
 
-Performance evidence must include frame timing for the busiest exploration and battle views, peak heap measurements, ROM/map size, and twenty repeated scene-transition loops showing no persistent memory loss. Required 30 FPS may be assessed with frame-time evidence rather than an unsubstantiated visual claim.
+Performance evidence includes busy exploration/battle frame timing, peak heap, ROM/map size, and ten repeated transition loops with no persistent memory loss. Run two first-playthrough timing passes; each is 6–10 minutes and their median is 6–8 minutes.
 
-Run three first-playthrough-style timing passes. Record total time and segment times; the median must be 18–25 minutes without counting idle time or using the missing cinematic to pad duration.
-
-Final visual evidence must include representative gameplay screenshots from every environment, both battles, each major UI surface, loading presentation, hero-asset turntables, representative animation captures, and the storyboard contact sheet. Inspect at native 320×240 as well as enlarged nearest-neighbor output.
+Visual evidence includes every Annex sector, the battle, every major UI surface, loading, hero turntables/animation captures, and storyboard contact sheet, inspected both at native 320×240 and nearest-neighbor enlargement.
 
 ## 13. Final Acceptance Checklist
 
-Do not mark the goal complete until all of the following are true:
+Do not mark the goal complete until all are verified:
 
-- The public `oh-ashen-one/n64game` repository exists and a fresh clone builds reproducibly.
-- CI produces a bootable `.z64`, SHA-256 checksum, header/size evidence, and build report.
-- The complete game opening runs from cold boot through the closing corruption hook.
-- Three timed runs meet the 18–25 minute median requirement with real player agency.
-- Both 2v2 battles, defeat/retry, save/reload, dialogue, exploration, elevators/doors, world map, companion flow, transitions, and story flags work.
-- Twenty transition loops show no persistent memory growth; peak free heap remains at least 512 KiB.
-- Required scenes meet the verified 30 FPS target.
-- There are no crashes, softlocks, collision traps, missing assets, broken audio, unreadable required UI, progression blockers, duplicate rewards, or corrupt state transitions.
-- Every production asset has provenance and has passed the seven art gates.
-- No placeholder, primitive, default material, raw generated texture, temporary animation, TODO/FIXME affecting play, or unfinished environment remains, except the approved `INSERT CUTSCENE HERE` slate.
-- The complete 18-panel storyboard, individual panels, contact sheet, continuity sheet, color script, and shot list have been visually reviewed and delivered directly to the user.
-- Code and asset licenses are separated correctly; third-party notices and public-repository hygiene checks pass.
-- Any emulator-only claims are labeled honestly; real N64 hardware support is not claimed until tested.
+- The public repository exists and a fresh clone builds reproducibly.
+- CI produces a structurally valid `.z64`, checksum, size/map evidence, and build report.
+- The complete 6–8 minute chapter runs from cold boot to the stable beacon hook.
+- Two timed runs satisfy the locked range with real player agency.
+- Name entry, Annex exploration, Field Relay, one full 2v2 battle, victory/defeat/retry, save/reload, dialogue, transitions, and flags work.
+- Ten transition loops show no persistent memory growth; peak free heap is at least 512 KiB.
+- Required scenes meet the evidence-backed 30 FPS target.
+- There are no crashes, softlocks, collision traps, missing assets, broken audio, unreadable required UI, progression blockers, duplicate rewards, or corrupt transitions.
+- Every retained production asset has provenance, passed seven art gates, and looks finished at the actual gameplay camera.
+- No primitive, default material, raw generated texture, temporary animation, unfinished environment, or gameplay-affecting TODO remains, except `INSERT CUTSCENE HERE`.
+- Twelve storyboard panels, individual files, contact sheet, continuity sheet, color script, and shot list are visually reviewed and delivered directly to the user.
+- Code/asset licensing, third-party notices, secret scan, and public hygiene pass.
+- Emulator-only claims are labeled honestly; real N64 hardware is not claimed without testing.
 
 ## 14. Agent Operating Rules
 
-- Pursue the complete outcome autonomously and persistently.
-- Prefer verified output over status claims. Inspect the ROM, repository, CI, screenshots, captures, and generated files before saying they exist or work.
-- Preserve user work and avoid destructive operations.
-- Use isolated branches/worktrees when the checkout becomes dirty or concurrent work risks collisions.
-- Keep the user informed during long work and surface meaningful design or legal blockers early.
-- Use sub-agents for bounded parallel work when it materially improves quality, but the primary agent remains responsible for integration and verification.
-- Do not replace this master prompt with a shorter interpretation, regenerate it from memory, or silently revise locked requirements.
-- User instructions explicitly changing scope override this document; record such changes in the document and implementation history.
-- Never claim completion based on percentage, file count, compilation, or one successful screen. Completion means every acceptance condition above is proven.
-
+- Pursue the reduced complete outcome autonomously and persistently.
+- Cut content breadth, never visual or functional finish.
+- Do not re-expand toward the superseded 20-minute plan during the one-week release.
+- Reuse compatible validated infrastructure and the four-Echoform benchmark set.
+- Avoid broad repeated research, speculative systems, duplicate reviews of unchanged passing artifacts, and documentation churn unrelated to release.
+- Prefer verified ROMs, captures, tests, and public state over status claims.
+- Preserve user work; use isolated branches where needed.
+- Surface true blockers early, but exhaust safe focused alternatives first.
+- Do not claim completion from file count, percentage, compilation, or one successful screen. Completion means every reduced Final Acceptance item above is proven.
