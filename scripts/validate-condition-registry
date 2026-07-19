@@ -1,0 +1,477 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "pathname"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+REGISTRY_PATH = ROOT.join("docs/CONDITION_REGISTRY.md")
+DATA_PATH = ROOT.join("docs/DATA_SCHEMAS.md")
+ERRORS = []
+
+def error(message)
+  ERRORS << message
+end
+
+def integer(text, context)
+  Integer(text, 0)
+rescue ArgumentError
+  error("#{context}: invalid integer #{text.inspect}")
+  0
+end
+
+def split_top_level(text)
+  fields = []
+  field = +""
+  depth = 0
+  text.each_char do |character|
+    case character
+    when "("
+      depth += 1
+      field << character
+    when ")"
+      depth -= 1
+      field << character
+    when ","
+      if depth.zero?
+        fields << field.strip
+        field = +""
+      else
+        field << character
+      end
+    else
+      field << character
+    end
+    error("condition row has an unmatched closing parenthesis") if depth.negative?
+  end
+  error("condition row has unmatched parentheses") unless depth.zero?
+  fields << field.strip
+  fields
+end
+
+def extract_enum_bodies(text)
+  rows = []
+  text.scan(/typedef enum\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{(.*?)\}\s*[A-Za-z_][A-Za-z0-9_]*\s*;/m) do |name, body|
+    rows << [name, body]
+  end
+  text.scan(/^enum\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{(.*?)^\};/m) do |name, body|
+    rows << [name, body] unless rows.any? { |candidate, _| candidate == name }
+  end
+  rows
+end
+
+def enum_symbols(body)
+  body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*(?:=|,)/).flatten
+end
+
+def explicit_enum_values(body)
+  values = {}
+  current = -1
+  body.lines.each do |line|
+    clean = line.sub(/\/\*.*?\*\//, "").sub(%r{//.*}, "").strip
+    next if clean.empty?
+    clean = clean[0...-1].rstrip if clean.end_with?(",")
+    match = clean.match(/\A([A-Z][A-Z0-9_]+)\s*(?:=\s*(.+))?\z/)
+    next unless match
+
+    symbol = match[1]
+    expression = match[2]&.strip
+    if expression.nil?
+      current += 1
+    elsif (numeric = expression.match(/\A(0x[0-9A-Fa-f]+|\d+)(?:u)?\z/))
+      current = Integer(numeric[1], 0)
+    elsif (shift = expression.match(/\A(\d+)(?:u)?\s*<<\s*(\d+)\z/))
+      current = Integer(shift[1], 10) << Integer(shift[2], 10)
+    else
+      next
+    end
+    values[symbol] = current
+  end
+  values
+end
+
+class ExpressionParser
+  Token = Struct.new(:kind, :text, :offset)
+
+  def initialize(source, context)
+    @source = source
+    @context = context
+    @tokens = tokenize
+    @index = 0
+  end
+
+  def parse
+    expression = parse_call
+    fail_parse("trailing token #{@tokens[@index].text.inspect}") if @index < @tokens.length
+    expression
+  rescue StandardError => exception
+    error("#{@context}: #{exception.message}")
+    nil
+  end
+
+  private
+
+  def error(message)
+    ERRORS << message
+  end
+
+  def fail_parse(message)
+    raise ArgumentError, message
+  end
+
+  def tokenize
+    tokens = []
+    offset = 0
+    while offset < @source.length
+      character = @source[offset]
+      if character.match?(/\s/)
+        offset += 1
+      elsif (match = @source[offset..].match(/\A[A-Z][A-Z0-9_]*/))
+        tokens << Token.new(:identifier, match[0], offset)
+        offset += match[0].length
+      elsif (match = @source[offset..].match(/\A(?:0x[0-9A-Fa-f]+|\d+)/))
+        tokens << Token.new(:number, match[0], offset)
+        offset += match[0].length
+      elsif "(),".include?(character)
+        tokens << Token.new(character.to_sym, character, offset)
+        offset += 1
+      else
+        fail_parse("illegal character #{character.inspect} at expression offset #{offset}")
+      end
+    end
+    tokens
+  end
+
+  def take(kind)
+    token = @tokens[@index]
+    fail_parse("expected #{kind}, reached end") unless token
+    fail_parse("expected #{kind}, got #{token.text.inspect} at offset #{token.offset}") unless token.kind == kind
+    @index += 1
+    token
+  end
+
+  def accept(kind)
+    return false unless @tokens[@index]&.kind == kind
+
+    @index += 1
+    true
+  end
+
+  def parse_call
+    name = take(:identifier).text
+    take(:"(")
+    if %w[K F O P Q D R].include?(name)
+      args = []
+      args << take(%w[Q].include?(name) ? :number : :identifier).text
+      if name == "K"
+        take(:",")
+        token = @tokens[@index]
+        fail_parse("K requires a symbolic or numeric literal") unless token && [:identifier, :number].include?(token.kind)
+        @index += 1
+        args << token.text
+      end
+      take(:")")
+      return { name: name, args: args }
+    end
+
+    if %w[CP BR RD TR PR MS RT RF JS DI FO WA CT PA OG SL].include?(name)
+      take(:")")
+      return { name: name, args: [] }
+    end
+
+    unless %w[NOT AND OR EQ GE].include?(name)
+      fail_parse("unknown function #{name}")
+    end
+    args = []
+    unless accept(:")")
+      loop do
+        args << parse_call
+        break if accept(:")")
+        take(:",")
+      end
+    end
+    { name: name, args: args }
+  end
+end
+
+unless REGISTRY_PATH.file? && DATA_PATH.file?
+  error("missing docs/CONDITION_REGISTRY.md") unless REGISTRY_PATH.file?
+  error("missing docs/DATA_SCHEMAS.md") unless DATA_PATH.file?
+end
+registry = REGISTRY_PATH.file? ? REGISTRY_PATH.read : ""
+data = DATA_PATH.file? ? DATA_PATH.read : ""
+
+snapshot_match = registry.match(/`docs\/DATA_SCHEMAS\.md`: SHA-256 `([0-9a-f]{64})`/)
+if snapshot_match
+  actual_hash = Digest::SHA256.hexdigest(data)
+  error("CONDITION_REGISTRY schema hash is stale: documented #{snapshot_match[1]}, actual #{actual_hash}") unless snapshot_match[1] == actual_hash
+else
+  error("CONDITION_REGISTRY.md: missing audited DATA_SCHEMAS SHA-256")
+end
+
+fence_match = registry.match(/^```condition-registry\s*$\n(.*?)^```\s*$/m)
+unless fence_match
+  error("CONDITION_REGISTRY.md: missing singular condition-registry fence")
+end
+fence = fence_match ? fence_match[1] : ""
+
+enum_bodies = extract_enum_bodies(data)
+enum_members = enum_bodies.to_h { |name, body| [name, enum_symbols(body)] }
+enum_values = enum_bodies.to_h { |name, body| [name, explicit_enum_values(body)] }
+symbol_domains = Hash.new { |hash, key| hash[key] = [] }
+enum_members.each do |name, symbols|
+  symbols.each { |symbol| symbol_domains[symbol] << name }
+end
+
+condition_declarations = enum_bodies.select { |name, _| name.end_with?("ConditionIdValue") }.flat_map do |name, body|
+  explicit_enum_values(body).map { |symbol, value| [symbol, value, name] if symbol.start_with?("COND_") }
+end.compact
+
+source_values = enum_values.fetch("ConditionSourceValue", {})
+source_tokens = {
+  "K" => ["CONDITION_SOURCE_CONSTANT", "DYNAMIC"],
+  "F" => ["CONDITION_SOURCE_PROGRESS_FLAG", "BOOL"],
+  "O" => ["CONDITION_SOURCE_OBJECTIVE_STATE", "OBJECTIVE_STATE"],
+  "P" => ["CONDITION_SOURCE_PARTY_CREATURE", "BOOL"],
+  "Q" => ["CONDITION_SOURCE_QUEST_COUNTER", "U8"],
+  "D" => ["CONDITION_SOURCE_DESTINATION_BIT", "BOOL"],
+  "R" => ["CONDITION_SOURCE_RELAY_PAGE_BITS", "BOOL"],
+  "CP" => ["CONDITION_SOURCE_CHECKPOINT_ID", "CHECKPOINT_ID"],
+  "BR" => ["CONDITION_SOURCE_BATTLE_RESULT", "BATTLE_RESULT"],
+  "RD" => ["CONDITION_SOURCE_RUNTIME_DRAFT_STATE", "RUNTIME_DRAFT"],
+  "TR" => ["CONDITION_SOURCE_TUTORIAL_RESULT_STATE", "TUTORIAL_RESULT"],
+  "PR" => ["CONDITION_SOURCE_PRE_RUSK_SNAPSHOT_STATE", "PRE_RUSK_SNAPSHOT"],
+  "MS" => ["CONDITION_SOURCE_SELECTED_MAP_NODE", "MAP_SELECTION"],
+  "RT" => ["CONDITION_SOURCE_RUNTIME_CHECKPOINT_TOKEN", "RUNTIME_CHECKPOINT"],
+  "RF" => ["CONDITION_SOURCE_RETURN_FOLLOWER_STATE", "RETURN_FOLLOWER"],
+  "JS" => ["CONDITION_SOURCE_SELECTED_JOURNAL_SEMANTIC_CLASS", "JOURNAL_SEMANTIC"],
+  "DI" => ["CONDITION_SOURCE_RUNTIME_DIRTY_STATE", "RUNTIME_DIRTY"],
+  "FO" => ["CONDITION_SOURCE_FINAL_SAVE_OUTCOME", "FINAL_SAVE_OUTCOME"],
+  "WA" => ["CONDITION_SOURCE_DIRTY_WARNING_ACK", "DIRTY_WARNING_ACK"],
+  "CT" => ["CONDITION_SOURCE_CONTROL_STATE", "CONTROL_STATE"],
+  "PA" => ["CONDITION_SOURCE_PROCESS_ACCEPT_TOKEN", "PROCESS_ACCEPT"],
+  "OG" => ["CONDITION_SOURCE_OPENING_FINALIZER_GENERATION", "OPENING_GENERATION"],
+  "SL" => ["CONDITION_SOURCE_RUNTIME_CURRENT_SAVELOC", "SAVEABLE_LOCATION_ID"]
+}
+source_tokens.each do |token, (source_symbol, _type)|
+  error("DATA_SCHEMAS.md: missing source #{source_symbol} for #{token}") unless source_values.key?(source_symbol)
+end
+
+constant_domains = {
+  "OBJECTIVE_STATE" => "ObjectiveStateValue",
+  "CHECKPOINT_ID" => "CheckpointIdValue",
+  "BATTLE_RESULT" => "BattleResultValue",
+  "RUNTIME_DRAFT" => "RuntimeDraftStateValue",
+  "TUTORIAL_RESULT" => "TutorialResultStateValue",
+  "PRE_RUSK_SNAPSHOT" => "PreRuskSnapshotStateValue",
+  "MAP_SELECTION" => "MapSelectionValue",
+  "RUNTIME_CHECKPOINT" => "RuntimeCheckpointTokenValue",
+  "RETURN_FOLLOWER" => "ReturnFollowerStateValue",
+  "JOURNAL_SEMANTIC" => "JournalSemanticClassValue",
+  "RUNTIME_DIRTY" => "RuntimeDirtyStateValue",
+  "FINAL_SAVE_OUTCOME" => "FinalSaveOutcomeValue",
+  "DIRTY_WARNING_ACK" => "DirtyWarningAckValue",
+  "CONTROL_STATE" => "ControlStateValue",
+  "PROCESS_ACCEPT" => "ProcessAcceptTokenValue",
+  "OPENING_GENERATION" => "OpeningFinalizerGenerationValue",
+  "SAVEABLE_LOCATION_ID" => "SaveableLocationIdValue"
+}
+
+rows = []
+fence.lines.each_with_index do |line, index|
+  stripped = line.strip
+  next if stripped.empty?
+  unless stripped.start_with?("COND_ROW(") && stripped.end_with?(")")
+    error("condition-registry row #{index + 1}: malformed wrapper")
+    next
+  end
+  fields = split_top_level(stripped[9...-1])
+  unless fields.length == 8
+    error("condition-registry row #{index + 1}: expected 8 fields, got #{fields.length}")
+    next
+  end
+  rows << {
+    symbol: fields[0],
+    id: integer(fields[1], "condition-registry row #{index + 1} id"),
+    context: integer(fields[2], "condition-registry row #{index + 1} context"),
+    source_mask: integer(fields[3], "condition-registry row #{index + 1} source mask"),
+    first: integer(fields[4], "condition-registry row #{index + 1} first"),
+    count: integer(fields[5], "condition-registry row #{index + 1} count"),
+    peak: integer(fields[6], "condition-registry row #{index + 1} peak"),
+    expression: fields[7],
+    ast: ExpressionParser.new(fields[7], "condition-registry row #{index + 1} #{fields[0]}").parse,
+    line: index + 1
+  }
+end
+
+rows.group_by { |row| row[:symbol] }.each { |symbol, group| error("duplicate condition symbol #{symbol}") if group.length > 1 }
+rows.group_by { |row| row[:id] }.each { |id, group| error("duplicate ConditionId #{format('0x%04X', id)}") if group.length > 1 }
+error("condition rows are not sorted by ascending numeric ID") unless rows.map { |row| row[:id] } == rows.map { |row| row[:id] }.sort
+
+declared = condition_declarations.to_h { |symbol, value, _enum| [symbol, value] }
+registered = rows.to_h { |row| [row[:symbol], row[:id]] }
+unless declared == registered
+  missing = declared.keys - registered.keys
+  extra = registered.keys - declared.keys
+  mismatched = (declared.keys & registered.keys).select { |symbol| declared[symbol] != registered[symbol] }
+  error("condition declaration/registry mismatch: missing=#{missing.sort.join(',')} extra=#{extra.sort.join(',')} values=#{mismatched.sort.join(',')}")
+end
+
+context_values = enum_values.fetch("ConditionContextMask", {})
+known_context_mask = context_values.values.inject(0, :|)
+
+whitelists = {}
+registry.scan(/^\|\s*`?(0x[0-9A-Fa-f]+)`?\s*\|[^|]*\|\s*`?(0x[0-9A-Fa-f]+)`?[^|]*\|/).each do |context, whitelist|
+  whitelists[Integer(context, 0)] = Integer(whitelist, 0)
+end
+context_values.values.each do |context_bit|
+  error("CONDITION_REGISTRY context table lacks whitelist for #{format('0x%02X', context_bit)}") unless whitelists.key?(context_bit)
+end
+
+validate_symbol = lambda do |symbol, enum_name, context|
+  members = enum_members.fetch(enum_name, [])
+  error("#{context}: #{symbol} is not a member of #{enum_name}") unless members.include?(symbol)
+end
+
+compile = nil
+compile = lambda do |node, context|
+  return ["INVALID", [], 0] unless node
+
+  name = node[:name]
+  args = node[:args]
+  if source_tokens.key?(name)
+    source_symbol, fixed_type = source_tokens[name]
+    source_id = source_values[source_symbol]
+    source_mask = source_id ? (1 << (source_id - 1)) : 0
+    type = fixed_type
+    case name
+    when "K"
+      error("#{context}: K requires exactly 2 arguments") unless args.length == 2
+      type, value = args
+      known_types = enum_members.fetch("ConditionValueType", []).map { |symbol| symbol.sub("CONDITION_VALUE_", "") }
+      error("#{context}: unknown constant type #{type}") unless known_types.include?(type)
+      if type == "BOOL"
+        error("#{context}: BOOL constant must be literal 1") unless value == "1"
+      elsif type == "U8"
+        parsed = integer(value, "#{context} U8 constant")
+        error("#{context}: U8 constant outside 0..255") unless (0..255).cover?(parsed)
+      elsif type == "U16"
+        parsed = integer(value, "#{context} U16 constant")
+        error("#{context}: U16 constant outside 0..65535") unless (0..65_535).cover?(parsed)
+      else
+        enum_name = constant_domains[type]
+        if enum_name.nil?
+          error("#{context}: no constant-domain mapping for #{type}")
+        elsif value.match?(/\A(?:0x[0-9A-Fa-f]+|\d+)\z/)
+          error("#{context}: #{type} constant must use a registered symbol")
+        else
+          validate_symbol.call(value, enum_name, context)
+        end
+      end
+    when "F"
+      validate_symbol.call(args.first, "StoryFlagIndex", context)
+    when "O"
+      validate_symbol.call(args.first, "ObjectiveIdValue", context)
+    when "P"
+      validate_symbol.call(args.first, "CreatureIdValue", context)
+    when "Q"
+      value = integer(args.first, "#{context} quest counter")
+      error("#{context}: quest counter outside 0..7") unless (0..7).cover?(value)
+    when "D"
+      validate_symbol.call(args.first, "DestinationBit", context)
+    when "R"
+      validate_symbol.call(args.first, "RelayPageBit", context)
+    end
+    return [type, [[:leaf, source_id]], source_mask]
+  end
+
+  case name
+  when "NOT"
+    error("#{context}: NOT requires 1 argument") unless args.length == 1
+    child_type, instructions, mask = compile.call(args.first, context)
+    error("#{context}: NOT operand must be BOOL, got #{child_type}") unless child_type == "BOOL"
+    ["BOOL", instructions + [[:unary, 0]], mask]
+  when "AND"
+    error("#{context}: AND requires at least 2 arguments") unless args.length >= 2
+    compiled = args.map { |argument| compile.call(argument, context) }
+    compiled.each { |type, _instructions, _mask| error("#{context}: AND operand must be BOOL, got #{type}") unless type == "BOOL" }
+    instructions = compiled[0] ? compiled[0][1].dup : []
+    mask = compiled[0] ? compiled[0][2] : 0
+    compiled.drop(1).each do |_type, child_instructions, child_mask|
+      instructions.concat(child_instructions)
+      instructions << [:binary, 0]
+      mask |= child_mask
+    end
+    ["BOOL", instructions, mask]
+  when "OR", "EQ", "GE"
+    error("#{context}: #{name} requires 2 arguments") unless args.length == 2
+    left = compile.call(args[0], context)
+    right = compile.call(args[1], context)
+    if name == "OR"
+      error("#{context}: OR operands must both be BOOL") unless left[0] == "BOOL" && right[0] == "BOOL"
+    else
+      error("#{context}: #{name} operand types differ: #{left[0]} vs #{right[0]}") unless left[0] == right[0]
+      if name == "GE" && !%w[U8 U16 OBJECTIVE_STATE JOURNAL_SEMANTIC].include?(left[0])
+        error("#{context}: GE is illegal for #{left[0]}")
+      end
+    end
+    ["BOOL", left[1] + right[1] + [[:binary, 0]], left[2] | right[2]]
+  else
+    error("#{context}: unknown AST node #{name}")
+    ["INVALID", [], 0]
+  end
+end
+
+cursor = 0
+rows.each do |row|
+  context = "condition #{row[:symbol]}"
+  type, instructions, computed_mask = compile.call(row[:ast], context)
+  error("#{context}: terminal type is #{type}, expected BOOL") unless type == "BOOL"
+  depth = 0
+  peak = 0
+  instructions.each do |kind, _source|
+    if kind == :leaf
+      depth += 1
+      peak = [peak, depth].max
+    elsif kind == :binary
+      error("#{context}: compiled stack underflow") if depth < 2
+      depth -= 1
+    elsif kind == :unary
+      error("#{context}: compiled stack underflow") if depth < 1
+    end
+  end
+  error("#{context}: compiled terminal stack depth #{depth}, expected 1") unless depth == 1
+  error("#{context}: first_instruction #{row[:first]}, expected #{cursor}") unless row[:first] == cursor
+  error("#{context}: instruction_count #{row[:count]}, computed #{instructions.length}") unless row[:count] == instructions.length
+  error("#{context}: max_stack_depth #{row[:peak]}, computed #{peak}") unless row[:peak] == peak
+  error("#{context}: source mask #{format('0x%08X', row[:source_mask])}, computed #{format('0x%08X', computed_mask)}") unless row[:source_mask] == computed_mask
+  error("#{context}: instruction count outside 1..32") unless (1..32).cover?(row[:count])
+  error("#{context}: stack peak outside 1..8") unless (1..8).cover?(row[:peak])
+  error("#{context}: context uses unknown bits #{format('0x%02X', row[:context] & ~known_context_mask)}") unless (row[:context] & ~known_context_mask).zero?
+  error("#{context}: zero context mask") if row[:context].zero?
+  context_values.values.each do |context_bit|
+    next if (row[:context] & context_bit).zero?
+    whitelist = whitelists[context_bit]
+    next unless whitelist
+    extra_sources = row[:source_mask] & ~whitelist
+    error("#{context}: sources #{format('0x%08X', extra_sources)} illegal for context #{format('0x%02X', context_bit)}") unless extra_sources.zero?
+  end
+  cursor += instructions.length
+end
+error("condition instruction table exceeds 2048 rows: #{cursor}") if cursor > 2048
+
+unless registry.include?("exactly #{rows.length} `ConditionDef` rows")
+  error("CONDITION_REGISTRY emission contract does not state exactly #{rows.length} ConditionDef rows")
+end
+unless registry.include?("exactly #{cursor} `ConditionInstr` rows")
+  error("CONDITION_REGISTRY emission contract does not state exactly #{cursor} ConditionInstr rows")
+end
+
+if ERRORS.empty?
+  puts "Condition registry validation passed: #{rows.length} conditions, #{cursor} instructions, max stack #{rows.map { |row| row[:peak] }.max}."
+  exit 0
+end
+
+warn "Condition registry validation failed with #{ERRORS.length} error(s):"
+ERRORS.each { |message| warn "- #{message}" }
+exit 1

@@ -1,0 +1,1378 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "json"
+require "open3"
+require "pathname"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+DATA_PATH = ROOT.join("docs/DATA_SCHEMAS.md")
+GRAPH_PATH = ROOT.join("docs/DIALOGUE_GRAPH.md")
+abort("missing #{DATA_PATH}") unless DATA_PATH.file?
+abort("missing #{GRAPH_PATH}") unless GRAPH_PATH.file?
+
+# These are the reviewed Gate-2 coverage floors. Additions are allowed, but a
+# document edit may not silently make any already-promised contract disappear.
+EXPECTED_MINIMUMS = {
+  aliases: 31,
+  enum_domains: 318,
+  enum_constants: 2_229,
+  named_id_domains: 84,
+  named_id_values: 919,
+  layouts: 142,
+  layout_fields: 1_294,
+  layout_assertions: 142,
+  offset_assertions: 1_294,
+  reserved_fields: 101,
+  literal_arrays: 35,
+  literal_rows: 327,
+  literal_reserved_zero_checks: 332,
+  markdown_tables: 72,
+  markdown_rows: 988,
+  markdown_data_rows: 844,
+  markdown_cells: 4_319,
+  global_id_domains: 30,
+  global_id_assignments: 791,
+  reserved_generated_ranges: 6,
+  reserved_generated_values: 204
+}.freeze
+
+class UnknownEnumIdentifier < StandardError; end
+
+# A deliberately small C integer-constant-expression evaluator. It accepts the
+# operators used by DATA_SCHEMAS and rejects casts, calls, ternaries, and any
+# other syntax instead of asking Ruby or the compiler to guess intent.
+class CIntegerExpression
+  Token = Struct.new(:kind, :value)
+
+  def initialize(source, symbols)
+    @source = source
+    @symbols = symbols
+    @tokens = tokenize(source)
+    @index = 0
+  end
+
+  def evaluate
+    value = parse_or
+    token = peek
+    raise "unexpected token #{token.value.inspect} in #{@source.inspect}" unless token.kind == :eof
+
+    value
+  end
+
+  private
+
+  def tokenize(source)
+    tokens = []
+    index = 0
+    while index < source.length
+      rest = source[index..-1]
+      if (match = rest.match(/\A\s+/))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[xX][0-9A-Fa-f]+[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[0-7]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[1-9][0-9]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[A-Za-z_][A-Za-z0-9_]*/))
+        tokens << Token.new(:identifier, match[0])
+        index += match[0].length
+      elsif rest.start_with?("<<", ">>")
+        tokens << Token.new(:operator, rest[0, 2])
+        index += 2
+      elsif "+-~!*/%&^|()".include?(rest[0])
+        kind = rest[0] == "(" || rest[0] == ")" ? :paren : :operator
+        tokens << Token.new(kind, rest[0])
+        index += 1
+      else
+        raise "unsupported C enum expression near #{rest.inspect} in #{source.inspect}"
+      end
+    end
+    tokens << Token.new(:eof, nil)
+    tokens
+  end
+
+  def integer_literal(token)
+    bare = token.sub(/[uUlL]+\z/, "")
+    if bare.match?(/\A0[xX]/)
+      bare.to_i(16)
+    elsif bare.length > 1 && bare.start_with?("0")
+      bare.to_i(8)
+    else
+      bare.to_i(10)
+    end
+  end
+
+  def peek
+    @tokens.fetch(@index)
+  end
+
+  def take(value = nil)
+    token = peek
+    return nil if value && token.value != value
+
+    @index += 1
+    token
+  end
+
+  def parse_or
+    left = parse_xor
+    left |= parse_xor while take("|")
+    left
+  end
+
+  def parse_xor
+    left = parse_and
+    left ^= parse_and while take("^")
+    left
+  end
+
+  def parse_and
+    left = parse_shift
+    left &= parse_shift while take("&")
+    left
+  end
+
+  def parse_shift
+    left = parse_additive
+    loop do
+      if take("<<")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left <<= shift
+      elsif take(">>")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left >>= shift
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_additive
+    left = parse_multiplicative
+    loop do
+      if take("+")
+        left += parse_multiplicative
+      elsif take("-")
+        left -= parse_multiplicative
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_multiplicative
+    left = parse_unary
+    loop do
+      if take("*")
+        left *= parse_unary
+      elsif take("/")
+        divisor = parse_unary
+        raise "division by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        left = (left.negative? == divisor.negative?) ? quotient : -quotient
+      elsif take("%")
+        divisor = parse_unary
+        raise "modulo by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        quotient = -quotient unless left.negative? == divisor.negative?
+        left -= quotient * divisor
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_unary
+    return parse_unary if take("+")
+    return -parse_unary if take("-")
+    return ~parse_unary if take("~")
+    return parse_unary.zero? ? 1 : 0 if take("!")
+
+    parse_primary
+  end
+
+  def parse_primary
+    token = peek
+    if token.kind == :integer
+      take.value
+    elsif token.kind == :identifier
+      name = take.value
+      raise UnknownEnumIdentifier, name unless @symbols.key?(name)
+      @symbols.fetch(name)
+    elsif take("(")
+      value = parse_or
+      raise "missing ')' in #{@source.inspect}" unless take(")")
+      value
+    else
+      raise "expected integer, identifier, or '(' in #{@source.inspect}"
+    end
+  end
+end
+
+def strip_c_comments(source)
+  source.gsub(%r{/\*.*?\*/}m, "").gsub(%r{//[^\n]*}, "")
+end
+
+def split_c_top_level(source)
+  fields = []
+  start = 0
+  depth = 0
+  quote = nil
+  escaped = false
+  source.each_char.with_index do |character, index|
+    if quote
+      if escaped
+        escaped = false
+      elsif character == "\\"
+        escaped = true
+      elsif character == quote
+        quote = nil
+      end
+    elsif character == '"' || character == "'"
+      quote = character
+    elsif "{([".include?(character)
+      depth += 1
+    elsif "})]".include?(character)
+      depth -= 1
+      raise "unbalanced C initializer/expression" if depth.negative?
+    elsif character == "," && depth.zero?
+      fields << source[start...index].strip
+      start = index + 1
+    end
+  end
+  raise "unterminated C string/character literal" if quote
+  raise "unbalanced C initializer/expression" unless depth.zero?
+
+  tail = source[start..-1].strip
+  fields << tail unless tail.empty?
+  fields.reject(&:empty?)
+end
+
+DATA_ENUM_DECLARATION_PATTERN =
+  /(?<![A-Za-z0-9_])(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
+DATA_BRACELESS_TYPEDEF_PATTERN = /(?<![A-Za-z0-9_])typedef\b[^;{}]*;/m
+DATA_FIXED_WIDTH_TYPEDEF_PATTERN =
+  /\Atypedef\s+((?:u?int)(?:8|16|32|64)_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\z/m
+DATA_DURABLE_ID_IDENTIFIER_PATTERN = /\b[A-Za-z_][A-Za-z0-9_]*Id(?:Value)?\b/
+
+def extract_data_enum_sources(source)
+  enum_scan_code = strip_c_comments(source)
+  enum_sources = enum_scan_code.scan(DATA_ENUM_DECLARATION_PATTERN)
+  unconsumed_enum_code = enum_scan_code.gsub(DATA_ENUM_DECLARATION_PATTERN, " ")
+  raise ArgumentError, "unparsed or unsupported enum syntax remains in DATA_SCHEMAS C blocks" if
+    unconsumed_enum_code.match?(/\benum\b/)
+  raise ArgumentError, "no enum domains found" if enum_sources.empty?
+
+  enum_sources
+end
+
+# A braceless typedef can otherwise hide a durable ID domain from enum parsing
+# (including split, qualified, parenthesized, multi-declarator, and two-stage
+# aliases). Fixed-width scalar aliases are the only supported braceless form;
+# every other statement that names an ID-shaped identifier fails closed.
+def extract_data_scalar_aliases(source)
+  typedef_scan_code = strip_c_comments(source)
+  aliases = []
+  typedef_scan_code.scan(DATA_BRACELESS_TYPEDEF_PATTERN).each do |statement|
+    fixed_width = statement.match(DATA_FIXED_WIDTH_TYPEDEF_PATTERN)
+    if fixed_width
+      aliases << [fixed_width[1], fixed_width[2]]
+      next
+    end
+    next unless statement.match?(DATA_DURABLE_ID_IDENTIFIER_PATTERN)
+
+    compact = statement.gsub(/\s+/, " ").strip
+    raise ArgumentError, "unsupported durable ID typedef alias in DATA_SCHEMAS C blocks: #{compact}"
+  end
+  aliases
+end
+
+# A tagged typedef has two C spellings for the same enum type.  Treat the one
+# and only durable-ID-shaped spelling as the contract domain, regardless of
+# whether it is the tag or the typedef name.  Two different durable spellings
+# are ambiguous and must fail closed instead of letting one alias evade the
+# serialized-ID registry.
+def data_enum_domain_name(typedef, tag, trailing, index)
+  durable_names = [tag, trailing].compact.uniq.select { |name| name.match?(/Id(?:Value)?\z/) }
+  if durable_names.length > 1
+    raise ArgumentError, "enum has conflicting durable ID domain aliases: #{durable_names.join(' and ')}"
+  end
+  return durable_names.first if durable_names.length == 1
+  return trailing if typedef
+
+  tag || format("__anonymous_enum_%03d", index)
+end
+
+def markdown_cells(line)
+  bytes = line.b
+  delimiters = []
+  code_ticks = nil
+  index = 0
+  while index < bytes.bytesize
+    byte = bytes.getbyte(index)
+    if byte == 0x60
+      finish = index
+      finish += 1 while finish < bytes.bytesize && bytes.getbyte(finish) == 0x60
+      run = finish - index
+      if code_ticks.nil?
+        code_ticks = run
+      elsif code_ticks == run
+        code_ticks = nil
+      end
+      index = finish
+      next
+    elsif byte == 0x7C && code_ticks.nil?
+      backslashes = 0
+      cursor = index - 1
+      while cursor >= 0 && bytes.getbyte(cursor) == 0x5C
+        backslashes += 1
+        cursor -= 1
+      end
+      delimiters << index if backslashes.even?
+    end
+    index += 1
+  end
+  raise "unterminated Markdown code span in table row #{line.inspect}" if code_ticks
+  raise "Markdown table row needs leading/trailing delimiters: #{line.inspect}" if delimiters.length < 2
+  raise "Markdown table row must begin with '|': #{line.inspect}" unless bytes.byteslice(0...delimiters.first).strip.empty?
+  raise "Markdown table row must end with '|': #{line.inspect}" unless bytes.byteslice((delimiters.last + 1)..-1).strip.empty?
+
+  delimiters.each_cons(2).map do |left, right|
+    bytes.byteslice((left + 1)...right).force_encoding(Encoding::UTF_8)
+  end
+end
+
+def append_blob(blob, value)
+  bytes = value.encode(Encoding::UTF_8).b
+  offset = blob.bytesize
+  blob << bytes
+  [offset, bytes.bytesize]
+end
+
+def c_bytes(bytes, width = 16)
+  bytes.each_slice(width).map do |slice|
+    "    " + slice.map { |byte| format("0x%02X", byte) }.join(", ")
+  end.join(",\n")
+end
+
+def c_matrix(rows)
+  rows.map { |row| "    { #{row.join(', ')} }" }.join(",\n")
+end
+
+def compile_unit(compiler, include_dir, source_path, object_path)
+  Open3.capture3(
+    compiler,
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic",
+    "-I",
+    include_dir,
+    "-c",
+    source_path,
+    "-o",
+    object_path
+  )
+end
+
+markdown = DATA_PATH.read
+abort("#{DATA_PATH} is not valid UTF-8") unless markdown.valid_encoding?
+graph_markdown = GRAPH_PATH.read
+abort("#{GRAPH_PATH} is not valid UTF-8") unless graph_markdown.valid_encoding?
+
+graph_dialogue_rows = graph_markdown.lines.each_with_index.map do |line, index|
+  match = line.match(
+    /^DROW\(([A-Z][A-Z0-9_]+),\s*(0x[0-9A-Fa-f]+),\s*(\d+),\s*(0x[0-9A-Fa-f]+),\s*(\d+),/
+  )
+  next unless match
+
+  dialogue_id = Integer(match[2], 0)
+  dialogue_decimal = Integer(match[3], 10)
+  string_id = Integer(match[4], 0)
+  string_decimal = Integer(match[5], 10)
+  abort("#{GRAPH_PATH}:#{index + 1} DialogueId mirrors disagree") unless dialogue_id == dialogue_decimal
+  abort("#{GRAPH_PATH}:#{index + 1} StringId mirrors disagree") unless string_id == string_decimal
+  abort("#{GRAPH_PATH}:#{index + 1} DialogueId outside uint16_t") unless dialogue_id.between?(1, 0xFFFF)
+  abort("#{GRAPH_PATH}:#{index + 1} StringId outside uint16_t") unless string_id.between?(1, 0xFFFF)
+  { symbol: match[1], dialogue_id: dialogue_id, string_id: string_id, line: index + 1 }
+end.compact
+abort("DIALOGUE_GRAPH must contain exactly 223 canonical DROW rows") unless graph_dialogue_rows.length == 223
+{
+  "symbol" => :symbol,
+  "DialogueId" => :dialogue_id,
+  "StringId" => :string_id
+}.each do |label, key|
+  duplicates = graph_dialogue_rows.group_by { |row| row.fetch(key) }
+                                  .select { |_value, rows| rows.length > 1 }
+  next if duplicates.empty?
+
+  detail = duplicates.map do |value, rows|
+    "#{value}=#{rows.map { |row| row[:symbol] }.join('/')}"
+  end
+  abort("DIALOGUE_GRAPH duplicate #{label}: #{detail.join(', ')}")
+end
+graph_dialogue_contract_sha256 = Digest::SHA256.hexdigest(
+  JSON.generate(graph_dialogue_rows.map { |row| [row[:symbol], row[:dialogue_id], row[:string_id]] })
+)
+blocks = markdown.scan(/^```c\s*$\n(.*?)^```\s*$/m).flatten
+abort("no C blocks found in #{DATA_PATH}") if blocks.empty?
+code = blocks.join("\n\n")
+
+# Scalar aliases and their machine ranges.
+begin
+  alias_matches = extract_data_scalar_aliases(code)
+rescue ArgumentError => typedef_error
+  abort(typedef_error.message)
+end
+abort("no fixed-width scalar aliases found") if alias_matches.empty?
+duplicate_aliases = alias_matches.group_by { |_base, name| name }.select { |_name, rows| rows.length > 1 }.keys
+abort("duplicate scalar aliases: #{duplicate_aliases.sort.join(', ')}") unless duplicate_aliases.empty?
+alias_widths = {}
+alias_signed = {}
+alias_declarations = alias_matches.map do |base, name|
+  alias_widths[name] = base[/\d+/].to_i
+  alias_signed[name] = !base.start_with?("u")
+  "typedef #{base} #{name};"
+end.sort
+
+# Parse every enum first, including multiple declarations on one physical line,
+# then evaluate domains iteratively so an explicit cross-domain reference is
+# accepted only when it can be resolved exactly. Any residual enum token fails
+# closed rather than silently disappearing from generated C or ID coverage.
+begin
+  same_line_fixture = extract_data_enum_sources(
+    "enum VisibleValue { VISIBLE = 1 }; enum HiddenIdValue { HIDDEN = 0x1234 };"
+  )
+  abort("same-line enum extraction self-test did not find both domains") unless same_line_fixture.length == 2
+  unsupported_enum_fixtures = {
+    "unsupported declarator" => "enum UnsupportedIdValue { UNSUPPORTED = 1 } *pointer;",
+    "forward declaration" => "enum ForwardOnlyIdValue;",
+    "split enum typedef" => "typedef enum AliasStableTag HiddenAliasIdValue;"
+  }
+  unsupported_enum_fixtures.each do |label, declaration|
+    begin
+      extract_data_enum_sources("enum VisibleValue { VISIBLE = 1 }; #{declaration}")
+      abort("#{label} enum syntax self-test was silently accepted")
+    rescue ArgumentError => fixture_error
+      abort("#{label} enum syntax self-test returned the wrong failure") unless
+        fixture_error.message.include?("unparsed or unsupported enum syntax")
+    end
+  end
+  unsupported_typedef_fixtures = {
+    "two-stage" => "typedef enum AliasRootTag { ALIAS_ROOT = 1 } AliasRoot; " \
+                   "typedef AliasRoot TwoStageIdValue;",
+    "qualified" => "typedef const AliasRoot QualifiedHiddenIdValue;",
+    "parenthesized" => "typedef AliasRoot (ParenthesizedHiddenIdValue);",
+    "multi-declarator" => "typedef AliasRoot MultiHiddenIdValue, MultiOtherAlias;"
+  }
+  unsupported_typedef_fixtures.each do |label, declaration|
+    begin
+      extract_data_scalar_aliases(declaration)
+      abort("#{label} durable-ID typedef self-test was silently accepted")
+    rescue ArgumentError => fixture_error
+      abort("#{label} durable-ID typedef self-test returned the wrong failure") unless
+        fixture_error.message.include?("unsupported durable ID typedef alias")
+    end
+  end
+  abort("tagged typedef durable-domain self-test ignored the typedef name") unless
+    data_enum_domain_name(true, "HiddenStableTag", "HiddenIdValue", 0) == "HiddenIdValue"
+  abort("tagged typedef durable-domain self-test ignored the enum tag") unless
+    data_enum_domain_name(true, "HiddenIdValue", "HiddenStableAlias", 0) == "HiddenIdValue"
+  begin
+    data_enum_domain_name(true, "FirstIdValue", "SecondIdValue", 0)
+    abort("conflicting durable enum aliases self-test was silently accepted")
+  rescue ArgumentError => fixture_error
+    abort("conflicting durable enum aliases self-test returned the wrong failure") unless
+      fixture_error.message.include?("conflicting durable ID domain aliases")
+  end
+  enum_sources = extract_data_enum_sources(code)
+rescue ArgumentError => enum_error
+  abort(enum_error.message)
+end
+
+enum_rows = enum_sources.each_with_index.map do |enum_source, index|
+  match = enum_source.match(
+    /\A(?:(typedef)\s+)?enum(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\{(.*)\}\s*([A-Za-z_][A-Za-z0-9_]*)?\s*;\z/m
+  )
+  abort("cannot parse enum declaration: #{enum_source.lines.first.strip}") unless match
+  typedef = !match[1].nil?
+  tag = match[2]
+  trailing = match[4]
+  abort("typedef enum lacks trailing type name") if typedef && trailing.nil?
+  abort("non-typedef enum has an illegal trailing name #{trailing}") if !typedef && trailing
+  begin
+    name = data_enum_domain_name(typedef, tag, trailing, index)
+  rescue ArgumentError => enum_name_error
+    abort(enum_name_error.message)
+  end
+  entries = split_c_top_level(strip_c_comments(match[3])).map do |entry|
+    entry_match = entry.match(/\A([A-Z][A-Z0-9_]*)(?:\s*=\s*(.+))?\z/m)
+    abort("cannot parse enumerator #{entry.inspect} in #{name}") unless entry_match
+    { symbol: entry_match[1], expression: entry_match[2]&.strip }
+  end
+  abort("enum #{name} has no named values") if entries.empty?
+  {
+    name: name,
+    typedef: typedef,
+    tag: tag,
+    trailing: trailing,
+    anonymous: tag.nil? && trailing.nil?,
+    entries: entries
+  }
+end
+
+duplicate_enum_names = enum_rows.reject { |row| row[:anonymous] }.group_by { |row| row[:name] }
+                                .select { |_name, rows| rows.length > 1 }.keys
+abort("duplicate enum domains: #{duplicate_enum_names.sort.join(', ')}") unless duplicate_enum_names.empty?
+
+symbol_owner = {}
+enum_rows.each do |row|
+  row[:entries].each do |entry|
+    symbol = entry[:symbol]
+    abort("duplicate global enum symbol #{symbol}") if symbol_owner.key?(symbol)
+    symbol_owner[symbol] = row[:name]
+  end
+end
+
+resolved_symbols = {}
+remaining_enums = enum_rows.dup
+resolved_enums = []
+until remaining_enums.empty?
+  progressed = false
+  remaining_enums.dup.each do |row|
+    local = {}
+    previous = nil
+    begin
+      row[:entries].each do |entry|
+        value = if entry[:expression]
+                  CIntegerExpression.new(entry[:expression], resolved_symbols.merge(local)).evaluate
+                elsif previous.nil?
+                  0
+                else
+                  previous + 1
+                end
+        entry[:value] = value
+        local[entry[:symbol]] = value
+        previous = value
+      end
+    rescue UnknownEnumIdentifier
+      next
+    end
+    resolved_symbols.merge!(local)
+    resolved_enums << row
+    remaining_enums.delete(row)
+    progressed = true
+  end
+  unless progressed
+    names = remaining_enums.map { |row| row[:name] }.sort
+    abort("cyclic, forward, or unresolved enum dependency: #{names.join(', ')}")
+  end
+end
+
+named_id_enums = resolved_enums.select do |row|
+  !row[:anonymous] && (row[:name].end_with?("Id") || row[:name].end_with?("IdValue"))
+end
+named_id_enums.each do |row|
+  duplicates = row[:entries].group_by { |entry| entry[:value] }
+                  .select { |_value, entries| entries.length > 1 }
+  next if duplicates.empty?
+
+  detail = duplicates.sort.map do |value, entries|
+    "#{value}=#{entries.map { |entry| entry[:symbol] }.sort.join('/')}"
+  end
+  abort("duplicate numeric value in named ID domain #{row[:name]}: #{detail.join(', ')}")
+end
+
+# Canonical enum declarations contain only resolved integers, so their sorted
+# order cannot introduce a hidden forward dependency.
+canonical_enums = resolved_enums.sort_by { |row| row[:name] }.map do |row|
+  opening = if row[:typedef]
+              row[:tag] ? "typedef enum #{row[:tag]}" : "typedef enum"
+            elsif row[:tag]
+              "enum #{row[:tag]}"
+            else
+              "enum"
+            end
+  closing = row[:typedef] ? "} #{row[:trailing]};" : "};"
+  sorted_entries = row[:entries].sort_by { |entry| [entry[:value], entry[:symbol]] }
+  body = sorted_entries.each_with_index.map do |entry, entry_index|
+    comma = entry_index == sorted_entries.length - 1 ? "" : ","
+    "    #{entry[:symbol]} = #{entry[:value]}#{comma}"
+  end.join("\n")
+  "#{opening} {\n#{body}\n#{closing}"
+end
+
+enum_contract = resolved_enums.sort_by { |row| row[:name] }.map do |row|
+  {
+    domain: row[:name],
+    values: row[:entries].sort_by { |entry| [entry[:value], entry[:symbol]] }
+               .map { |entry| [entry[:symbol], entry[:value]] }
+  }
+end
+enum_contract_sha256 = Digest::SHA256.hexdigest(JSON.generate(enum_contract))
+
+# Global collision domains are derived from declared scalar aliases, with a
+# closed prefix map for the few deliberately mixed ID enums.
+prefix_domains = [
+  [/\ASTR_/, "StringId"],
+  [/\AASSET_/, "AssetId"],
+  [/\AANIMSET_/, "AnimationSetId"],
+  [/\A(?:AUDIO_|MUSIC_CUE_)/, "AudioCueId"],
+  [/\ABUNDLE_/, "BundleId"],
+  [/\ACAMERA_CUE_/, "CameraCueId"],
+  [/\ACOND_/, "ConditionId"],
+  [/\AINT_/, "InteractionId"],
+  [/\AACTION_/, "StoryActionListId"],
+  [/\ATRANS_DEF_/, "TransitionId"],
+  [/\ASAVELOC_/, "SaveableLocationId"],
+  [/\ACHECKPOINT_/, "CheckpointId"],
+  [/\ASPAWN_/, "SpawnId"],
+  [/\AZONE_/, "ZoneId"],
+  [/\ASCENE_/, "SceneId"],
+  [/\AUI_SCREEN_/, "UIScreenId"],
+  [/\ACHAR_/, "CharacterId"],
+  [/\AECHO_/, "CreatureId"],
+  [/\ATEAM_/, "TeamId"],
+  [/\AOBJ_/, "ObjectiveId"],
+  [/\AENCOUNTER_/, "EncounterId"],
+  [/\AREWARD_/, "RewardId"],
+  [/\ADEST_NODE_/, "DestinationNodeId"]
+].freeze
+
+alias_names_by_length = alias_widths.keys.sort_by { |name| -name.length }
+global_id_rows = []
+resolved_enums.each do |row|
+  inferred = alias_names_by_length.find do |alias_name|
+    row[:name] == "#{alias_name}Value" || row[:name].end_with?("#{alias_name}Value")
+  end
+  prefix_hits = row[:entries].map do |entry|
+    hit = prefix_domains.find { |regexp, _domain| entry[:symbol].match?(regexp) }
+    hit && hit[1]
+  end.compact.uniq
+  mixed = inferred && prefix_hits.any? { |domain| domain != inferred }
+  id_named = row[:name].end_with?("IdValue")
+
+  row[:entries].each do |entry|
+    hit = prefix_domains.find { |regexp, _domain| entry[:symbol].match?(regexp) }
+    prefix_domain = hit && hit[1]
+    domain = if mixed
+               prefix_domain
+             elsif inferred
+               inferred
+             elsif id_named
+               prefix_domain
+             end
+    next unless domain && alias_widths.key?(domain)
+    next if entry[:symbol].end_with?("_GENERATED_BASE")
+
+    global_id_rows << {
+      domain: domain,
+      symbol: entry[:symbol],
+      value: entry[:value],
+      enum: row[:name]
+    }
+  end
+end
+
+global_id_groups = global_id_rows.group_by { |row| row[:domain] }
+global_id_groups.each do |domain, rows|
+  duplicates = rows.group_by { |row| row[:value] }.select { |_value, assignments| assignments.length > 1 }
+  unless duplicates.empty?
+    detail = duplicates.sort.map do |value, assignments|
+      "#{value}=#{assignments.map { |assignment| assignment[:symbol] }.sort.join('/')}"
+    end
+    abort("global #{domain} collision: #{detail.join(', ')}")
+  end
+
+  width = alias_widths.fetch(domain)
+  signed = alias_signed.fetch(domain)
+  minimum = signed ? -(1 << (width - 1)) : 0
+  maximum = signed ? ((1 << (width - 1)) - 1) : ((1 << width) - 1)
+  rows.each do |row|
+    unless row[:value].between?(minimum, maximum)
+      abort("#{row[:symbol]}=#{row[:value]} is outside #{domain} #{width}-bit range")
+    end
+  end
+end
+
+# DIALOGUE_GRAPH owns the complete DialogueId/StringId row set. DATA may mirror
+# a graph symbol exactly or use one of the ten reviewed tutorial aliases, but it
+# may not independently allocate a colliding value. External graph symbols are
+# emitted into the generated header so literal DATA arrays can reference them
+# without copying Graph-owned magic numbers into DATA_SCHEMAS.
+graph_tutorial_aliases = {
+  "SIM_G1_HP" => "TUTORIAL_GATE1_INSTRUCTION",
+  "SIM_G1_REPEAT" => "TUTORIAL_GATE1_REPEAT",
+  "SIM_G2_001" => "TUTORIAL_GATE2_INSTRUCTION",
+  "SIM_G2_REPEAT" => "TUTORIAL_GATE2_REPEAT",
+  "SIM_G3_001" => "TUTORIAL_GATE3_INSTRUCTION",
+  "SIM_G3_REPEAT" => "TUTORIAL_GATE3_REPEAT",
+  "SIM_G4_001" => "TUTORIAL_GATE4_INSTRUCTION",
+  "SIM_G4_REPEAT" => "TUTORIAL_GATE4_REPEAT",
+  "SIM_G5_001" => "TUTORIAL_GATE5_INSTRUCTION",
+  "SIM_G5_REPEAT" => "TUTORIAL_GATE5_REPEAT"
+}.freeze
+data_dialogue_by_value = global_id_groups.fetch("DialogueId", []).group_by { |row| row[:value] }
+external_graph_dialogue_rows = []
+graph_dialogue_rows.each do |row|
+  symbol = row[:symbol]
+  value = row[:dialogue_id]
+  if resolved_symbols.key?(symbol)
+    abort("DIALOGUE_GRAPH #{symbol} disagrees with DATA_SCHEMAS") unless resolved_symbols[symbol] == value
+    next
+  end
+
+  collisions = data_dialogue_by_value.fetch(value, [])
+  if graph_tutorial_aliases.key?(symbol)
+    expected_alias = graph_tutorial_aliases.fetch(symbol)
+    unless resolved_symbols[expected_alias] == value &&
+           collisions.any? { |candidate| candidate[:symbol] == expected_alias }
+      abort("DIALOGUE_GRAPH tutorial alias #{symbol} does not match #{expected_alias}")
+    end
+    next
+  end
+  unless collisions.empty?
+    abort("DIALOGUE_GRAPH #{symbol}=#{value} collides with DATA DialogueId " \
+          "#{collisions.map { |candidate| candidate[:symbol] }.join('/')}")
+  end
+  external_graph_dialogue_rows << row
+end
+
+reviewed_alias_symbols = graph_dialogue_rows.map { |row| row[:symbol] }.select do |symbol|
+  symbol.match?(/\ASIM_G1_(?:HP|REPEAT)\z/) ||
+    symbol.match?(/\ASIM_G[2-5]_(?:001|REPEAT)\z/)
+end
+unless graph_tutorial_aliases.keys.sort == reviewed_alias_symbols.sort
+  abort("reviewed DIALOGUE_GRAPH tutorial alias set drifted")
+end
+
+data_string_by_value = global_id_groups.fetch("StringId", []).group_by { |row| row[:value] }
+graph_dialogue_rows.each do |row|
+  collisions = data_string_by_value.fetch(row[:string_id], [])
+  next if collisions.empty?
+  # The byte-exact bridge and Help registries are intentional cross-document
+  # aliases and are independently equality-checked by validate-dialogue-graph.
+  next if (0x6F01..0x6F10).cover?(row[:string_id]) || (0x9320..0x9325).cover?(row[:string_id])
+
+  abort("DIALOGUE_GRAPH StringId for #{row[:symbol]}=#{row[:string_id]} collides with DATA " \
+        "#{collisions.map { |candidate| candidate[:symbol] }.join('/')}")
+end
+
+graph_dialogue_enum = begin
+  entries = external_graph_dialogue_rows.sort_by { |row| [row[:dialogue_id], row[:symbol]] }
+  body = entries.each_with_index.map do |row, index|
+    comma = index == entries.length - 1 ? "" : ","
+    "    #{row[:symbol]} = #{row[:dialogue_id]}#{comma}"
+  end.join("\n")
+  "enum DialogueGraphExternalIdValue {\n#{body}\n};"
+end
+
+# The six move-generated bases reserve one value per locked nonzero MoveId.
+# They are range anchors, not concrete assigned IDs, so assignments are checked
+# for intrusion but the anchors are excluded from ordinary collision rows.
+move_count = resolved_symbols.fetch("MOVE_LOCKED_COUNT") do
+  abort("MOVE_LOCKED_COUNT is required for generated ID ranges")
+end
+abort("MOVE_LOCKED_COUNT must reserve at least one nonzero move") unless move_count > 1
+generated_range_domains = {
+  "STR_MOVE_GENERATED_BASE" => "StringId",
+  "EFFECT_SCRIPT_GENERATED_BASE" => "EffectScriptId",
+  "ANIM_CUE_MOVE_GENERATED_BASE" => "AnimationCueId",
+  "ASSET_VFX_MOVE_GENERATED_BASE" => "AssetId",
+  "AUDIO_SFX_MOVE_GENERATED_BASE" => "AudioCueId",
+  "CAMERA_CUE_MOVE_GENERATED_BASE" => "CameraCueId"
+}.freeze
+reserved_ranges = generated_range_domains.map do |symbol, domain|
+  base = resolved_symbols.fetch(symbol) { abort("missing generated range anchor #{symbol}") }
+  { domain: domain, symbol: symbol, first: base + 1, last: base + move_count - 1 }
+end
+reserved_ranges.select { |range| range[:domain] == "StringId" }.each do |range|
+  graph_dialogue_rows.each do |row|
+    next unless row[:string_id].between?(range[:first], range[:last])
+
+    abort("DIALOGUE_GRAPH StringId #{row[:symbol]} intrudes into reserved #{range[:symbol]} range")
+  end
+end
+reserved_ranges.group_by { |range| range[:domain] }.each do |domain, ranges|
+  ranges.combination(2) do |left, right|
+    overlap = [left[:first], right[:first]].max <= [left[:last], right[:last]].min
+    abort("overlapping generated #{domain} ranges #{left[:symbol]} and #{right[:symbol]}") if overlap
+  end
+  global_id_groups.fetch(domain, []).each do |assignment|
+    ranges.each do |range|
+      next unless assignment[:value].between?(range[:first], range[:last])
+      abort("#{assignment[:symbol]} intrudes into reserved #{range[:symbol]} range " \
+            "#{range[:first]}..#{range[:last]}")
+    end
+  end
+end
+
+id_contract = {
+  domains: global_id_groups.sort.to_h do |domain, rows|
+    [domain, rows.sort_by { |row| [row[:value], row[:symbol]] }
+                 .map { |row| [row[:symbol], row[:value], row[:enum]] }]
+  end,
+  generated_ranges: reserved_ranges.sort_by { |range| [range[:domain], range[:first]] }
+}
+id_contract_sha256 = Digest::SHA256.hexdigest(JSON.generate(id_contract))
+
+# Parse fixed layouts and require a numeric offset comment for every field.
+struct_pattern = /^(typedef struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{(.*?)^\}\s*\2\s*;)\s*\n((?:^_Static_assert\([^\n]*\);\s*\n?)*)/m
+struct_matches = code.to_enum(:scan, struct_pattern).map { Regexp.last_match }
+abort("no fixed-layout structs found in #{DATA_PATH}") if struct_matches.empty?
+
+struct_rows = struct_matches.map do |match|
+  declaration = match[1]
+  name = match[2]
+  body = match[3]
+  assertions = match[4].scan(/^_Static_assert\([^\n]*\);\s*$/)
+  abort("#{name} lacks a documented static assertion") if assertions.empty?
+  unless assertions.any? { |assertion| assertion.match?(/sizeof\(#{Regexp.escape(name)}\)/) }
+    abort("#{name} lacks a sizeof static assertion")
+  end
+
+  fields = []
+  body.lines.each do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("/*", "//")
+    field_match = line.match(
+      /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(\s*\[[^\]]+\])?\s*;\s*(?:\/\*(.*?)\*\/)?\s*$/
+    )
+    abort("cannot parse #{name} field declaration: #{line.strip}") unless field_match
+    comment = field_match[4].to_s
+    offset_match = comment.match(/\A\s*(0[xX][0-9A-Fa-f]+|[0-9]+)(?=\s*(?:[:,;]|\z))/)
+    abort("#{name}.#{field_match[2]} lacks a numeric leading /* offset */ comment") unless offset_match
+    offset_text = offset_match[1]
+    offset = offset_text.match?(/\A0[xX]/) ? offset_text.to_i(16) : offset_text.to_i(10)
+    fields << {
+      type: field_match[1],
+      name: field_match[2],
+      array: field_match[3],
+      offset: offset,
+      comment: comment
+    }
+  end
+  abort("#{name} has no fields") if fields.empty?
+  duplicate_fields = fields.group_by { |field| field[:name] }.select { |_field, rows| rows.length > 1 }.keys
+  abort("#{name} has duplicate fields: #{duplicate_fields.join(', ')}") unless duplicate_fields.empty?
+
+  offset_assertions = fields.map do |field|
+    "_Static_assert(offsetof(#{name}, #{field[:name]}) == #{field[:offset]}, " \
+      "\"#{name}.#{field[:name]} offset\");"
+  end
+  {
+    name: name,
+    declaration: declaration,
+    assertions: assertions,
+    offset_assertions: offset_assertions,
+    fields: fields
+  }
+end
+duplicate_structs = struct_rows.group_by { |row| row[:name] }.select { |_name, rows| rows.length > 1 }.keys
+abort("duplicate fixed-layout structs: #{duplicate_structs.join(', ')}") unless duplicate_structs.empty?
+
+struct_lookup = struct_rows.to_h { |row| [row[:name], row] }
+ordered_structs = []
+remaining_structs = struct_lookup.dup
+until remaining_structs.empty?
+  emitted = ordered_structs.map { |row| row[:name] }
+  ready = remaining_structs.values.select do |row|
+    dependencies = row[:fields].map { |field| field[:type] }.select { |type| struct_lookup.key?(type) }.uniq
+    (dependencies - emitted).empty?
+  end
+  abort("cyclic or unresolved struct dependency: #{remaining_structs.keys.sort.join(', ')}") if ready.empty?
+  ready.sort_by { |row| row[:name] }.each do |row|
+    ordered_structs << row
+    remaining_structs.delete(row[:name])
+  end
+end
+
+layout_contract = ordered_structs.map do |row|
+  {
+    layout: row[:name],
+    fields: row[:fields].map { |field| [field[:type], field[:name], field[:array], field[:offset]] },
+    assertions: row[:assertions]
+  }
+end
+layout_contract_sha256 = Digest::SHA256.hexdigest(JSON.generate(layout_contract))
+
+# Parse fenced literal arrays, reject implicit zero-fill, and inspect every
+# positional reserved field rather than treating a successful C compile as a
+# row-count or reserved-zero proof.
+array_sources = code.scan(/^static const\s+.*?^\};/m)
+abort("no literal arrays found in #{DATA_PATH}") if array_sources.empty?
+arrays = array_sources.map do |array_source|
+  match = array_source.match(
+    /\Astatic const\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]\s*=\s*\{(.*)\};\z/m
+  )
+  abort("cannot parse literal array declaration: #{array_source.lines.first.strip}") unless match
+  type = match[1]
+  name = match[2]
+  count = match[3].to_i
+  initializer = strip_c_comments(match[4])
+  entries = split_c_top_level(initializer)
+  abort("#{name} declares #{count} rows but initializes #{entries.length}") unless entries.length == count
+
+  reserved_checks = 0
+  if struct_lookup.key?(type)
+    fields = struct_lookup.fetch(type)[:fields]
+    entries.each_with_index do |entry, row_index|
+      unless entry.start_with?("{") && entry.end_with?("}")
+        abort("#{name}[#{row_index}] must be a complete positional struct initializer")
+      end
+      values = split_c_top_level(entry[1...-1])
+      unless values.length == fields.length
+        abort("#{name}[#{row_index}] has #{values.length} fields; #{type} requires #{fields.length}")
+      end
+      fields.each_with_index do |field, field_index|
+        next unless field[:name].start_with?("reserved")
+        value = values[field_index].strip
+        unless value.match?(/\A(?:0+|0[xX]0+)[uUlL]*\z/)
+          abort("#{name}[#{row_index}].#{field[:name]} must be literal numeric zero, got #{value.inspect}")
+        end
+        reserved_checks += 1
+      end
+    end
+  end
+  {
+    type: type,
+    name: name,
+    count: count,
+    entries: entries,
+    reserved_checks: reserved_checks,
+    source: array_source.sub(/\Astatic const/, "const")
+  }
+end
+duplicate_array_names = arrays.group_by { |row| row[:name] }.select { |_name, rows| rows.length > 1 }.keys
+abort("duplicate literal arrays: #{duplicate_array_names.sort.join(', ')}") unless duplicate_array_names.empty?
+literal_contract = arrays.map do |row|
+  [row[:type], row[:name], row[:count], Digest::SHA256.hexdigest(row[:source])]
+end
+literal_contract_sha256 = Digest::SHA256.hexdigest(JSON.generate(literal_contract))
+
+# Parse every ordinary Markdown table (not merely a hand-picked literal subset)
+# and preserve headings, exact raw rows, and exact untrimmed cell bytes.
+lines = markdown.lines(chomp: true)
+tables = []
+heading_stack = []
+in_fence = false
+line_index = 0
+while line_index < lines.length
+  line = lines[line_index]
+  if line.start_with?("```")
+    in_fence = !in_fence
+    line_index += 1
+    next
+  end
+  unless in_fence
+    if (heading = line.match(/\A([#]{1,6})\s+(.+?)\s*\z/))
+      level = heading[1].length
+      heading_stack[level - 1] = heading[2]
+      heading_stack = heading_stack[0, level]
+    end
+
+    if line.start_with?("|") && line_index + 1 < lines.length && lines[line_index + 1].start_with?("|")
+      header_cells = markdown_cells(line)
+      separator_cells = markdown_cells(lines[line_index + 1])
+      separator_valid = separator_cells.length == header_cells.length &&
+                        separator_cells.all? { |cell| cell.strip.match?(/\A:?-{3,}:?\z/) }
+      if separator_valid
+        raw_rows = [line, lines[line_index + 1]]
+        cursor = line_index + 2
+        while cursor < lines.length && lines[cursor].start_with?("|")
+          raw_rows << lines[cursor]
+          cursor += 1
+        end
+        parsed_rows = raw_rows.map { |raw_row| markdown_cells(raw_row) }
+        parsed_rows.each_with_index do |cells, row_index|
+          next if cells.length == header_cells.length
+          abort("Markdown table at line #{line_index + 1}, row #{row_index} has " \
+                "#{cells.length} cells; expected #{header_cells.length}")
+        end
+        abort("Markdown table at line #{line_index + 1} has no data rows") if raw_rows.length == 2
+        tables << {
+          start_line: line_index + 1,
+          heading: heading_stack.compact.join(" > "),
+          columns: header_cells.length,
+          data_rows: raw_rows.length - 2,
+          raw_rows: raw_rows,
+          cells: parsed_rows
+        }
+        line_index = cursor
+        next
+      end
+    end
+  end
+  line_index += 1
+end
+abort("unterminated Markdown fence") if in_fence
+abort("no Markdown tables found in #{DATA_PATH}") if tables.empty?
+
+markdown_blob = +"".b
+table_metadata = []
+row_metadata = []
+cell_metadata = []
+table_hash_bytes = []
+table_contract = []
+tables.each_with_index do |table, table_index|
+  heading_offset, heading_length = append_blob(markdown_blob, table[:heading])
+  first_row = row_metadata.length
+  first_cell = cell_metadata.length
+  table[:raw_rows].each_with_index do |raw_row, row_index|
+    raw_offset, raw_length = append_blob(markdown_blob, raw_row)
+    row_first_cell = cell_metadata.length
+    table[:cells][row_index].each_with_index do |cell, column_index|
+      cell_offset, cell_length = append_blob(markdown_blob, cell)
+      cell_metadata << [table_index, row_index, column_index, cell_offset, cell_length]
+    end
+    kind = row_index.zero? ? 0 : (row_index == 1 ? 1 : 2)
+    row_metadata << [
+      table_index,
+      table[:start_line] + row_index,
+      kind,
+      raw_offset,
+      raw_length,
+      row_first_cell,
+      table[:columns]
+    ]
+  end
+  exact_contract = {
+    start_line: table[:start_line],
+    heading: table[:heading],
+    columns: table[:columns],
+    rows: table[:raw_rows].each_with_index.map do |raw_row, row_index|
+      [raw_row, table[:cells][row_index]]
+    end
+  }
+  table_digest = Digest::SHA256.digest(JSON.generate(exact_contract))
+  table_hash_bytes << table_digest.bytes
+  table_contract << exact_contract
+  table_metadata << [
+    table[:start_line],
+    table[:columns],
+    table[:data_rows],
+    first_row,
+    table[:raw_rows].length,
+    first_cell,
+    cell_metadata.length - first_cell,
+    heading_offset,
+    heading_length,
+    markdown_blob.bytesize
+  ]
+end
+markdown_contract_json = JSON.generate(table_contract)
+markdown_contract_sha256 = Digest::SHA256.hexdigest(markdown_contract_json)
+markdown_blob_sha256 = Digest::SHA256.hexdigest(markdown_blob)
+
+layout_assertion_count = ordered_structs.sum { |row| row[:assertions].length }
+layout_field_count = ordered_structs.sum { |row| row[:fields].length }
+offset_assertion_count = ordered_structs.sum { |row| row[:offset_assertions].length }
+reserved_field_count = ordered_structs.sum do |row|
+  row[:fields].count { |field| field[:name].start_with?("reserved") }
+end
+enum_constant_count = resolved_enums.sum { |row| row[:entries].length }
+literal_row_count = arrays.sum { |row| row[:count] }
+literal_reserved_checks = arrays.sum { |row| row[:reserved_checks] }
+markdown_row_count = tables.sum { |table| table[:raw_rows].length }
+markdown_data_row_count = tables.sum { |table| table[:data_rows] }
+markdown_cell_count = cell_metadata.length
+
+coverage = {
+  aliases: alias_declarations.length,
+  enum_domains: resolved_enums.length,
+  enum_constants: enum_constant_count,
+  named_id_domains: named_id_enums.length,
+  named_id_values: named_id_enums.sum { |row| row[:entries].length },
+  layouts: ordered_structs.length,
+  layout_fields: layout_field_count,
+  layout_assertions: layout_assertion_count,
+  offset_assertions: offset_assertion_count,
+  reserved_fields: reserved_field_count,
+  literal_arrays: arrays.length,
+  literal_rows: literal_row_count,
+  literal_reserved_zero_checks: literal_reserved_checks,
+  markdown_tables: tables.length,
+  markdown_rows: markdown_row_count,
+  markdown_data_rows: markdown_data_row_count,
+  markdown_cells: markdown_cell_count,
+  markdown_utf8_bytes: markdown_blob.bytesize,
+  global_id_domains: global_id_groups.length,
+  global_id_assignments: global_id_rows.length,
+  reserved_generated_ranges: reserved_ranges.length,
+  reserved_generated_values: reserved_ranges.sum { |range| range[:last] - range[:first] + 1 }
+}
+
+EXPECTED_MINIMUMS.each do |metric, minimum|
+  actual = coverage.fetch(metric)
+  abort("canonical coverage regression: #{metric}=#{actual}, reviewed minimum=#{minimum}") if actual < minimum
+end
+
+# Compiled range assertions cover every globally typed ID assignment and every
+# assignment in a named ID domain that lacks a global scalar classification.
+typed_symbols = global_id_rows.map { |row| row[:symbol] }.to_h { |symbol| [symbol, true] }
+id_range_assertions = global_id_rows.sort_by { |row| [row[:domain], row[:value], row[:symbol]] }.map do |row|
+  width = alias_widths.fetch(row[:domain])
+  signed = alias_signed.fetch(row[:domain])
+  lower = signed ? "INT#{width}_MIN" : "0"
+  upper = signed ? "INT#{width}_MAX" : "UINT#{width}_MAX"
+  "_Static_assert((#{row[:symbol]}) >= #{lower} && (uint64_t)(#{row[:symbol]}) <= " \
+    "(uint64_t)#{upper}, \"#{row[:domain]} range: #{row[:symbol]}\");"
+end
+named_id_enums.each do |row|
+  row[:entries].each do |entry|
+    next if typed_symbols.key?(entry[:symbol])
+    value = entry[:value]
+    abort("#{entry[:symbol]}=#{value} is outside default 16-bit named-ID range") unless value.between?(0, 0xFFFF)
+    id_range_assertions <<
+      "_Static_assert((#{entry[:symbol]}) >= 0 && (uint64_t)(#{entry[:symbol]}) <= " \
+      "UINT16_MAX, \"named ID range: #{entry[:symbol]}\");"
+  end
+end
+
+enum_value_rows = []
+resolved_enums.sort_by { |row| row[:name] }.each_with_index do |row, domain_index|
+  row[:entries].sort_by { |entry| [entry[:value], entry[:symbol]] }.each do |entry|
+    symbol_hash = Digest::SHA256.digest(entry[:symbol]).bytes.first(8).inject(0) { |value, byte| (value << 8) | byte }
+    encoded_value = entry[:value] & 0xFFFF_FFFF_FFFF_FFFF
+    enum_value_rows << [
+      domain_index,
+      format("UINT64_C(0x%016X)", encoded_value),
+      format("UINT64_C(0x%016X)", symbol_hash)
+    ]
+  end
+end
+
+reserved_zero_function = ["int schema_reserved_zero_contract(void)", "{"]
+reserved_check_index = 0
+ordered_structs.each do |row|
+  reserved_fields = row[:fields].select { |field| field[:name].start_with?("reserved") }
+  next if reserved_fields.empty?
+  variable = format("schema_zero_%03d", reserved_check_index)
+  reserved_zero_function << "    #{row[:name]} #{variable} = {0};"
+  reserved_fields.each do |field|
+    bytes = format("schema_bytes_%03d", reserved_check_index)
+    iterator = format("schema_i_%03d", reserved_check_index)
+    reserved_zero_function << "    {"
+    reserved_zero_function << "        const uint8_t *#{bytes} = (const uint8_t *)&#{variable}.#{field[:name]};"
+    reserved_zero_function << "        size_t #{iterator};"
+    reserved_zero_function << "        for (#{iterator} = 0; #{iterator} < sizeof(#{variable}.#{field[:name]}); ++#{iterator}) {"
+    reserved_zero_function << "            if (#{bytes}[#{iterator}] != 0) return 0;"
+    reserved_zero_function << "        }"
+    reserved_zero_function << "    }"
+    reserved_check_index += 1
+  end
+end
+reserved_zero_function << "    return 1;"
+reserved_zero_function << "}"
+
+header = <<~C
+  #ifndef N64GAME_GENERATED_SCHEMA_ALL_H
+  #define N64GAME_GENERATED_SCHEMA_ALL_H
+
+  #include <limits.h>
+  #include <stddef.h>
+  #include <stdint.h>
+
+  _Static_assert(CHAR_BIT == 8, "8-bit bytes required");
+  _Static_assert(sizeof(uint8_t) == 1, "uint8_t width");
+  _Static_assert(sizeof(uint16_t) == 2, "uint16_t width");
+  _Static_assert(sizeof(uint32_t) == 4, "uint32_t width");
+
+  #{alias_declarations.join("\n")}
+
+  #{canonical_enums.join("\n\n")}
+
+  #{graph_dialogue_enum}
+
+  #{external_graph_dialogue_rows.map { |row| "_Static_assert(#{row[:symbol]} <= UINT16_MAX, \"Graph DialogueId range: #{row[:symbol]}\");" }.join("\n")}
+
+  #{ordered_structs.map { |row| ([row[:declaration]] + row[:assertions] + row[:offset_assertions]).join("\n") }.join("\n\n")}
+
+  #{id_range_assertions.join("\n")}
+
+  #{arrays.map { |row| "extern const #{row[:type]} #{row[:name]}[#{row[:count]}];" }.join("\n")}
+
+  extern const uint64_t SCHEMA_ENUM_VALUE_CONTRACT[#{enum_value_rows.length}][3];
+  extern const uint8_t SCHEMA_MARKDOWN_UTF8[#{markdown_blob.bytesize}];
+  extern const uint32_t SCHEMA_MARKDOWN_TABLES[#{table_metadata.length}][10];
+  extern const uint32_t SCHEMA_MARKDOWN_ROWS[#{row_metadata.length}][7];
+  extern const uint32_t SCHEMA_MARKDOWN_CELLS[#{cell_metadata.length}][5];
+  extern const uint8_t SCHEMA_MARKDOWN_TABLE_SHA256[#{table_hash_bytes.length}][32];
+  int schema_reserved_zero_contract(void);
+
+  #endif
+C
+
+source = <<~C
+  #include "schema_all.h"
+
+  #{arrays.map { |row| row[:source] }.join("\n\n")}
+
+  const uint64_t SCHEMA_ENUM_VALUE_CONTRACT[#{enum_value_rows.length}][3] = {
+  #{c_matrix(enum_value_rows)}
+  };
+
+  const uint8_t SCHEMA_MARKDOWN_UTF8[#{markdown_blob.bytesize}] = {
+  #{c_bytes(markdown_blob.bytes)}
+  };
+
+  const uint32_t SCHEMA_MARKDOWN_TABLES[#{table_metadata.length}][10] = {
+  #{c_matrix(table_metadata)}
+  };
+
+  const uint32_t SCHEMA_MARKDOWN_ROWS[#{row_metadata.length}][7] = {
+  #{c_matrix(row_metadata)}
+  };
+
+  const uint32_t SCHEMA_MARKDOWN_CELLS[#{cell_metadata.length}][5] = {
+  #{c_matrix(cell_metadata)}
+  };
+
+  const uint8_t SCHEMA_MARKDOWN_TABLE_SHA256[#{table_hash_bytes.length}][32] = {
+  #{table_hash_bytes.map { |bytes| "    { " + bytes.map { |byte| format("0x%02X", byte) }.join(", ") + " }" }.join(",\n")}
+  };
+
+  #{reserved_zero_function.join("\n")}
+C
+
+aggregate_refs = arrays.map { |row| row[:name] } + [
+  "SCHEMA_ENUM_VALUE_CONTRACT",
+  "SCHEMA_MARKDOWN_UTF8",
+  "SCHEMA_MARKDOWN_TABLES",
+  "SCHEMA_MARKDOWN_ROWS",
+  "SCHEMA_MARKDOWN_CELLS",
+  "SCHEMA_MARKDOWN_TABLE_SHA256"
+]
+aggregate = <<~C
+  #include "schema_all.h"
+
+  enum { SCHEMA_LITERAL_ARRAY_COUNT = #{arrays.length} };
+  enum { SCHEMA_LITERAL_ROW_COUNT = #{literal_row_count} };
+  enum { SCHEMA_MARKDOWN_TABLE_COUNT = #{tables.length} };
+  enum { SCHEMA_MARKDOWN_ROW_COUNT = #{markdown_row_count} };
+  enum { SCHEMA_MARKDOWN_CELL_COUNT = #{markdown_cell_count} };
+  enum { SCHEMA_LAYOUT_OFFSET_ASSERTION_COUNT = #{offset_assertion_count} };
+  _Static_assert(SCHEMA_LITERAL_ARRAY_COUNT >= #{EXPECTED_MINIMUMS[:literal_arrays]}, "literal array coverage");
+  _Static_assert(SCHEMA_LITERAL_ROW_COUNT >= #{EXPECTED_MINIMUMS[:literal_rows]}, "literal row coverage");
+  _Static_assert(SCHEMA_MARKDOWN_TABLE_COUNT >= #{EXPECTED_MINIMUMS[:markdown_tables]}, "Markdown table coverage");
+  _Static_assert(SCHEMA_MARKDOWN_ROW_COUNT == #{markdown_row_count}, "Markdown row coverage");
+  _Static_assert(SCHEMA_MARKDOWN_CELL_COUNT >= #{EXPECTED_MINIMUMS[:markdown_cells]}, "Markdown cell coverage");
+  _Static_assert(SCHEMA_LAYOUT_OFFSET_ASSERTION_COUNT >= #{EXPECTED_MINIMUMS[:offset_assertions]}, "layout offset coverage");
+  #{arrays.map { |row| "_Static_assert(sizeof(#{row[:name]}) == sizeof(#{row[:name]}[0]) * #{row[:count]}, \"#{row[:name]} count\");" }.join("\n")}
+  _Static_assert(sizeof(SCHEMA_ENUM_VALUE_CONTRACT) / sizeof(SCHEMA_ENUM_VALUE_CONTRACT[0]) == #{enum_value_rows.length}, "enum value contract count");
+  _Static_assert(sizeof(SCHEMA_MARKDOWN_TABLES) / sizeof(SCHEMA_MARKDOWN_TABLES[0]) == #{tables.length}, "Markdown table contract count");
+  _Static_assert(sizeof(SCHEMA_MARKDOWN_ROWS) / sizeof(SCHEMA_MARKDOWN_ROWS[0]) == #{markdown_row_count}, "Markdown row contract count");
+  _Static_assert(sizeof(SCHEMA_MARKDOWN_CELLS) / sizeof(SCHEMA_MARKDOWN_CELLS[0]) == #{markdown_cell_count}, "Markdown cell contract count");
+
+  const void *const SCHEMA_ALL_CONTRACT_REFS[#{aggregate_refs.length}] = {
+  #{aggregate_refs.map { |name| "    #{name}" }.join(",\n")}
+  };
+
+  const size_t SCHEMA_LITERAL_TABLE_COUNTS[#{arrays.length}] = {
+  #{arrays.map { |row| "    sizeof(#{row[:name]}) / sizeof(#{row[:name]}[0])" }.join(",\n")}
+  };
+
+  int (*const SCHEMA_RESERVED_ZERO_CONTRACT_REF)(void) = schema_reserved_zero_contract;
+C
+
+checks = {
+  global_enum_symbol_checks: enum_constant_count,
+  enum_expression_checks: enum_constant_count,
+  named_id_domain_duplicate_value_checks: named_id_enums.sum { |row| row[:entries].length },
+  global_id_collision_checks: global_id_rows.length,
+  id_range_assertions: id_range_assertions.length,
+  reserved_id_range_checks: coverage[:reserved_generated_values],
+  dialogue_graph_external_symbol_checks: external_graph_dialogue_rows.length,
+  dialogue_graph_cross_document_rows: graph_dialogue_rows.length,
+  layout_size_and_static_assertions: layout_assertion_count,
+  layout_offset_assertions: offset_assertion_count,
+  reserved_zero_struct_checks: reserved_field_count,
+  literal_array_count_checks: arrays.length,
+  literal_initializer_row_checks: literal_row_count,
+  literal_reserved_zero_checks: literal_reserved_checks,
+  markdown_table_shape_checks: markdown_row_count,
+  markdown_cell_coverage_checks: markdown_cell_count,
+  nonregression_metrics: EXPECTED_MINIMUMS.length
+}
+
+compiler = ENV.fetch("CC", "cc")
+hashes = {}
+Dir.mktmpdir("n64game-schema-") do |directory|
+  header_path = File.join(directory, "schema_all.h")
+  source_path = File.join(directory, "schema_all.c")
+  aggregate_path = File.join(directory, "schema_aggregate_compile.c")
+  File.write(header_path, header)
+  File.write(source_path, source)
+  File.write(aggregate_path, aggregate)
+
+  [[source_path, "schema_all.o"], [aggregate_path, "schema_aggregate_compile.o"]].each do |input, output|
+    stdout, stderr, status = compile_unit(compiler, directory, input, File.join(directory, output))
+    unless status.success?
+      warn stdout unless stdout.empty?
+      warn stderr unless stderr.empty?
+      abort("DATA_SCHEMAS canonical generated C failed to compile: #{File.basename(input)}")
+    end
+  end
+
+  if ENV["N64_CC"] && !ENV["N64_CC"].empty?
+    [[source_path, "schema_all.n64.o"], [aggregate_path, "schema_aggregate_compile.n64.o"]].each do |input, output|
+      stdout, stderr, status = compile_unit(ENV["N64_CC"], directory, input, File.join(directory, output))
+      unless status.success?
+        warn stdout unless stdout.empty?
+        warn stderr unless stderr.empty?
+        abort("DATA_SCHEMAS pinned N64 generated C failed to compile: #{File.basename(input)}")
+      end
+    end
+  end
+
+  hashes = {
+    "schema_all.h" => Digest::SHA256.hexdigest(header),
+    "schema_all.c" => Digest::SHA256.hexdigest(source),
+    "schema_aggregate_compile.c" => Digest::SHA256.hexdigest(aggregate)
+  }
+end
+
+puts "DATA_SCHEMAS canonical generated C compiled: " \
+     "#{coverage[:aliases]} aliases, #{coverage[:enum_domains]} enums/" \
+     "#{coverage[:enum_constants]} values, #{coverage[:layouts]} layouts/" \
+     "#{coverage[:offset_assertions]} offsets, #{coverage[:literal_arrays]} arrays/" \
+     "#{coverage[:literal_rows]} rows, #{coverage[:markdown_tables]} Markdown tables/" \
+     "#{coverage[:markdown_cells]} cells."
+puts JSON.generate(
+  {
+    source_sha256: Digest::SHA256.hexdigest(markdown),
+    coverage: coverage,
+    checks: checks,
+    contract_sha256: {
+      enums: enum_contract_sha256,
+      layouts: layout_contract_sha256,
+      literal_arrays: literal_contract_sha256,
+      id_collisions_and_ranges: id_contract_sha256,
+      markdown_tables: markdown_contract_sha256,
+      markdown_utf8_blob: markdown_blob_sha256,
+      dialogue_graph_rows: graph_dialogue_contract_sha256
+    },
+    audit_manifest: {
+      global_id_domain_assignments: global_id_groups.sort.to_h do |domain, rows|
+        [domain, rows.length]
+      end,
+      reserved_generated_ranges: reserved_ranges.sort_by { |range| [range[:domain], range[:first]] },
+      dialogue_graph_external_ids: external_graph_dialogue_rows.length
+    },
+    generated_sha256: hashes,
+    expected_minimums: EXPECTED_MINIMUMS
+  }
+)

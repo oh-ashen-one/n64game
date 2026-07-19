@@ -1,0 +1,3 @@
+# N64GAME CutsceneId lock v1
+# Append-only. Columns: numeric_id|symbol|state
+1|CUTSCENE_OPENING_SOLACE|LIVE

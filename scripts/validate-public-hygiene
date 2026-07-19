@@ -1,0 +1,1367 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "open3"
+require "pathname"
+require "set"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+MAX_GIT_BLOB_BYTES = 1024 * 1024
+MAGIC_PREFIX_BYTES = 65_536
+STREAM_SCAN_CHUNK_BYTES = 65_536
+STREAM_SCAN_OVERLAP_BYTES = 1_024
+STREAM_SCAN_TEXT_OVERLAP_CHARS = 1_024
+BANNED_EXTENSIONS = %w[
+  .z64 .n64 .v64 .rom .eep .sav .srm .state
+  .bin .iso .img .dmg
+  .zip .7z .rar .tar .gz .tgz .bz2 .xz .lz .lz4 .zst
+].freeze
+BANNED_PUBLIC_PATH_PREFIXES = %w[
+  build/
+].freeze
+CREDENTIAL_FILENAME = /\A(?:\.env(?:\..+)?|credentials?.*|.*\.(?:pem|key|p12|pfx|jks|keystore))\z/i
+SECRET_PATTERNS = {
+  "private key block" => /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/,
+  "GitHub token" => /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/,
+  "AWS access key" => /\bAKIA[0-9A-Z]{16}\b/,
+  "Google API key" => /\bAIza[0-9A-Za-z_-]{30,}\b/,
+  "Stripe live secret" => /\bsk_live_[0-9A-Za-z]{16,}\b/,
+  "Slack token" => /\bxox[baprs]-[0-9A-Za-z-]{20,}\b/
+}.freeze
+REJECTED_NAMES = ["Tessram", "Aeralume", "Vantrel", "Brassel", "Mireveil", "Qorrum", "Mara Quill"].freeze
+REJECTED_NAME_EXEMPT_PATHS = %w[
+  docs/NAMING_AND_ORIGINALITY_AUDIT.md
+  scripts/validate-preproduction
+  scripts/validate-public-hygiene
+].freeze
+UTF16_ASCII_RUN_MIN_CODEUNITS = REJECTED_NAMES.map(&:length).min
+SAFE_GIT_ENVIRONMENT = {
+  "GIT_NO_REPLACE_OBJECTS" => "1",
+  "GIT_GRAFT_FILE" => nil
+}.freeze
+
+def git_capture(root, *arguments, stdin_data: nil)
+  stdout, stderr, status = Open3.capture3(
+    SAFE_GIT_ENVIRONMENT,
+    "git", *arguments,
+    chdir: root.to_s,
+    stdin_data: stdin_data
+  )
+  [stdout, stderr, status.success?]
+end
+
+def decode_text(bytes)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  return "" if bytes.empty?
+
+  if bytes.start_with?("\xEF\xBB\xBF".b)
+    candidate = bytes.byteslice(3..-1).dup.force_encoding(Encoding::UTF_8)
+  elsif bytes.start_with?("\xFF\xFE".b)
+    candidate = bytes.byteslice(2..-1).dup.force_encoding(Encoding::UTF_16LE)
+    return candidate.encode(Encoding::UTF_8)
+  elsif bytes.start_with?("\xFE\xFF".b)
+    candidate = bytes.byteslice(2..-1).dup.force_encoding(Encoding::UTF_16BE)
+    return candidate.encode(Encoding::UTF_8)
+  elsif (encoding = bomless_utf16_encoding(bytes))
+    candidate = bytes.dup.force_encoding(encoding)
+    return candidate.encode(Encoding::UTF_8)
+  else
+    return nil if bytes.include?("\x00".b)
+
+    candidate = bytes.dup.force_encoding(Encoding::UTF_8)
+  end
+  candidate.valid_encoding? ? candidate : nil
+rescue EncodingError
+  nil
+end
+
+def bomless_utf16_encoding(bytes)
+  # Only infer BOM-less UTF-16 when a meaningful prefix looks like ordinary
+  # text in exactly one byte lane. This detects intentionally encoded policy
+  # strings without treating arbitrary ASCII or all-zero binary data as text.
+  sample = bytes.to_s.b.byteslice(0, 4096).to_s.b
+  sample = sample.byteslice(0, sample.bytesize - (sample.bytesize % 2))
+  pair_count = sample.bytesize / 2
+  return nil if pair_count < UTF16_ASCII_RUN_MIN_CODEUNITS
+
+  lanes = sample.bytes.each_slice(2).to_a.transpose
+  even_bytes, odd_bytes = lanes
+  text_byte = lambda do |byte|
+    byte == 9 || byte == 10 || byte == 13 || (byte >= 0x20 && byte <= 0x7e)
+  end
+  orientation = lambda do |text_lane, zero_lane|
+    zero_ratio = zero_lane.count(0).fdiv(pair_count)
+    text_zero_ratio = text_lane.count(0).fdiv(pair_count)
+    text_ratio = text_lane.count { |byte| text_byte.call(byte) }.fdiv(pair_count)
+    zero_ratio >= 0.75 && text_zero_ratio <= 0.10 && text_ratio >= 0.70
+  end
+  little_endian = orientation.call(even_bytes, odd_bytes)
+  big_endian = orientation.call(odd_bytes, even_bytes)
+  return Encoding::UTF_16LE if little_endian && !big_endian
+  return Encoding::UTF_16BE if big_endian && !little_endian
+
+  nil
+end
+
+def bomless_utf16_ascii_runs(bytes)
+  # Extract only long, contiguous ASCII-like UTF-16 runs. Checking both byte
+  # orders and both possible alignments catches policy text embedded anywhere
+  # in a binary payload while ordinary ASCII (no alternating NUL lane) yields
+  # no candidate and therefore no new false-positive surface.
+  bytes = bytes.to_s.b
+  return [] unless bytes.include?("\x00".b)
+
+  runs = []
+  ascii_text_byte = lambda do |byte|
+    byte == 9 || byte == 10 || byte == 13 || (byte >= 0x20 && byte <= 0x7e)
+  end
+  [[0, 1], [1, 0]].each do |text_index, zero_index|
+    [0, 1].each do |offset|
+      current = []
+      index = offset
+      while index + 1 < bytes.bytesize
+        pair = [bytes.getbyte(index), bytes.getbyte(index + 1)]
+        if pair[zero_index].zero? && ascii_text_byte.call(pair[text_index])
+          current << pair[text_index]
+        else
+          runs << current.pack("C*").force_encoding(Encoding::UTF_8) if
+            current.length >= UTF16_ASCII_RUN_MIN_CODEUNITS
+          current = []
+        end
+        index += 2
+      end
+      runs << current.pack("C*").force_encoding(Encoding::UTF_8) if
+        current.length >= UTF16_ASCII_RUN_MIN_CODEUNITS
+    end
+  end
+  runs.uniq
+end
+
+def magic_labels(bytes)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  labels = []
+  labels << "N64 big-endian ROM magic" if bytes.start_with?("\x80\x37\x12\x40".b)
+  labels << "N64 byte-swapped ROM magic" if bytes.start_with?("\x37\x80\x40\x12".b)
+  labels << "N64 little-endian ROM magic" if bytes.start_with?("\x40\x12\x37\x80".b)
+  labels << "ZIP archive magic" if ["PK\x03\x04".b, "PK\x05\x06".b, "PK\x07\x08".b].any? { |magic| bytes.start_with?(magic) }
+  labels << "7-Zip archive magic" if bytes.start_with?("\x37\x7A\xBC\xAF\x27\x1C".b)
+  labels << "RAR archive magic" if bytes.start_with?("Rar!\x1A\x07".b)
+  labels << "gzip archive magic" if bytes.start_with?("\x1F\x8B".b)
+  labels << "bzip2 archive magic" if bytes.start_with?("BZh".b)
+  labels << "XZ archive magic" if bytes.start_with?("\xFD7zXZ\x00".b)
+  labels << "Zstandard archive magic" if bytes.start_with?("\x28\xB5\x2F\xFD".b)
+  labels << "tar archive magic" if bytes.bytesize >= 262 && bytes.byteslice(257, 5) == "ustar".b
+  labels << "ISO-9660 image magic" if bytes.bytesize >= 32_774 && bytes.byteslice(32_769, 5) == "CD001".b
+  labels << "Apple disk-image trailer magic" if bytes.bytesize >= 512 && bytes.byteslice(-512, 4) == "koly".b
+  labels
+end
+
+def rejected_name_exempt_path?(path)
+  raw_path = path.to_s.b
+  REJECTED_NAME_EXEMPT_PATHS.any? { |exempt| raw_path == exempt.b }
+end
+
+def content_policy_findings(bytes, scan_rejected_names: true)
+  content = bytes.to_s.b
+  findings = []
+  SECRET_PATTERNS.each do |label, pattern|
+    findings << "possible #{label}" if content.match?(pattern)
+  end
+  if scan_rejected_names
+    REJECTED_NAMES.each do |name|
+      findings << "rejected working name remains: #{name}" if
+        content.match?(/\b#{Regexp.escape(name)}\b/i)
+    end
+  end
+  findings
+rescue Encoding::CompatibilityError
+  # All configured patterns are ASCII. Retrying against an explicitly binary
+  # regexp keeps invalid-UTF-8 path bytes inspectable instead of skipping them.
+  binary = content.dup.force_encoding(Encoding::BINARY)
+  findings = []
+  SECRET_PATTERNS.each do |label, pattern|
+    findings << "possible #{label}" if binary.match?(Regexp.new(pattern.source, pattern.options, "n"))
+  end
+  if scan_rejected_names
+    REJECTED_NAMES.each do |name|
+      pattern = Regexp.new("\\b#{Regexp.escape(name)}\\b", Regexp::IGNORECASE, "n")
+      findings << "rejected working name remains: #{name}" if binary.match?(pattern)
+    end
+  end
+  findings
+end
+
+def path_findings(path)
+  raw_path = path.to_s.b
+  normalized = raw_path.tr("\\", "/")
+  normalized_casefold = normalized.downcase
+  extension = File.extname(normalized).downcase
+  findings = []
+  findings << "control character in public pathname" if normalized.match?(/[\x00-\x1F\x7F]/)
+  findings << "literal backslash in public pathname" if raw_path.include?("\\".b)
+  findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
+  if BANNED_PUBLIC_PATH_PREFIXES.any? { |prefix| normalized_casefold.start_with?(prefix) }
+    findings << "forbidden generated-build path"
+  end
+  findings << "credential-like filename" if
+    File.basename(normalized).match?(CREDENTIAL_FILENAME) && File.basename(normalized) != ".env.example"
+  findings.concat(
+    content_policy_findings(
+      normalized,
+      scan_rejected_names: !rejected_name_exempt_path?(normalized)
+    )
+  )
+  findings.uniq
+end
+
+def artifact_findings(path, bytes, scan_rejected_names: true)
+  bytes = bytes.dup.force_encoding(Encoding::BINARY)
+  findings = path_findings(path)
+  magic_labels(bytes).each { |label| findings << label }
+
+  text = decode_text(bytes)
+  if text.nil? && (bytes.start_with?("\xFF\xFE".b) || bytes.start_with?("\xFE\xFF".b))
+    findings << "malformed BOM-marked UTF-16 content"
+  end
+  [bytes, text, *bomless_utf16_ascii_runs(bytes)].compact.each do |content|
+    findings.concat(
+      content_policy_findings(
+        content,
+        scan_rejected_names: scan_rejected_names && !rejected_name_exempt_path?(path)
+      )
+    )
+  end
+  findings.uniq
+end
+
+def add_artifact_findings(errors, label, path, bytes, scan_rejected_names: true)
+  artifact_findings(path, bytes, scan_rejected_names: scan_rejected_names).each do |finding|
+    errors << "#{label}: #{finding}"
+  end
+end
+
+def reachable_object_records(root, errors, extra_roots = [])
+  # Enumerate object IDs without path decorations. Git pathnames may contain
+  # newlines, so line-parsing `rev-list --objects` output can otherwise detach
+  # an OID from its path and silently omit a reachable blob. Path policy is
+  # checked separately through NUL-delimited history traversal below.
+  objects, stderr, success = git_capture(
+    root, "rev-list", "--objects", "--all", "--no-object-names", *extra_roots.uniq
+  )
+  unless success
+    errors << "history: cannot enumerate reachable objects: #{stderr.strip}"
+    return []
+  end
+  object_ids = []
+  objects.each_line.with_index do |line, index|
+    oid = line.chomp
+    if oid.match?(/\A[0-9a-f]+\z/)
+      object_ids << oid
+    else
+      errors << "history: malformed reachable object ID at row #{index + 1}"
+    end
+  end
+  object_ids.uniq!
+  return [] if object_ids.empty?
+
+  checked, check_error, check_ok = git_capture(
+    root,
+    "cat-file",
+    "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+    stdin_data: object_ids.join("\n") + "\n"
+  )
+  unless check_ok
+    errors << "history: cannot inspect reachable object metadata: #{check_error.strip}"
+    return []
+  end
+  records = []
+  checked.each_line.with_index do |line, index|
+    oid, type, size_text, extra = line.split
+    unless extra.nil? && object_ids.include?(oid) && %w[blob commit tag tree].include?(type) &&
+           size_text&.match?(/\A(?:0|[1-9][0-9]*)\z/)
+      errors << "history: malformed reachable object metadata at row #{index + 1}"
+      next
+    end
+    records << { oid: oid, type: type, size: Integer(size_text, 10) }
+  end
+  metadata_ids = records.map { |record| record[:oid] }
+  (object_ids - metadata_ids).each do |oid|
+    errors << "history: reachable object #{oid} is missing metadata"
+  end
+  records
+end
+
+def reachable_blob_paths(root, records, errors)
+  paths_by_blob = Hash.new { |hash, oid| hash[oid] = Set.new }
+  seen_root_trees = Set.new
+  records.select { |record| record[:type] == "commit" }.each do |record|
+    tree_out, tree_error, tree_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{record[:oid]}^{tree}"
+    )
+    tree_oid = tree_out.strip
+    unless tree_ok && tree_oid.match?(/\A[0-9a-f]+\z/)
+      errors << "history commit #{record[:oid]}: cannot resolve root tree: #{tree_error.strip}"
+      next
+    end
+    next unless seen_root_trees.add?(tree_oid)
+
+    output, stderr, success = git_capture(
+      root, "ls-tree", "-r", "-z", "--full-tree", tree_oid
+    )
+    unless success
+      errors << "history tree #{tree_oid}: cannot enumerate blob paths: #{stderr.strip}"
+      next
+    end
+    output.b.split("\0").reject(&:empty?).each_with_index do |entry, index|
+      metadata, raw_path = entry.split("\t", 2)
+      match = metadata&.match(/\A([0-7]{6}) (blob|commit) ([0-9a-f]+)\z/)
+      unless match && raw_path && !raw_path.empty?
+        errors << "history tree #{tree_oid}: malformed recursive entry at row #{index + 1}"
+        next
+      end
+      next unless match[2] == "blob"
+
+      paths_by_blob[match[3]] << raw_path
+    end
+  end
+  paths_by_blob
+end
+
+def validate_no_legacy_grafts(root, errors)
+  if ENV.key?("GIT_GRAFT_FILE")
+    errors << "history: GIT_GRAFT_FILE environment override can hide real public ancestry"
+  end
+  output, stderr, success = git_capture(root, "rev-parse", "--git-common-dir")
+  unless success
+    errors << "history: cannot resolve Git common directory: #{stderr.strip}"
+    return
+  end
+  common = Pathname.new(output.strip)
+  common = root.join(common) unless common.absolute?
+  grafts = common.cleanpath.join("info/grafts")
+  return unless grafts.exist? || grafts.symlink?
+
+  errors << "history: legacy Git graft metadata can hide real public ancestry"
+end
+
+def validate_complete_repository_history(root, errors)
+  output, stderr, success = git_capture(root, "rev-parse", "--is-shallow-repository")
+  unless success
+    errors << "history: cannot determine whether repository history is shallow: #{stderr.strip}"
+    return
+  end
+
+  case output.strip
+  when "false"
+    nil
+  when "true"
+    errors << "history: shallow repository cannot prove complete public history"
+  else
+    errors << "history: malformed shallow-repository status #{output.strip.inspect}"
+  end
+end
+
+def validate_public_ref_roots(root, errors)
+  output, stderr, success = git_capture(root, "for-each-ref", "--format=%(refname)")
+  unless success
+    errors << "refs: cannot enumerate public history roots: #{stderr.strip}"
+    return [[], []]
+  end
+
+  object_roots = []
+  commit_roots = []
+  output.b.each_line.map(&:chomp).reject(&:empty?).sort.each do |refname|
+    display_name = refname.dup.force_encoding(Encoding::UTF_8)
+    display_name = refname.inspect unless display_name.valid_encoding?
+    path_findings(refname).each { |finding| errors << "ref #{display_name}: #{finding}" }
+
+    object, object_error, object_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{refname}^{object}"
+    )
+    if object_ok && object.strip.match?(/\A[0-9a-f]+\z/)
+      object_roots << object.strip
+    else
+      detail = object_error.strip.empty? ? "" : ": #{object_error.strip}"
+      errors << "ref #{display_name}: cannot resolve public history root object#{detail}"
+    end
+
+    commit, _peel_error, peel_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{refname}^{commit}"
+    )
+    if peel_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      commit_roots << commit.strip
+      next
+    end
+
+    errors << "ref #{display_name}: public history root does not recursively peel to a commit"
+  end
+
+  head_object, head_object_error, head_object_ok = git_capture(
+    root, "rev-parse", "--verify", "--quiet", "HEAD^{object}"
+  )
+  if head_object_ok && head_object.strip.match?(/\A[0-9a-f]+\z/)
+    object_roots << head_object.strip
+  else
+    detail = head_object_error.strip.empty? ? "" : ": #{head_object_error.strip}"
+    errors << "HEAD: cannot resolve public history root object#{detail}"
+  end
+
+  head_commit, _head_error, head_ok = git_capture(
+    root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"
+  )
+  if head_ok && head_commit.strip.match?(/\A[0-9a-f]+\z/)
+    commit_roots << head_commit.strip
+  else
+    errors << "HEAD: public history root does not recursively peel to a commit"
+  end
+  [object_roots.uniq, commit_roots.uniq]
+end
+
+def validate_public_worktree_heads(root, errors)
+  output, stderr, success = git_capture(root, "worktree", "list", "--porcelain", "-z")
+  unless success
+    errors << "worktree roots: cannot enumerate linked HEADs: #{stderr.strip}"
+    return [[], []]
+  end
+
+  object_roots = []
+  commit_roots = []
+  records = output.b.split("\0\0").reject(&:empty?)
+  records.each_with_index do |record, index|
+    fields = record.split("\0")
+    path_field = fields.find { |field| field.start_with?("worktree ".b) }
+    head_fields = fields.select { |field| field.start_with?("HEAD ".b) }
+    path_bytes = path_field&.byteslice("worktree ".bytesize..-1)
+    path_text = path_bytes&.dup&.force_encoding(Encoding::UTF_8)
+    path_label = path_text&.valid_encoding? ? path_text : "<worktree-row-#{index + 1}>"
+    unless head_fields.length == 1
+      errors << "worktree HEAD #{path_label.inspect}: expected exactly one HEAD object"
+      next
+    end
+
+    oid = head_fields.first.byteslice("HEAD ".bytesize..-1)
+    unless oid.match?(/\A[0-9a-f]+\z/)
+      errors << "worktree HEAD #{path_label.inspect}: malformed object ID"
+      next
+    end
+    object_roots << oid
+    commit, _peel_error, peel_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{oid}^{commit}"
+    )
+    if peel_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      commit_roots << commit.strip
+      next
+    end
+
+    errors << "worktree HEAD #{path_label.inspect}: public history root does not recursively peel to a commit"
+  end
+  [object_roots.uniq, commit_roots.uniq]
+end
+
+def validate_reachable_history_paths(root, errors, extra_commit_roots = [])
+  output, stderr, success = git_capture(
+    root, "log", "-m", "--all", "--format=", "--name-only", "-z", "--no-renames",
+    *extra_commit_roots.uniq
+  )
+  unless success
+    errors << "history paths: cannot enumerate every reachable changed path: #{stderr.strip}"
+    return
+  end
+
+  output.b.split("\0").reject(&:empty?).uniq.sort.each do |raw_path|
+    path = raw_path.dup.force_encoding(Encoding::UTF_8)
+    display_path = path.valid_encoding? ? path : raw_path.inspect
+    path_findings(raw_path).each do |finding|
+      errors << "history path #{display_path}: #{finding}"
+    end
+    unless path.valid_encoding?
+      errors << "history path: invalid UTF-8 pathname"
+      next
+    end
+  end
+end
+
+def validate_reachable_history(root, errors)
+  # Commit-backed refs let the NUL-delimited diff walk enumerate every path.
+  # A ref rooted directly at a tree/blob has no commit diff, so reject that
+  # uncommon shape rather than pretending its entry names were inspected.
+  validate_no_legacy_grafts(root, errors)
+  validate_complete_repository_history(root, errors)
+  ref_object_roots, ref_commit_roots = validate_public_ref_roots(root, errors)
+  worktree_object_roots, worktree_commit_roots = validate_public_worktree_heads(root, errors)
+  object_roots = ref_object_roots + worktree_object_roots
+  commit_roots = ref_commit_roots + worktree_commit_roots
+  validate_reachable_history_paths(root, errors, commit_roots)
+  records = reachable_object_records(root, errors, object_roots)
+  paths_by_blob = reachable_blob_paths(root, records, errors)
+  records.each do |record|
+    blob_paths = record[:type] == "blob" ? paths_by_blob.fetch(record[:oid], Set.new) : Set.new
+    nonexempt_blob_paths = blob_paths.reject { |path| rejected_name_exempt_path?(path) }
+    label = if record[:type] == "blob"
+              path_label = if blob_paths.empty?
+                             "<unknown-path>"
+                           else
+                             blob_paths.first(3).map(&:inspect).join(",")
+                           end
+              "history blob #{record[:oid]} (#{path_label})"
+            else
+              "history #{record[:type]} #{record[:oid]}"
+            end
+    if record[:size] > MAX_GIT_BLOB_BYTES
+      errors << "#{label}: reachable Git #{record[:type]} exceeds 1 MiB (#{record[:size]} bytes)"
+      next
+    end
+    bytes, read_error, read_ok = git_capture(root, "cat-file", record[:type], record[:oid])
+    unless read_ok
+      errors << "#{label}: cannot read #{record[:type]} bytes: #{read_error.strip}"
+      next
+    end
+    errors << "#{label}: Git size metadata differs from decoded bytes" unless bytes.bytesize == record[:size]
+    scan_rejected_names = record[:type] != "blob" || blob_paths.empty? || !nonexempt_blob_paths.empty?
+    policy_path = nonexempt_blob_paths.first || blob_paths.first || record[:oid]
+    add_artifact_findings(
+      errors,
+      label,
+      policy_path,
+      bytes,
+      scan_rejected_names: scan_rejected_names
+    )
+  end
+end
+
+def validate_index(root, errors)
+  output, stderr, success = git_capture(root, "ls-files", "--stage", "-z")
+  unless success
+    errors << "index: cannot enumerate entries: #{stderr.strip}"
+    return
+  end
+  output.split("\0").reject(&:empty?).each do |entry|
+    metadata, path = entry.split("\t", 2)
+    mode, oid, stage = metadata.to_s.split
+    label = "index:#{path || '<unparsed>'}"
+    unless path && mode && oid && stage
+      errors << "#{label}: malformed index entry"
+      next
+    end
+    if stage != "0"
+      errors << "#{label}: unmerged index stage #{stage}"
+      next
+    end
+    if mode == "120000"
+      errors << "#{label}: public candidate must not be a symlink"
+      next
+    end
+    bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", oid)
+    unless read_ok
+      errors << "#{label}: cannot read staged blob: #{read_error.strip}"
+      next
+    end
+    errors << "#{label}: staged Git blob exceeds 1 MiB (#{bytes.bytesize} bytes)" if bytes.bytesize > MAX_GIT_BLOB_BYTES
+    add_artifact_findings(errors, label, path, bytes)
+  end
+end
+
+def canonical_lfs_materialization?(root, relative, absolute)
+  attr_out, _attr_err, attr_ok = git_capture(root, "check-attr", "filter", "--", relative)
+  index_blob, _index_err, index_ok = git_capture(root, "show", ":#{relative}")
+  pointer = index_blob.match(
+    /\Aversion https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (0|[1-9][0-9]*)\n\z/
+  )
+  return false unless attr_ok && attr_out.match?(/:\s*filter:\s*lfs\s*\z/) && index_ok && pointer
+  return false unless pointer[2].to_i == File.size(absolute)
+
+  pointer[1] == Digest::SHA256.file(absolute).hexdigest
+end
+
+def collect_stream_pattern_findings(window, scan_rejected_names, secret_labels, rejected_labels)
+  [window, *bomless_utf16_ascii_runs(window)].each do |candidate|
+    SECRET_PATTERNS.each do |label, pattern|
+      secret_labels << label if !secret_labels.include?(label) && candidate.match?(pattern)
+    end
+    next unless scan_rejected_names
+
+    REJECTED_NAMES.each do |name|
+      rejected_labels << name if
+        !rejected_labels.include?(name) && candidate.match?(/\b#{Regexp.escape(name)}\b/i)
+    end
+  end
+end
+
+def streamed_file_findings(relative, absolute)
+  findings = path_findings(relative)
+  prefix = +"".b
+  suffix = +"".b
+  overlap = +"".b
+  decoded_overlap = +""
+  utf16_converter = nil
+  utf16_checked = false
+  utf16_bom_marked = false
+  utf16_decode_failed = false
+  secret_labels = Set.new
+  rejected_labels = Set.new
+  scan_rejected_names = !REJECTED_NAME_EXEMPT_PATHS.include?(relative.to_s)
+
+  File.open(absolute, "rb") do |file|
+    while (chunk = file.read(STREAM_SCAN_CHUNK_BYTES))
+      chunk = chunk.b
+      unless utf16_checked
+        utf16_converter = if chunk.start_with?("\xFF\xFE".b)
+                            utf16_bom_marked = true
+                            Encoding::Converter.new(Encoding::UTF_16LE, Encoding::UTF_8)
+                          elsif chunk.start_with?("\xFE\xFF".b)
+                            utf16_bom_marked = true
+                            Encoding::Converter.new(Encoding::UTF_16BE, Encoding::UTF_8)
+                          elsif (encoding = bomless_utf16_encoding(chunk))
+                            Encoding::Converter.new(encoding, Encoding::UTF_8)
+                          end
+        utf16_checked = true
+      end
+      remaining_prefix = MAGIC_PREFIX_BYTES - prefix.bytesize
+      prefix << chunk.byteslice(0, [remaining_prefix, chunk.bytesize].min) if remaining_prefix.positive?
+      suffix = (suffix + chunk).byteslice(-512, 512) || (suffix + chunk)
+
+      window = overlap + chunk
+      collect_stream_pattern_findings(
+        window, scan_rejected_names, secret_labels, rejected_labels
+      )
+      if utf16_converter
+        begin
+          decoded_window = decoded_overlap + utf16_converter.convert(chunk)
+          collect_stream_pattern_findings(
+            decoded_window, scan_rejected_names, secret_labels, rejected_labels
+          )
+          decoded_overlap = decoded_window[-STREAM_SCAN_TEXT_OVERLAP_CHARS,
+                                           STREAM_SCAN_TEXT_OVERLAP_CHARS] || decoded_window
+        rescue EncodingError
+          # Match decode_text semantics for malformed BOM-marked text: retain
+          # any earlier findings, fail closed, and stop decoding later bytes.
+          utf16_decode_failed = true if utf16_bom_marked
+          utf16_converter = nil
+        end
+      end
+      overlap = window.byteslice(-STREAM_SCAN_OVERLAP_BYTES, STREAM_SCAN_OVERLAP_BYTES) || window
+    end
+  end
+  if utf16_converter
+    begin
+      decoded_tail = decoded_overlap + utf16_converter.finish
+      collect_stream_pattern_findings(
+        decoded_tail, scan_rejected_names, secret_labels, rejected_labels
+      )
+    rescue EncodingError
+      # A trailing partial UTF-16 code unit makes the text malformed; raw-byte
+      # and prior complete decoded-window findings still remain authoritative.
+      utf16_decode_failed = true if utf16_bom_marked
+    end
+  end
+  magic_labels(prefix + suffix).each { |label| findings << label }
+  secret_labels.each { |label| findings << "possible #{label}" }
+  rejected_labels.each { |name| findings << "rejected working name remains: #{name}" }
+  findings << "malformed BOM-marked UTF-16 content" if utf16_decode_failed
+  findings.uniq
+end
+
+def validate_worktree(root, errors)
+  output, stderr, success = git_capture(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+  unless success
+    errors << "worktree: cannot enumerate tracked and unignored files: #{stderr.strip}"
+    return
+  end
+  output.split("\0").sort.each do |relative|
+    absolute = root.join(relative)
+    label = "worktree:#{relative}"
+    next unless absolute.exist? || absolute.symlink?
+
+    if absolute.symlink?
+      errors << "#{label}: public candidate must not be a symlink"
+      next
+    end
+    next unless absolute.file?
+
+    if absolute.size > MAX_GIT_BLOB_BYTES && !canonical_lfs_materialization?(root, relative, absolute)
+      errors << "#{label}: file exceeds 1 MiB and is not a canonical staged Git LFS materialization"
+    end
+    if absolute.size > MAX_GIT_BLOB_BYTES
+      begin
+        streamed_file_findings(relative, absolute).each { |finding| errors << "#{label}: #{finding}" }
+      rescue StandardError => stream_error
+        errors << "#{label}: cannot scan complete worktree bytes: #{stream_error.message}"
+      end
+    else
+      add_artifact_findings(errors, label, relative, File.binread(absolute))
+    end
+  end
+end
+
+def validate_public_hygiene(root)
+  errors = []
+  validate_reachable_history(root, errors)
+  validate_index(root, errors)
+  validate_worktree(root, errors)
+  errors.uniq
+end
+
+def fixture_git!(root, *arguments)
+  _stdout, stderr, success = git_capture(root, *arguments)
+  raise "fixture git #{arguments.join(' ')} failed: #{stderr}" unless success
+end
+
+def with_fixture_repo
+  Dir.mktmpdir("n64game-public-hygiene-") do |directory|
+    root = Pathname.new(directory)
+    fixture_git!(root, "init", "-q")
+    fixture_git!(root, "config", "user.name", "Public Hygiene Self Test")
+    fixture_git!(root, "config", "user.email", "hygiene@example.invalid")
+    yield root
+  end
+end
+
+def fixture_write(root, relative, bytes)
+  path = root.join(relative)
+  FileUtils.mkdir_p(path.dirname)
+  File.binwrite(path, bytes)
+end
+
+def fixture_commit!(root, message)
+  fixture_git!(root, "add", "--all")
+  fixture_git!(root, "commit", "-q", "-m", message)
+end
+
+def run_public_hygiene_self_tests
+  assertions = []
+  assert = lambda do |condition, label, detail = nil|
+    raise "public-hygiene self-test failed: #{label}#{detail ? ": #{detail}" : ''}" unless condition
+
+    assertions << label
+  end
+  token = "gh" + "p_" + ("A" * 36)
+
+  assert.call(
+    artifact_findings("payload.dat", "\x80\x37\x12\x40synthetic".b).include?("N64 big-endian ROM magic"),
+    "detects extensionless N64 ROM magic"
+  )
+  assert.call(
+    artifact_findings("payload.dat", "PK\x03\x04synthetic".b).include?("ZIP archive magic"),
+    "detects extensionless archive magic"
+  )
+  assert.call(
+    artifact_findings("notes", "credential=#{token}\n").include?("possible GitHub token"),
+    "detects extensionless textual secrets by content"
+  )
+  assert.call(
+    artifact_findings(
+      "encrypted-key.txt",
+      "-----BEGIN " + "ENCRYPTED " + "PRIVATE KEY-----\nsynthetic\n"
+    ).include?("possible private key block"),
+    "detects standard encrypted private-key headers"
+  )
+  {
+    "UTF-16LE" => Encoding::UTF_16LE,
+    "UTF-16BE" => Encoding::UTF_16BE
+  }.each do |label, encoding|
+    embedded = "\x01\x02binary-prefix\x03".b +
+      "credential=#{token}\nMara Quill\n".encode(encoding).b + "\x04binary-suffix".b
+    findings = artifact_findings("bomless-#{label.downcase}", embedded)
+    assert.call(
+      findings.include?("possible GitHub token") &&
+        findings.include?("rejected working name remains: Mara Quill"),
+      "detects embedded BOM-less #{label} policy text"
+    )
+  end
+  shortest_rejected_name = REJECTED_NAMES.min_by(&:length)
+  {
+    "UTF-16LE" => Encoding::UTF_16LE,
+    "UTF-16BE" => Encoding::UTF_16BE
+  }.each do |label, encoding|
+    findings = artifact_findings(
+      "bomless-short-#{label.downcase}",
+      shortest_rejected_name.encode(encoding).b
+    )
+    assert.call(
+      findings.include?("rejected working name remains: #{shortest_rejected_name}"),
+      "detects the shortest rejected name in BOM-less #{label}"
+    )
+  end
+  assert.call(
+    bomless_utf16_ascii_runs("ordinary ASCII text with no alternating NUL lane").empty?,
+    "does not infer BOM-less UTF-16 from ordinary ASCII"
+  )
+  binary_findings = artifact_findings("binary-payload", "\x00#{token}\x00Mara Quill\x00".b)
+  assert.call(
+    binary_findings.include?("possible GitHub token") &&
+      binary_findings.include?("rejected working name remains: Mara Quill"),
+    "detects ASCII policy patterns embedded in otherwise binary bytes"
+  )
+  {
+    "UTF-16LE" => ["\xFF\xFE".b, Encoding::UTF_16LE],
+    "UTF-16BE" => ["\xFE\xFF".b, Encoding::UTF_16BE]
+  }.each do |label, (bom, encoding)|
+    malformed = bom + token.encode(encoding).b + "\x00".b
+    assert.call(
+      artifact_findings("malformed-#{label.downcase}", malformed)
+        .include?("malformed BOM-marked UTF-16 content"),
+      "fails closed on malformed small #{label} content"
+    )
+  end
+  assert.call(
+    artifact_findings("release.rom", "plain text").any? { |finding| finding.include?("forbidden public artifact extension") },
+    "detects common ROM extensions without relying on magic"
+  )
+  assert.call(
+    artifact_findings(
+      "build/generated/assets/data/camera_shot_ui_none.n64cam", "\x00".b * 36
+    ).include?("forbidden generated-build path"),
+    "rejects generated build directories even with an otherwise permitted extension"
+  )
+  assert.call(
+    artifact_findings(
+      "review/generated/ASSET_CAMERA_SHOT_UI_NONE/g5/CAMERA_PAYLOAD.n64cam", "\x00".b * 36
+    ).empty?,
+    "accepts a size-bounded nonmagic generated-child review snapshot outside build"
+  )
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    errors = validate_public_hygiene(root)
+    assert.call(errors.empty?, "accepts a clean history, index, and worktree", errors.join("; "))
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "historical-only.txt", "credential=#{token}\n")
+    fixture_commit!(root, "history before shallow boundary")
+    FileUtils.rm(root.join("historical-only.txt"))
+    fixture_write(root, "safe.txt", "safe shallow tip\n")
+    fixture_commit!(root, "shallow public tip")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve shallow-history fixture HEAD: #{head_error}" unless head_ok
+
+    fixture_write(root, ".git/shallow", "#{head.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("history: shallow repository cannot prove complete public history"),
+      "fails closed when a shallow boundary can omit public history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "grafted-history.txt", "credential=#{token}\n")
+    fixture_commit!(root, "history before graft override")
+    FileUtils.rm(root.join("grafted-history.txt"))
+    fixture_write(root, "safe.txt", "safe grafted tip\n")
+    fixture_commit!(root, "tip hidden behind graft override")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve graft-history fixture HEAD: #{head_error}" unless head_ok
+
+    fixture_write(root, ".git/info/grafts", "#{head.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("history: legacy Git graft metadata can hide real public ancestry"),
+      "fails closed when legacy graft metadata can replace real ancestry",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "external-grafted-history.txt", "Mara Quill\n")
+    fixture_commit!(root, "history before external graft override")
+    FileUtils.rm(root.join("external-grafted-history.txt"))
+    fixture_write(root, "safe.txt", "safe external-grafted tip\n")
+    fixture_commit!(root, "tip targeted by external graft override")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve external-graft fixture HEAD: #{head_error}" unless head_ok
+
+    external_grafts = root.join(".git/external-grafts")
+    fixture_write(root, ".git/external-grafts", "#{head.strip}\n")
+    previous_graft_file = ENV["GIT_GRAFT_FILE"]
+    had_graft_file = ENV.key?("GIT_GRAFT_FILE")
+    begin
+      ENV["GIT_GRAFT_FILE"] = external_grafts.to_s
+      errors = validate_public_hygiene(root)
+    ensure
+      if had_graft_file
+        ENV["GIT_GRAFT_FILE"] = previous_graft_file
+      else
+        ENV.delete("GIT_GRAFT_FILE")
+      end
+    end
+    assert.call(
+      errors.include?("history: GIT_GRAFT_FILE environment override can hide real public ancestry") &&
+        errors.any? do |message|
+          message.include?("history blob") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end,
+      "neutralizes and rejects an external GIT_GRAFT_FILE ancestry override",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_git!(root, "lfs", "install", "--local")
+    fixture_write(root, ".gitattributes", "*.dat filter=lfs diff=lfs merge=lfs -text\n")
+    middle_offset = (STREAM_SCAN_CHUNK_BYTES * 3) - 3
+    total_size = 1_100_042
+    secret_payload = "\n#{token}\n"
+    lfs_bytes = ("A" * middle_offset) + secret_payload +
+      ("B" * (total_size - middle_offset - secret_payload.bytesize))
+    fixture_write(root, "payload.dat", lfs_bytes)
+    utf16_text = ("A" * 100_000) + "\n#{token}\nMara Quill\n" + ("B" * 450_000)
+    fixture_write(root, "payload-le.dat", "\xFF\xFE".b + utf16_text.encode(Encoding::UTF_16LE).b)
+    fixture_write(root, "payload-be.dat", "\xFE\xFF".b + utf16_text.encode(Encoding::UTF_16BE).b)
+    fixture_write(root, "payload-bomless-le.dat", utf16_text.encode(Encoding::UTF_16LE).b)
+    fixture_write(root, "payload-bomless-be.dat", utf16_text.encode(Encoding::UTF_16BE).b)
+    malformed_le = "\xFF\xFE\x00\xD8".b + utf16_text.encode(Encoding::UTF_16LE).b
+    malformed_be = "\xFE\xFF\xD8\x00".b + utf16_text.encode(Encoding::UTF_16BE).b
+    fixture_write(root, "payload-malformed-le.dat", malformed_le)
+    fixture_write(root, "payload-malformed-be.dat", malformed_be)
+    fixture_commit!(root, "large LFS middle-content fixture")
+    status_out, status_error, status_success = git_capture(root, "status", "--porcelain=v1")
+    raise "large LFS fixture is not clean: #{status_error}" unless status_success && status_out.empty?
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("worktree:payload.dat") && message.include?("possible GitHub token")
+      end && errors.none? { |message| message.include?("not a canonical staged Git LFS materialization") },
+      "scans complete large canonical LFS worktree content across a middle chunk boundary",
+      errors.join("; ")
+    )
+    %w[payload-le.dat payload-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") && message.include?("possible GitHub token")
+        end && errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "scans complete large canonical #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
+    %w[payload-bomless-le.dat payload-bomless-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") && message.include?("possible GitHub token")
+        end && errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "scans complete large canonical BOM-less #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
+    %w[payload-malformed-le.dat payload-malformed-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("malformed BOM-marked UTF-16 content")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "fails closed on malformed large canonical #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_write(root, "historical_secret", "credential=#{token}\n")
+    fixture_commit!(root, "historical secret fixture")
+    FileUtils.rm(root.join("historical_secret"))
+    fixture_commit!(root, "delete historical secret fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") },
+      "rejects a secret retained only in reachable history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "deleted-nonexempt.txt", "Mara Quill\n")
+    fixture_commit!(root, "historical nonexempt name fixture")
+    FileUtils.rm(root.join("deleted-nonexempt.txt"))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical nonexempt name fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history blob") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end,
+      "rejects a working name retained only in a nonexempt historical blob",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    audit_path = "docs/NAMING_AND_ORIGINALITY_AUDIT.md"
+    fixture_write(root, audit_path, "Mara Quill\n")
+    fixture_commit!(root, "historical exempt audit fixture")
+    FileUtils.rm(root.join(audit_path))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical exempt audit fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.none? { |message| message.include?("rejected working name remains: Mara Quill") },
+      "preserves the exact rejected-name exemption for an audit-only historical blob",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    shared_bytes = "Mara Quill\n"
+    fixture_write(root, "docs/NAMING_AND_ORIGINALITY_AUDIT.md", shared_bytes)
+    fixture_write(root, "deleted-nonexempt-copy.txt", shared_bytes)
+    fixture_commit!(root, "historical mixed-path reuse fixture")
+    FileUtils.rm(root.join("docs/NAMING_AND_ORIGINALITY_AUDIT.md"))
+    FileUtils.rm(root.join("deleted-nonexempt-copy.txt"))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical mixed-path reuse fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history blob") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end,
+      "rejects an exempt blob reused by any nonexempt historical path",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "safe.txt", "safe public text after commit-message fixture\n")
+    fixture_commit!(root, "credential=#{token}; retired name Qorrum")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history commit") && message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history commit") &&
+          message.include?("rejected working name remains: Qorrum")
+      end,
+      "rejects secret and working-name text retained in a reachable commit payload",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_git!(root, "tag", "-a", "safe-tag", "-m", "credential=#{token}; retired name Vantrel")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history tag") && message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history tag") &&
+          message.include?("rejected working name remains: Vantrel")
+      end,
+      "rejects secret and working-name text retained in an annotated-tag payload",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_git!(root, "branch", token)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("ref refs/heads/#{token}") && message.include?("possible GitHub token")
+      end,
+      "rejects a configured secret pattern in a public ref name",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "Mara Quill.txt", "safe bytes in a rejected-name pathname\n")
+    fixture_git!(root, "add", "Mara Quill.txt")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("worktree:Mara Quill.txt") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end && errors.any? do |message|
+        message.include?("index:Mara Quill.txt") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end,
+      "rejects a configured rejected name in staged and worktree pathnames",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    spoof_path = "docs\\NAMING_AND_ORIGINALITY_AUDIT.md"
+    fixture_write(root, spoof_path, "Mara Quill\n")
+    fixture_git!(root, "add", spoof_path)
+    current_errors = validate_public_hygiene(root)
+    assert.call(
+      %w[index worktree].all? do |surface|
+        current_errors.any? do |message|
+          message.include?("#{surface}:#{spoof_path}") &&
+            message.include?("literal backslash in public pathname")
+        end && current_errors.any? do |message|
+          message.include?("#{surface}:#{spoof_path}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end
+      end,
+      "does not let a literal-backslash path spoof a current or staged name exemption",
+      current_errors.join("; ")
+    )
+
+    fixture_commit!(root, "commit literal-backslash exemption spoof")
+    FileUtils.rm(root.join(spoof_path))
+    fixture_commit!(root, "delete literal-backslash exemption spoof")
+    history_errors = validate_public_hygiene(root)
+    assert.call(
+      history_errors.any? do |message|
+        message.include?("history path #{spoof_path}") &&
+          message.include?("literal backslash in public pathname")
+      end,
+      "retains literal-backslash exemption-spoof rejection in history",
+      history_errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    historical_path = "archive-#{token}.txt"
+    fixture_write(root, historical_path, "safe historical pathname bytes\n")
+    fixture_commit!(root, "historical secret-shaped pathname fixture")
+    FileUtils.rm(root.join(historical_path))
+    fixture_commit!(root, "delete historical secret-shaped pathname fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path #{historical_path}") &&
+          message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history tree") && message.include?("possible GitHub token")
+      end,
+      "rejects a configured secret pattern retained in historical path and tree bytes",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe linked-worktree baseline")
+    baseline = git_capture(root, "rev-parse", "HEAD").first.strip
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign linked HEAD bytes\n"
+    )
+    raise "cannot create linked-HEAD fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create linked-HEAD fixture: #{tree_error}" unless tree_ok
+    Dir.mktmpdir("n64game-linked-head-") do |linked_container|
+      linked_directory = File.join(linked_container, "linked")
+      fixture_git!(root, "worktree", "add", "-q", "--detach", linked_directory, baseline)
+      linked_root = Pathname.new(linked_directory)
+      admin_out, admin_error, admin_ok = git_capture(linked_root, "rev-parse", "--git-dir")
+      raise "cannot locate linked-worktree admin directory: #{admin_error}" unless admin_ok
+      admin_root = Pathname.new(admin_out.strip)
+      fixture_write(admin_root, "HEAD", "#{tree_out.strip}\n")
+      errors = validate_public_hygiene(root)
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree HEAD") &&
+            message.include?("does not recursively peel to a commit")
+        end,
+        "fails closed when a linked-worktree HEAD roots history at a standalone tree",
+        errors.join("; ")
+      )
+      fixture_write(admin_root, "HEAD", "#{baseline}\n")
+      fixture_git!(root, "worktree", "remove", "--force", linked_directory)
+    end
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe HEAD baseline")
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign standalone HEAD bytes\n"
+    )
+    raise "cannot create standalone-HEAD fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create standalone-HEAD fixture: #{tree_error}" unless tree_ok
+    fixture_write(root, ".git/HEAD", "#{tree_out.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("HEAD: public history root does not recursively peel to a commit"),
+      "fails closed when HEAD roots public history at a standalone tree",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "\nhistorical_payload", "credential=#{token}\n")
+    fixture_commit!(root, "leading-newline historical path fixture")
+    FileUtils.rm(root.join("\nhistorical_payload"))
+    fixture_commit!(root, "delete leading-newline historical path fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") } &&
+        errors.any? { |message| message.include?("history path") && message.include?("control character") },
+      "scans every reachable blob even when its historical path begins with a newline",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe commit-backed baseline")
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign standalone tree bytes\n"
+    )
+    raise "cannot create standalone-tree fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create standalone-tree fixture: #{tree_error}" unless tree_ok
+    fixture_git!(root, "tag", "-a", "standalone-tree", tree_out.strip, "-m", "standalone tree fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("ref refs/tags/standalone-tree") &&
+          message.include?("does not recursively peel to a commit")
+      end,
+      "fails closed when a public ref roots history at a standalone tree",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "duplicate public bytes\n")
+    fixture_commit!(root, "safe duplicate-content baseline")
+    fixture_write(root, "build/generated/output.dat", "duplicate public bytes\n")
+    fixture_commit!(root, "historical generated-build path with reused blob")
+    FileUtils.rm_r(root.join("build"))
+    fixture_commit!(root, "delete generated-build path")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path build/generated/output.dat") &&
+          message.include?("forbidden generated-build path")
+      end,
+      "rejects a deleted historical build path even when its blob OID is reused by a safe path",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "baseline.txt", "merge-only path baseline\n")
+    fixture_commit!(root, "merge-only path baseline")
+    branch_out, branch_error, branch_success = git_capture(root, "branch", "--show-current")
+    raise "cannot resolve fixture branch: #{branch_error}" unless branch_success
+    main_branch = branch_out.strip
+
+    fixture_git!(root, "switch", "-q", "-c", "add-build-side")
+    fixture_write(root, "add-side.txt", "side parent without generated build path\n")
+    fixture_commit!(root, "advance add-build side")
+    fixture_git!(root, "switch", "-q", main_branch)
+    fixture_write(root, "add-main.txt", "main parent without generated build path\n")
+    fixture_commit!(root, "advance add-build main")
+    fixture_git!(root, "merge", "-q", "--no-commit", "--no-ff", "add-build-side")
+    fixture_write(root, "build/generated/merge-only.dat", "merge-result-only generated bytes\n")
+    fixture_commit!(root, "add generated build path only in merge result")
+
+    fixture_git!(root, "switch", "-q", "-c", "delete-build-side")
+    fixture_write(root, "delete-side.txt", "side parent retaining generated build path\n")
+    fixture_commit!(root, "advance delete-build side")
+    fixture_git!(root, "switch", "-q", main_branch)
+    fixture_write(root, "delete-main.txt", "main parent retaining generated build path\n")
+    fixture_commit!(root, "advance delete-build main")
+    fixture_git!(root, "merge", "-q", "--no-commit", "--no-ff", "delete-build-side")
+    FileUtils.rm_r(root.join("build"))
+    fixture_commit!(root, "delete generated build path only in merge result")
+
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path build/generated/merge-only.dat") &&
+          message.include?("forbidden generated-build path")
+      end,
+      "rejects a generated-build path added and deleted only in merge results",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "staged_only", "credential=#{token}\n")
+    fixture_git!(root, "add", "staged_only")
+    fixture_write(root, "staged_only", "safe worktree replacement\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("index:staged_only") && message.include?("possible GitHub token") },
+      "rejects a secret present only in the index",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "untracked_payload.dat", "\x37\x80\x40\x12synthetic".b)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("worktree:untracked_payload.dat") && message.include?("N64 byte-swapped ROM magic") },
+      "rejects an untracked worktree ROM by magic",
+      errors.join("; ")
+    )
+  end
+
+  puts "Public-hygiene self-test passed: #{assertions.length} isolated content/history/index/worktree fixtures."
+end
+
+if ARGV == ["--self-test-public-hygiene"]
+  run_public_hygiene_self_tests
+  exit 0
+elsif !ARGV.empty?
+  warn "usage: scripts/validate-public-hygiene [--self-test-public-hygiene]"
+  exit 2
+end
+
+run_public_hygiene_self_tests
+errors = validate_public_hygiene(ROOT)
+if errors.empty?
+  puts "Public hygiene validation passed: every reachable Git object plus index and worktree candidates scanned by content."
+  exit 0
+end
+
+warn "Public hygiene validation failed with #{errors.length} error(s):"
+errors.each { |message| warn "- #{message}" }
+exit 1

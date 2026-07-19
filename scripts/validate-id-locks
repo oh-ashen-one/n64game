@@ -1,0 +1,1926 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "pathname"
+require "fileutils"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+REGISTRY_PATH = "data/ids/serialized_ids.lock"
+DATA_PATH = "docs/DATA_SCHEMAS.md"
+SPECIALIZED_LOCK_PATHS = %w[
+  data/ids/dialogue_once_bits.lock
+  data/ids/examine_once_bits.lock
+  data/ids/npc_once_bits.lock
+  data/ids/spawn_ids.lock
+  data/ids/cutscene_ids.lock
+].freeze
+SNAPSHOT_PATHS = ([DATA_PATH, REGISTRY_PATH] + SPECIALIZED_LOCK_PATHS).freeze
+SPECIALIZED_ID_ENUMS = %w[SpawnIdValue CutsceneIdValue].freeze
+SPECIAL_BIT_ENUMS = {
+  "StoryFlagIndex" => [],
+  "DestinationBit" => [],
+  "RelayPageBit" => [],
+  "RewardClaimBit" => []
+}.freeze
+HISTORICAL_SYMBOL_ALIAS_DOMAINS = %w[
+  DialogueOnceBit
+  ExamineOnceBit
+  NpcOnceBit
+  EncounterClearBit
+].freeze
+SAFE_GIT_ENVIRONMENT = {
+  "GIT_NO_REPLACE_OBJECTS" => "1",
+  "GIT_GRAFT_FILE" => nil
+}.freeze
+
+class UnknownIdLockEnumIdentifier < StandardError; end
+
+# Keep serialized-ID extraction aligned with validate-data-c: every enum value
+# that DATA_SCHEMAS accepts must resolve to an exact integer here as well.  The
+# intentionally small grammar rejects casts, calls, ternaries, and other C
+# syntax instead of silently omitting an assignment from the durable registry.
+class IdLockCIntegerExpression
+  Token = Struct.new(:kind, :value)
+
+  def initialize(source, symbols)
+    @source = source
+    @symbols = symbols
+    @tokens = tokenize(source)
+    @index = 0
+  end
+
+  def evaluate
+    value = parse_or
+    token = peek
+    raise "unexpected token #{token.value.inspect} in #{@source.inspect}" unless token.kind == :eof
+
+    value
+  end
+
+  private
+
+  def tokenize(source)
+    tokens = []
+    index = 0
+    while index < source.length
+      rest = source[index..-1]
+      if (match = rest.match(/\A\s+/))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[xX][0-9A-Fa-f]+[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[0-7]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[1-9][0-9]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[A-Za-z_][A-Za-z0-9_]*/))
+        tokens << Token.new(:identifier, match[0])
+        index += match[0].length
+      elsif rest.start_with?("<<", ">>")
+        tokens << Token.new(:operator, rest[0, 2])
+        index += 2
+      elsif "+-~!*/%&^|()".include?(rest[0])
+        kind = rest[0] == "(" || rest[0] == ")" ? :paren : :operator
+        tokens << Token.new(kind, rest[0])
+        index += 1
+      else
+        raise "unsupported C enum expression near #{rest.inspect} in #{source.inspect}"
+      end
+    end
+    tokens << Token.new(:eof, nil)
+    tokens
+  end
+
+  def integer_literal(token)
+    bare = token.sub(/[uUlL]+\z/, "")
+    if bare.match?(/\A0[xX]/)
+      bare.to_i(16)
+    elsif bare.length > 1 && bare.start_with?("0")
+      bare.to_i(8)
+    else
+      bare.to_i(10)
+    end
+  end
+
+  def peek
+    @tokens.fetch(@index)
+  end
+
+  def take(value = nil)
+    token = peek
+    return nil if value && token.value != value
+
+    @index += 1
+    token
+  end
+
+  def parse_or
+    left = parse_xor
+    left |= parse_xor while take("|")
+    left
+  end
+
+  def parse_xor
+    left = parse_and
+    left ^= parse_and while take("^")
+    left
+  end
+
+  def parse_and
+    left = parse_shift
+    left &= parse_shift while take("&")
+    left
+  end
+
+  def parse_shift
+    left = parse_additive
+    loop do
+      if take("<<")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left <<= shift
+      elsif take(">>")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left >>= shift
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_additive
+    left = parse_multiplicative
+    loop do
+      if take("+")
+        left += parse_multiplicative
+      elsif take("-")
+        left -= parse_multiplicative
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_multiplicative
+    left = parse_unary
+    loop do
+      if take("*")
+        left *= parse_unary
+      elsif take("/")
+        divisor = parse_unary
+        raise "division by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        left = (left.negative? == divisor.negative?) ? quotient : -quotient
+      elsif take("%")
+        divisor = parse_unary
+        raise "modulo by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        quotient = -quotient unless left.negative? == divisor.negative?
+        left -= quotient * divisor
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_unary
+    return parse_unary if take("+")
+    return -parse_unary if take("-")
+    return ~parse_unary if take("~")
+    return parse_unary.zero? ? 1 : 0 if take("!")
+
+    parse_primary
+  end
+
+  def parse_primary
+    token = peek
+    if token.kind == :integer
+      take.value
+    elsif token.kind == :identifier
+      name = take.value
+      raise UnknownIdLockEnumIdentifier, name unless @symbols.key?(name)
+      @symbols.fetch(name)
+    elsif take("(")
+      value = parse_or
+      raise "missing ')' in #{@source.inspect}" unless take(")")
+      value
+    else
+      raise "expected integer, identifier, or '(' in #{@source.inspect}"
+    end
+  end
+end
+
+def git_capture(root, *arguments)
+  stdout, stderr, status = Open3.capture3(
+    SAFE_GIT_ENVIRONMENT,
+    "git", *arguments,
+    chdir: root.to_s
+  )
+  [stdout, stderr, status.success?]
+end
+
+def git_ancestor_status(root, ancestor, descendant, errors, label)
+  _stdout, stderr, status = Open3.capture3(
+    SAFE_GIT_ENVIRONMENT,
+    "git",
+    "merge-base",
+    "--is-ancestor",
+    ancestor,
+    descendant,
+    chdir: root.to_s
+  )
+  return true if status.exitstatus == 0
+  return false if status.exitstatus == 1
+
+  errors << "#{label}: cannot determine Git ancestry: #{stderr.strip}"
+  nil
+end
+
+def parse_once_lock_text(relative, text, errors)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 4
+      errors << "#{relative}:#{index + 1}: expected 4 columns, got #{fields.length}"
+      next
+    end
+    begin
+      bit = Integer(fields[0], 10)
+    rescue ArgumentError
+      errors << "#{relative}:#{index + 1}: invalid bit index #{fields[0].inspect}"
+      next
+    end
+    owner, state, binding = fields[1], fields[2], fields[3]
+    errors << "#{relative}:#{index + 1}: bit #{bit} outside 0..63" unless (0..63).cover?(bit)
+    errors << "#{relative}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{relative}:#{index + 1}: invalid live owner #{owner.inspect}" unless owner.match?(/\A[A-Z][A-Z0-9_]+\z/)
+      errors << "#{relative}:#{index + 1}: invalid live binding #{binding.inspect}" unless binding == "0" || binding.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif owner != "0" || binding != "0"
+      errors << "#{relative}:#{index + 1}: tombstone owner and binding must both be zero"
+    end
+    rows << { value: bit, symbol: owner, state: state, binding: binding, line: index + 1 }
+  end
+
+  rows.group_by { |row| row[:value] }.each do |bit, collisions|
+    errors << "#{relative}: duplicate bit #{bit}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| row[:symbol] }.each do |owner, collisions|
+    errors << "#{relative}: duplicate live owner #{owner}" if collisions.length > 1
+  end
+  bits = rows.map { |row| row[:value] }.sort
+  expected = bits.empty? ? [] : (0..bits.max).to_a
+  errors << "#{relative}: rows must be a complete append-only prefix 0..#{bits.max}" unless bits == expected
+  rows.sort_by { |row| row[:value] }
+end
+
+def parse_numeric_lock_text(relative, text, errors)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 3
+      errors << "#{relative}:#{index + 1}: expected 3 columns, got #{fields.length}"
+      next
+    end
+    begin
+      value = Integer(fields[0], 0)
+    rescue ArgumentError
+      errors << "#{relative}:#{index + 1}: invalid numeric ID #{fields[0].inspect}"
+      next
+    end
+    symbol, state = fields[1], fields[2]
+    errors << "#{relative}:#{index + 1}: ID must be nonzero uint16" unless (1..0xFFFF).cover?(value)
+    errors << "#{relative}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{relative}:#{index + 1}: invalid live symbol #{symbol.inspect}" unless symbol.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif symbol != "0"
+      errors << "#{relative}:#{index + 1}: tombstone symbol must be zero"
+    end
+    rows << { value: value, symbol: symbol, state: state, binding: state == "LIVE" ? "-" : "0", line: index + 1 }
+  end
+
+  rows.group_by { |row| row[:value] }.each do |value, collisions|
+    errors << "#{relative}: duplicate numeric ID #{format('0x%04X', value)}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| row[:symbol] }.each do |symbol, collisions|
+    errors << "#{relative}: duplicate live symbol #{symbol}" if collisions.length > 1
+  end
+  values = rows.map { |row| row[:value] }
+  errors << "#{relative}: rows must remain in ascending numeric order" unless values == values.sort
+  rows
+end
+
+def strip_id_lock_c_comments(source)
+  source.gsub(%r{/\*.*?\*/}m, "").gsub(%r{//[^\n]*}, "")
+end
+
+def split_id_lock_c_top_level(source)
+  fields = []
+  start = 0
+  depth = 0
+  quote = nil
+  escaped = false
+  source.each_char.with_index do |character, index|
+    if quote
+      if escaped
+        escaped = false
+      elsif character == "\\"
+        escaped = true
+      elsif character == quote
+        quote = nil
+      end
+    elsif character == '"' || character == "'"
+      quote = character
+    elsif "{([".include?(character)
+      depth += 1
+    elsif "})]".include?(character)
+      depth -= 1
+      raise "unbalanced C enum expression" if depth.negative?
+    elsif character == "," && depth.zero?
+      fields << source[start...index].strip
+      start = index + 1
+    end
+  end
+  raise "unterminated C string/character literal" if quote
+  raise "unbalanced C enum expression" unless depth.zero?
+
+  tail = source[start..-1].strip
+  fields << tail unless tail.empty?
+  fields.reject(&:empty?)
+end
+
+# A tagged typedef has both an enum tag and a typedef name.  Use its sole
+# durable-ID-shaped spelling as the registry domain; reject two different
+# durable spellings as ambiguous so neither alias can disappear from history.
+def id_lock_enum_domain_name(typedef, tag, trailing, index)
+  durable_names = [tag, trailing].compact.uniq.select { |name| name.match?(/Id(?:Value)?\z/) }
+  if durable_names.length > 1
+    raise ArgumentError, "enum has conflicting durable ID domain aliases: #{durable_names.join(' and ')}"
+  end
+  return durable_names.first if durable_names.length == 1
+  return trailing if typedef
+
+  tag || format("__anonymous_enum_%03d", index)
+end
+
+def numeric_enum_blocks(text, errors, label)
+  c_blocks = text.scan(/^```c\s*$\n(.*?)^```\s*$/m).flatten
+  if c_blocks.empty?
+    errors << "#{label}: no fenced C blocks found"
+    return {}
+  end
+  code = c_blocks.join("\n\n")
+  enum_scan_code = strip_id_lock_c_comments(code)
+  enum_pattern =
+    /(?<![A-Za-z0-9_])(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
+  enum_sources = enum_scan_code.scan(enum_pattern)
+  unconsumed_enum_code = enum_scan_code.gsub(enum_pattern, " ")
+  if unconsumed_enum_code.match?(/\benum\b/)
+    errors << "#{label}: unparsed or unsupported enum syntax remains in fenced C blocks"
+  end
+  unconsumed_enum_code.scan(/(?<![A-Za-z0-9_])typedef\b[^;{}]*;/m).each do |typedef_source|
+    fixed_width_scalar = typedef_source.match?(
+      /\Atypedef\s+u?int(?:8|16|32|64)_t\s+[A-Za-z_][A-Za-z0-9_]*\s*;\z/m
+    )
+    next if fixed_width_scalar
+    next unless typedef_source.match?(/\b[A-Za-z_][A-Za-z0-9_]*Id(?:Value)?\b/)
+
+    errors << "#{label}: unsupported durable-ID typedef alias remains in fenced C blocks"
+  end
+  if enum_sources.empty?
+    errors << "#{label}: no enum domains found"
+    return {}
+  end
+
+  enum_rows = []
+  enum_sources.each_with_index do |enum_source, index|
+    match = enum_source.match(
+      /\A(?:(typedef)\s+)?enum(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\{(.*)\}\s*([A-Za-z_][A-Za-z0-9_]*)?\s*;\z/m
+    )
+    unless match
+      errors << "#{label}: cannot parse enum declaration #{enum_source.lines.first.to_s.strip.inspect}"
+      next
+    end
+    typedef = !match[1].nil?
+    tag = match[2]
+    trailing = match[4]
+    if typedef && trailing.nil?
+      errors << "#{label}: typedef enum lacks trailing type name"
+      next
+    elsif !typedef && trailing
+      errors << "#{label}: non-typedef enum has an illegal trailing name #{trailing}"
+      next
+    end
+    begin
+      name = id_lock_enum_domain_name(typedef, tag, trailing, index)
+    rescue ArgumentError => enum_name_error
+      errors << "#{label}: #{enum_name_error.message}"
+      next
+    end
+    begin
+      entries = split_id_lock_c_top_level(strip_id_lock_c_comments(match[3])).map do |entry|
+        entry_match = entry.match(/\A([A-Z][A-Z0-9_]*)(?:\s*=\s*(.+))?\z/m)
+        raise "cannot parse enumerator #{entry.inspect}" unless entry_match
+
+        { symbol: entry_match[1], expression: entry_match[2]&.strip }
+      end
+    rescue StandardError => error
+      errors << "#{label}: #{name}: #{error.message}"
+      next
+    end
+    if entries.empty?
+      errors << "#{label}: enum #{name} has no named values"
+      next
+    end
+    enum_rows << { name: name, anonymous: tag.nil? && trailing.nil?, entries: entries }
+  end
+
+  enum_rows.reject { |row| row[:anonymous] }.group_by { |row| row[:name] }.each do |name, rows|
+    errors << "#{label}: duplicate enum definition #{name}" if rows.length > 1
+  end
+  symbol_owners = {}
+  enum_rows.each do |row|
+    row[:entries].each do |entry|
+      symbol = entry[:symbol]
+      if symbol_owners.key?(symbol)
+        errors << "#{label}: duplicate global enum symbol #{symbol}"
+      else
+        symbol_owners[symbol] = row[:name]
+      end
+    end
+  end
+
+  resolved_symbols = {}
+  resolved_blocks = {}
+  remaining = enum_rows.dup
+  until remaining.empty?
+    progressed = false
+    remaining.dup.each do |row|
+      local = {}
+      previous = nil
+      begin
+        row[:entries].each do |entry|
+          value = if entry[:expression]
+                    IdLockCIntegerExpression.new(entry[:expression], resolved_symbols.merge(local)).evaluate
+                  elsif previous.nil?
+                    0
+                  else
+                    previous + 1
+                  end
+          entry[:value] = value
+          local[entry[:symbol]] = value
+          previous = value
+        end
+      rescue UnknownIdLockEnumIdentifier
+        next
+      rescue StandardError => error
+        errors << "#{label}: invalid constant expression in #{row[:name]}: #{error.message}"
+        remaining.delete(row)
+        progressed = true
+        next
+      end
+
+      resolved_symbols.merge!(local)
+      unless row[:anonymous]
+        resolved_blocks[row[:name]] ||= row[:entries].map { |entry| [entry[:value], entry[:symbol]] }
+      end
+      remaining.delete(row)
+      progressed = true
+    end
+    next if progressed
+
+    names = remaining.map { |row| row[:name] }.sort
+    errors << "#{label}: cyclic, forward, or unresolved enum dependency: #{names.join(', ')}"
+    break
+  end
+  resolved_blocks
+end
+
+def numeric_assignments(enum_name, resolved_rows, errors, label)
+  rows = resolved_rows.map(&:dup)
+  errors << "#{label}: #{enum_name} has no named assignments" if rows.empty?
+  rows.group_by(&:first).each do |value, collisions|
+    errors << "#{label}: #{enum_name} reuses value #{format('0x%04X', value)}" if collisions.length > 1
+  end
+  rows.group_by(&:last).each do |symbol, collisions|
+    errors << "#{label}: #{enum_name} repeats symbol #{symbol}" if collisions.length > 1
+  end
+  rows
+end
+
+def build_source_registry(data, lock_texts, errors, label)
+  enum_blocks = numeric_enum_blocks(data, errors, label)
+  rows = []
+
+  enum_blocks.keys.grep(/Id(?:Value)?\z/).sort.each do |enum_name|
+    assignments = numeric_assignments(enum_name, enum_blocks.fetch(enum_name), errors, label)
+    assignments = assignments.select { |value, _symbol| value.zero? } if SPECIALIZED_ID_ENUMS.include?(enum_name)
+    assignments.sort_by { |value, symbol| [value, symbol] }.each do |value, symbol|
+      rows << { domain: enum_name, value: value, symbol: symbol, state: "LIVE", binding: "-" }
+    end
+  end
+
+  SPECIAL_BIT_ENUMS.each do |enum_name, exclusions|
+    body = enum_blocks[enum_name]
+    unless body
+      errors << "#{label}: missing durable bit enum #{enum_name}"
+      next
+    end
+    numeric_assignments(enum_name, body, errors, label)
+      .reject { |_value, symbol| exclusions.include?(symbol) }
+      .sort_by { |value, symbol| [value, symbol] }
+      .each do |value, symbol|
+        rows << { domain: enum_name, value: value, symbol: symbol, state: "LIVE", binding: "-" }
+      end
+  end
+
+  encounter_body = enum_blocks["EncounterIdValue"]
+  if encounter_body
+    numeric_assignments("EncounterIdValue", encounter_body, errors, label).each do |value, symbol|
+      next if value.zero?
+
+      errors << "#{label}: EncounterId #{symbol}=#{value} cannot fit the 1..63 encounter-clear bitset" unless (1..63).cover?(value)
+      rows << { domain: "EncounterClearBit", value: value, symbol: symbol, state: "LIVE", binding: "-" }
+    end
+  end
+
+  once_domains = {
+    "DialogueOnceBit" => "data/ids/dialogue_once_bits.lock",
+    "ExamineOnceBit" => "data/ids/examine_once_bits.lock",
+    "NpcOnceBit" => "data/ids/npc_once_bits.lock"
+  }
+  once_domains.each do |domain, relative|
+    parse_once_lock_text(relative, lock_texts.fetch(relative, ""), errors).each do |source|
+      rows << source.merge(domain: domain).reject { |key, _value| key == :line }
+    end
+  end
+
+  {
+    "SpawnIdValue" => "data/ids/spawn_ids.lock",
+    "CutsceneIdValue" => "data/ids/cutscene_ids.lock"
+  }.each do |domain, relative|
+    parse_numeric_lock_text(relative, lock_texts.fetch(relative, ""), errors).each do |source|
+      rows << source.merge(domain: domain).reject { |key, _value| key == :line }
+    end
+  end
+
+  rows.group_by { |row| [row[:domain], row[:value]] }.each do |(domain, value), collisions|
+    errors << "#{label}: duplicate durable key #{domain}/#{value}" if collisions.length > 1
+  end
+  rows
+end
+
+def parse_registry_text(text, errors, label)
+  rows = []
+  text.each_line.with_index do |line, index|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    fields = stripped.split("|", -1)
+    unless fields.length == 5
+      errors << "#{label}:#{index + 1}: expected 5 columns, got #{fields.length}"
+      next
+    end
+    domain, value_text, symbol, state, binding = fields
+    begin
+      value = Integer(value_text, 0)
+    rescue ArgumentError
+      errors << "#{label}:#{index + 1}: invalid numeric value #{value_text.inspect}"
+      next
+    end
+    errors << "#{label}:#{index + 1}: invalid domain #{domain.inspect}" unless domain.match?(/\A[A-Za-z][A-Za-z0-9_]*\z/)
+    errors << "#{label}:#{index + 1}: value outside uint16" unless (0..0xFFFF).cover?(value)
+    errors << "#{label}:#{index + 1}: state must be LIVE or TOMBSTONE" unless %w[LIVE TOMBSTONE].include?(state)
+    if state == "LIVE"
+      errors << "#{label}:#{index + 1}: invalid live symbol #{symbol.inspect}" unless symbol.match?(/\A[A-Z][A-Z0-9_]+\z/)
+      errors << "#{label}:#{index + 1}: invalid live binding #{binding.inspect}" unless binding == "-" || binding == "0" || binding.match?(/\A[A-Z][A-Z0-9_]+\z/)
+    elsif symbol != "0" || binding != "0"
+      errors << "#{label}:#{index + 1}: tombstone symbol and binding must both be zero"
+    end
+    rows << { domain: domain, value: value, symbol: symbol, state: state, binding: binding, line: index + 1 }
+  end
+  rows.group_by { |row| [row[:domain], row[:value]] }.each do |(domain, value), collisions|
+    errors << "#{label}: duplicate durable key #{domain}/#{value}" if collisions.length > 1
+  end
+  rows.select { |row| row[:state] == "LIVE" }.group_by { |row| [row[:domain], row[:symbol]] }.each do |(domain, symbol), collisions|
+    errors << "#{label}: duplicate live symbol #{domain}/#{symbol}" if collisions.length > 1
+  end
+  rows.map { |row| row.reject { |key, _value| key == :line } }
+end
+
+def row_signature(row)
+  [row[:domain], row[:value], row[:symbol], row[:state], row[:binding]]
+end
+
+def validate_registry_matches_source(registry_rows, source_rows, errors, label)
+  registry = registry_rows.to_h { |row| [[row[:domain], row[:value]], row] }
+  source = source_rows.to_h { |row| [[row[:domain], row[:value]], row] }
+
+  source.each do |key, expected|
+    actual = registry[key]
+    if actual.nil?
+      errors << "#{label}: durable source row is absent from #{REGISTRY_PATH}: #{key.join('/')}"
+    elsif row_signature(actual) != row_signature(expected)
+      errors << "#{label}: durable source row differs from #{REGISTRY_PATH}: #{key.join('/')}"
+    end
+  end
+  registry.each do |key, row|
+    next if source.key?(key)
+    next if row[:state] == "TOMBSTONE"
+
+    errors << "#{label}: live registry row has no current durable source assignment: #{key.join('/')}"
+  end
+end
+
+def evolution_errors(previous_rows, current_rows, label)
+  errors = []
+  if current_rows.length < previous_rows.length
+    errors << "#{label}: registry deleted #{previous_rows.length - current_rows.length} historical row(s)"
+    return errors
+  end
+
+  previous_rows.each_with_index do |previous, index|
+    current = current_rows[index]
+    unless current[:domain] == previous[:domain] && current[:value] == previous[:value]
+      errors << "#{label}: row #{index + 1} changed key or was reordered"
+      next
+    end
+    if previous[:state] == "TOMBSTONE"
+      errors << "#{label}: row #{index + 1} resurrected or altered a tombstone" unless row_signature(current) == row_signature(previous)
+    elsif current[:state] == "LIVE"
+      errors << "#{label}: row #{index + 1} renamed or changed its binding" unless row_signature(current) == row_signature(previous)
+    elsif current[:state] == "TOMBSTONE"
+      unless current[:symbol] == "0" && current[:binding] == "0"
+        errors << "#{label}: row #{index + 1} has a malformed tombstone transition"
+      end
+    else
+      errors << "#{label}: row #{index + 1} has an invalid state transition"
+    end
+  end
+  errors
+end
+
+def register_historical_symbol_owners(rows, owners, errors, label)
+  snapshot_owners = {}
+  rows.each do |row|
+    next unless row[:state] == "LIVE" && row[:symbol] != "0"
+
+    symbol = row[:symbol]
+    # Primary serialized domains share one global symbol namespace. The four
+    # derived alias domains intentionally mirror primary symbols, so keep a
+    # separate permanent namespace per derived domain instead of excluding
+    # them from resurrection protection altogether.
+    ownership_key = if HISTORICAL_SYMBOL_ALIAS_DOMAINS.include?(row[:domain])
+                      [:derived, row[:domain], symbol]
+                    else
+                      [:primary, symbol]
+                    end
+    owner = [row[:domain], row[:value]]
+    if snapshot_owners.key?(ownership_key) && snapshot_owners.fetch(ownership_key) != owner
+      previous = snapshot_owners.fetch(ownership_key)
+      errors << "#{label}: durable symbol #{symbol} has multiple protected owners " \
+                "#{previous[0]}/#{format('0x%04X', previous[1])} and " \
+                "#{owner[0]}/#{format('0x%04X', owner[1])}"
+      next
+    end
+    snapshot_owners[ownership_key] = owner
+  end
+
+  snapshot_owners.each do |ownership_key, owner|
+    symbol = ownership_key.last
+    previous = owners[ownership_key]
+    if previous && previous != owner
+      errors << "#{label}: historical durable symbol #{symbol} was rebound from " \
+                "#{previous[0]}/#{format('0x%04X', previous[1])} to " \
+                "#{owner[0]}/#{format('0x%04X', owner[1])}"
+    else
+      owners[ownership_key] ||= owner
+    end
+  end
+end
+
+def register_historical_key_owners(rows, owners, errors, label)
+  rows.each do |row|
+    next unless row[:state] == "LIVE"
+
+    key = [row[:domain], row[:value]]
+    owner = [row[:symbol], row[:binding]]
+    previous = owners[key]
+    if previous && previous != owner
+      errors << "#{label}: historical durable key #{row[:domain]}/#{format('0x%04X', row[:value])} " \
+                "has conflicting live owners #{previous[0]}/#{previous[1]} and " \
+                "#{owner[0]}/#{owner[1]}"
+    else
+      owners[key] ||= owner
+    end
+  end
+end
+
+def serialized_id_public_commit_roots(root, errors)
+  roots = []
+  refs, refs_error, refs_ok = git_capture(root, "for-each-ref", "--format=%(refname)")
+  unless refs_ok
+    errors << "cannot enumerate public refs for serialized-ID history: #{refs_error.strip}"
+    return []
+  end
+  refs.each_line.map(&:strip).reject(&:empty?).sort.each do |refname|
+    commit, commit_error, commit_ok = git_capture(
+      root,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "#{refname}^{commit}"
+    )
+    if commit_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      roots << commit.strip
+    else
+      detail = commit_error.strip.empty? ? "" : ": #{commit_error.strip}"
+      errors << "serialized-ID public ref #{refname.inspect} does not peel to a commit#{detail}"
+    end
+  end
+
+  head, head_error, head_ok = git_capture(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+  if head_ok && head.strip.match?(/\A[0-9a-f]+\z/)
+    roots << head.strip
+  else
+    detail = head_error.strip.empty? ? "" : ": #{head_error.strip}"
+    errors << "serialized-ID HEAD does not peel to a commit#{detail}"
+  end
+
+  worktrees, worktrees_error, worktrees_ok = git_capture(root, "worktree", "list", "--porcelain", "-z")
+  unless worktrees_ok
+    errors << "cannot enumerate linked worktree HEADs for serialized-ID history: #{worktrees_error.strip}"
+    return roots.uniq
+  end
+  worktrees.b.split("\0\0").reject(&:empty?).each_with_index do |record, index|
+    head_fields = record.split("\0").select { |field| field.start_with?("HEAD ".b) }
+    unless head_fields.length == 1
+      errors << "serialized-ID linked worktree row #{index + 1} has no unique HEAD"
+      next
+    end
+    oid = head_fields.first.byteslice("HEAD ".bytesize..-1)
+    unless oid.match?(/\A[0-9a-f]+\z/)
+      errors << "serialized-ID linked worktree row #{index + 1} has a malformed HEAD"
+      next
+    end
+    commit, commit_error, commit_ok = git_capture(
+      root,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "#{oid}^{commit}"
+    )
+    if commit_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      roots << commit.strip
+    else
+      detail = commit_error.strip.empty? ? "" : ": #{commit_error.strip}"
+      errors << "serialized-ID linked worktree HEAD #{oid.inspect} does not peel to a commit#{detail}"
+    end
+  end
+  roots.uniq
+end
+
+def snapshot_texts_from_commit(root, commit, errors, label)
+  SNAPSHOT_PATHS.each_with_object({}) do |relative, texts|
+    stdout, _stderr, success = git_capture(root, "show", "#{commit}:#{relative}")
+    if success
+      texts[relative] = stdout
+    else
+      errors << "#{label}: missing #{relative}"
+    end
+  end
+end
+
+def snapshot_texts_from_index(root, errors, label)
+  registry, _stderr, present = git_capture(root, "show", ":#{REGISTRY_PATH}")
+  return nil unless present
+
+  texts = { REGISTRY_PATH => registry }
+  (SNAPSHOT_PATHS - [REGISTRY_PATH]).each do |relative|
+    stdout, _path_stderr, success = git_capture(root, "show", ":#{relative}")
+    if success
+      texts[relative] = stdout
+    else
+      errors << "#{label}: missing #{relative}"
+    end
+  end
+  texts
+end
+
+def snapshot_texts_from_worktree(root, errors, label)
+  SNAPSHOT_PATHS.each_with_object({}) do |relative, texts|
+    path = root.join(relative)
+    if path.file? && !path.symlink?
+      texts[relative] = path.read
+    else
+      errors << "#{label}: missing regular file #{relative}"
+    end
+  end
+end
+
+def validate_snapshot_texts(texts, errors, label)
+  return [] unless texts && SNAPSHOT_PATHS.all? { |relative| texts.key?(relative) }
+
+  lock_texts = SPECIALIZED_LOCK_PATHS.to_h { |relative| [relative, texts.fetch(relative)] }
+  source = build_source_registry(texts.fetch(DATA_PATH), lock_texts, errors, label)
+  registry = parse_registry_text(texts.fetch(REGISTRY_PATH), errors, "#{label}:#{REGISTRY_PATH}")
+  validate_registry_matches_source(registry, source, errors, label)
+  registry
+end
+
+def reviewed_commit_from_traceability(text, errors, label)
+  decisions = text.scan(/^\| Decision \| `([^`]+)` \|$/).flatten
+  return nil unless decisions.include?("APPROVED")
+
+  if decisions != ["APPROVED"]
+    errors << "#{label}: approval decisions are ambiguous"
+    return nil
+  end
+  commits = text.scan(/^\| Reviewed content commit \| `([0-9a-f]{40})` \|$/).flatten
+  unless commits.length == 1
+    errors << "#{label}: approved record must name exactly one reviewed content commit"
+    return nil
+  end
+  commits.first
+end
+
+def approved_baseline_commit(root, public_commit_roots, errors)
+  candidates = []
+  trace_path = root.join("docs/PREPRODUCTION_TRACEABILITY.md")
+  candidates << reviewed_commit_from_traceability(trace_path.read, errors, "working tree approval record") if trace_path.file?
+  history, history_error, history_ok = git_capture(
+    root,
+    "rev-list",
+    *public_commit_roots,
+    "--",
+    "docs/PREPRODUCTION_TRACEABILITY.md"
+  )
+  if history_ok
+    history.lines.map(&:strip).reject(&:empty?).each do |commit|
+      trace, _trace_error, trace_ok = git_capture(root, "show", "#{commit}:docs/PREPRODUCTION_TRACEABILITY.md")
+      next unless trace_ok
+
+      candidates << reviewed_commit_from_traceability(trace, errors, "historical approval record at #{commit}")
+    end
+  else
+    errors << "cannot inspect historical Gate 2 approval records: #{history_error.strip}"
+  end
+  candidates.compact!
+  if candidates.uniq.length > 1
+    errors << "working tree and public history name different Gate 2 reviewed baselines"
+    return nil
+  end
+  candidates.first
+end
+
+def validate_approved_history(root, worktree_rows, errors)
+  public_commit_roots = serialized_id_public_commit_roots(root, errors)
+  baseline = approved_baseline_commit(root, public_commit_roots, errors)
+  return unless baseline
+
+  _stdout, _stderr, exists = git_capture(root, "cat-file", "-e", "#{baseline}^{commit}")
+  unless exists
+    errors << "serialized-ID baseline commit is unavailable: #{baseline}"
+    return
+  end
+  head_descends_from_baseline = git_ancestor_status(
+    root,
+    baseline,
+    "HEAD",
+    errors,
+    "serialized-ID baseline ancestry"
+  )
+  return if head_descends_from_baseline.nil?
+  unless head_descends_from_baseline
+    errors << "serialized-ID baseline commit is not an ancestor of HEAD: #{baseline}"
+    return
+  end
+
+  cache = {}
+  load_commit = lambda do |commit|
+    cache[commit] ||= begin
+      snapshot_errors = []
+      texts = snapshot_texts_from_commit(root, commit, snapshot_errors, "commit #{commit}")
+      rows = validate_snapshot_texts(texts, snapshot_errors, "commit #{commit}")
+      errors.concat(snapshot_errors)
+      rows
+    end
+  end
+  historical_symbol_owners = {}
+  historical_key_owners = {}
+  baseline_rows = load_commit.call(baseline)
+  register_historical_symbol_owners(
+    baseline_rows,
+    historical_symbol_owners,
+    errors,
+    "commit #{baseline}"
+  )
+  register_historical_key_owners(
+    baseline_rows,
+    historical_key_owners,
+    errors,
+    "commit #{baseline}"
+  )
+
+  governed_roots = public_commit_roots.select do |commit|
+    baseline_ancestor = git_ancestor_status(
+      root,
+      baseline,
+      commit,
+      errors,
+      "serialized-ID public root #{commit}"
+    )
+    baseline_ancestor == true
+  end
+  history_arguments = governed_roots.map { |commit| "#{baseline}..#{commit}" }
+  history, history_error, history_ok = git_capture(
+    root,
+    "rev-list",
+    "--reverse",
+    "--topo-order",
+    "--parents",
+    *history_arguments
+  )
+  unless history_ok
+    detail = history_error.strip.empty? ? "" : ": #{history_error.strip}"
+    errors << "cannot enumerate serialized-ID history after #{baseline} across every public root#{detail}"
+    return
+  end
+  history.each_line do |line|
+    commit, *parents = line.split
+    current_rows = load_commit.call(commit)
+    register_historical_symbol_owners(
+      current_rows,
+      historical_symbol_owners,
+      errors,
+      "commit #{commit}"
+    )
+    register_historical_key_owners(
+      current_rows,
+      historical_key_owners,
+      errors,
+      "commit #{commit}"
+    )
+    parents.each do |parent|
+      parent_on_path = git_ancestor_status(
+        root,
+        baseline,
+        parent,
+        errors,
+        "serialized-ID parent #{parent}"
+      )
+      if parent_on_path == true
+        errors.concat(evolution_errors(load_commit.call(parent), current_rows, "#{parent} -> #{commit}"))
+        next
+      end
+      next if parent_on_path.nil?
+
+      parent_before_baseline = git_ancestor_status(
+        root,
+        parent,
+        baseline,
+        errors,
+        "serialized-ID prebaseline parent #{parent}"
+      )
+      next if parent_before_baseline.nil? || parent_before_baseline
+
+      errors << "commit #{commit} has a parent path that bypasses the serialized-ID baseline: #{parent}"
+    end
+  end
+
+  head_rows = load_commit.call("HEAD")
+  index_errors = []
+  index_texts = snapshot_texts_from_index(root, index_errors, "index")
+  if index_texts
+    index_rows = validate_snapshot_texts(index_texts, index_errors, "index")
+    errors.concat(index_errors)
+    errors.concat(evolution_errors(head_rows, index_rows, "HEAD -> index"))
+    errors.concat(evolution_errors(index_rows, worktree_rows, "index -> working tree"))
+    register_historical_symbol_owners(index_rows, historical_symbol_owners, errors, "index")
+    register_historical_symbol_owners(worktree_rows, historical_symbol_owners, errors, "working tree")
+    register_historical_key_owners(index_rows, historical_key_owners, errors, "index")
+    register_historical_key_owners(worktree_rows, historical_key_owners, errors, "working tree")
+  else
+    errors << "approved history requires #{REGISTRY_PATH} in the index"
+  end
+end
+
+def serialized_id_fixture_git!(root, *arguments)
+  _stdout, stderr, success = git_capture(root, *arguments)
+  raise "serialized-ID fixture git #{arguments.join(' ')} failed: #{stderr}" unless success
+end
+
+def validate_serialized_id_fixture(root)
+  errors = []
+  texts = snapshot_texts_from_worktree(root, errors, "fixture working tree")
+  rows = validate_snapshot_texts(texts, errors, "fixture working tree")
+  validate_approved_history(root, rows, errors)
+  errors
+end
+
+def run_serialized_id_git_self_tests
+  assertions = []
+  Dir.mktmpdir("n64game-serialized-id-history-") do |directory|
+    root = Pathname.new(directory)
+    SNAPSHOT_PATHS.each do |relative|
+      destination = root.join(relative)
+      FileUtils.mkdir_p(destination.dirname)
+      FileUtils.cp(ROOT.join(relative), destination)
+    end
+    # Seed synthetic primary and derived assignments into the temporary
+    # pre-approval baseline. History fixtures must remain valid after any
+    # production assignment is legally tombstoned in the real repository.
+    data_path = root.join(DATA_PATH)
+    registry_path = root.join(REGISTRY_PATH)
+    synthetic_primary_domain = "SerializedIdSelfTestPrimaryIdValue"
+    synthetic_other_domain = "SerializedIdSelfTestOtherIdValue"
+    synthetic_owner = "SERIALIZED_ID_SELF_TEST_OWNER"
+    synthetic_stable = "SERIALIZED_ID_SELF_TEST_STABLE"
+    synthetic_other_anchor = "SERIALIZED_ID_SELF_TEST_OTHER_ANCHOR"
+    data_path.open("a") do |file|
+      file.write(
+        "\n```c\n" \
+        "enum #{synthetic_primary_domain} {\n" \
+        "    #{synthetic_owner} = 0xF100,\n" \
+        "    #{synthetic_stable} = 0xF101,\n" \
+        "};\n" \
+        "enum #{synthetic_other_domain} {\n" \
+        "    #{synthetic_other_anchor} = 0xF200,\n" \
+        "};\n" \
+        "```\n"
+      )
+    end
+
+    dialogue_once_path = root.join("data/ids/dialogue_once_bits.lock")
+    synthetic_derived_bit = 0
+    synthetic_derived_owner = "SERIALIZED_ID_SELF_TEST_DERIVED_OWNER"
+    synthetic_derived_binding = "0"
+    dialogue_once_path.write(
+      "# Synthetic dialogue once-bit history fixture\n" \
+      "# bit_index|owner_dialogue_id|state|repeat_dialogue_id\n" \
+      "#{synthetic_derived_bit}|#{synthetic_derived_owner}|LIVE|#{synthetic_derived_binding}\n"
+    )
+    registry_path.write(
+      registry_path.read.lines.reject { |line| line.start_with?("DialogueOnceBit|") }.join
+    )
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF100|#{synthetic_owner}|LIVE|-")
+      file.puts("#{synthetic_primary_domain}|0xF101|#{synthetic_stable}|LIVE|-")
+      file.puts("#{synthetic_other_domain}|0xF200|#{synthetic_other_anchor}|LIVE|-")
+      file.puts(
+        format(
+          "DialogueOnceBit|0x%04X|%s|LIVE|%s",
+          synthetic_derived_bit,
+          synthetic_derived_owner,
+          synthetic_derived_binding
+        )
+      )
+    end
+    trace = root.join("docs/PREPRODUCTION_TRACEABILITY.md")
+    trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 remains in progress.\n")
+    serialized_id_fixture_git!(root, "init", "-q")
+    serialized_id_fixture_git!(root, "config", "user.name", "Serialized ID Self Test")
+    serialized_id_fixture_git!(root, "config", "user.email", "serialized-id@example.invalid")
+    serialized_id_fixture_git!(root, "add", "--all")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Public main before Gate 2 review")
+    public_main_ancestor, _public_error, _public_ok = git_capture(root, "rev-parse", "HEAD")
+    public_main_ancestor = public_main_ancestor.strip
+
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "approval-line")
+    trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 content is ready for review.\n")
+    serialized_id_fixture_git!(root, "add", "docs/PREPRODUCTION_TRACEABILITY.md")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Reviewed Gate 2 serialized-ID baseline")
+    reviewed_commit, _stderr, _success = git_capture(root, "rev-parse", "HEAD")
+    reviewed_commit = reviewed_commit.strip
+    trace.write(
+      "# Gate 2\n\n## Gate 2 approval record\n\n" \
+      "| Reviewed content commit | `#{reviewed_commit}` |\n" \
+      "| Decision | `APPROVED` |\n"
+    )
+    serialized_id_fixture_git!(root, "add", "docs/PREPRODUCTION_TRACEABILITY.md")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Approve Gate 2 serialized-ID baseline")
+    approval_commit, _approval_error, _approval_ok = git_capture(root, "rev-parse", "HEAD")
+    approval_commit = approval_commit.strip
+    approval_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts the exact committed reviewed/approval baseline" if approval_errors.empty?
+    raise "serialized-ID Git self-test rejected valid approval: #{approval_errors.join('; ')}" unless approval_errors.empty?
+
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "conflicting-public-approval")
+    trace.write(
+      "# Gate 2\n\n## Gate 2 approval record\n\n" \
+      "| Reviewed content commit | `#{public_main_ancestor}` |\n" \
+      "| Decision | `APPROVED` |\n"
+    )
+    serialized_id_fixture_git!(root, "add", "docs/PREPRODUCTION_TRACEABILITY.md")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Publish a conflicting approval baseline")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    conflicting_approval_errors = validate_serialized_id_fixture(root)
+    conflicting_approval_rejected = conflicting_approval_errors.include?(
+      "working tree and public history name different Gate 2 reviewed baselines"
+    )
+    assertions << "rejects a conflicting approval baseline retained only on a non-HEAD public branch" if
+      conflicting_approval_rejected
+    unless conflicting_approval_rejected
+      raise "serialized-ID Git self-test ignored a conflicting public approval baseline: " \
+            "#{conflicting_approval_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", "conflicting-public-approval")
+
+    retained_rename_branch = "retained-non-head-forbidden-rename"
+    retained_renamed_owner = "SERIALIZED_ID_SELF_TEST_RETAINED_RENAME"
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", retained_rename_branch)
+    data_path.write(data_path.read.gsub(synthetic_owner, retained_renamed_owner))
+    registry_path.write(registry_path.read.gsub(synthetic_owner, retained_renamed_owner))
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Hide a forbidden rename on a retained branch")
+    retained_rename_commit, _retained_rename_error, _retained_rename_ok = git_capture(root, "rev-parse", "HEAD")
+    retained_rename_commit = retained_rename_commit.strip
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    external_graft_file = root.join(".git/serialized-id-external-grafts")
+    external_graft_file.write("#{retained_rename_commit}\n")
+    previous_graft_file = ENV["GIT_GRAFT_FILE"]
+    had_graft_file = ENV.key?("GIT_GRAFT_FILE")
+    begin
+      ENV["GIT_GRAFT_FILE"] = external_graft_file.to_s
+      retained_rename_errors = validate_serialized_id_fixture(root)
+    ensure
+      if had_graft_file
+        ENV["GIT_GRAFT_FILE"] = previous_graft_file
+      else
+        ENV.delete("GIT_GRAFT_FILE")
+      end
+    end
+    retained_rename_rejected = retained_rename_errors.any? do |message|
+      message.include?("#{approval_commit} -> #{retained_rename_commit}") &&
+        message.include?("renamed or changed its binding")
+    end
+    assertions << "rejects a non-HEAD forbidden rename despite an external GIT_GRAFT_FILE override" if
+      retained_rename_rejected
+    unless retained_rename_rejected
+      raise "serialized-ID Git self-test let an external graft hide a retained-branch rename: " \
+            "#{retained_rename_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", retained_rename_branch)
+
+    linked_worktree_errors = []
+    linked_rename_commit = nil
+    Dir.mktmpdir("n64game-serialized-id-linked-worktree-") do |linked_parent|
+      linked_root = Pathname.new(linked_parent).join("checkout")
+      serialized_id_fixture_git!(
+        root,
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        linked_root.to_s,
+        approval_commit
+      )
+      begin
+        linked_data_path = linked_root.join(DATA_PATH)
+        linked_registry_path = linked_root.join(REGISTRY_PATH)
+        linked_owner = "SERIALIZED_ID_SELF_TEST_LINKED_RENAME"
+        linked_data_path.write(linked_data_path.read.gsub(synthetic_owner, linked_owner))
+        linked_registry_path.write(linked_registry_path.read.gsub(synthetic_owner, linked_owner))
+        serialized_id_fixture_git!(linked_root, "add", DATA_PATH, REGISTRY_PATH)
+        serialized_id_fixture_git!(
+          linked_root,
+          "commit",
+          "-q",
+          "-m",
+          "Hide a forbidden rename on a detached linked worktree"
+        )
+        linked_rename_out, _linked_rename_error, _linked_rename_ok = git_capture(
+          linked_root,
+          "rev-parse",
+          "HEAD"
+        )
+        linked_rename_commit = linked_rename_out.strip
+        linked_worktree_errors = validate_serialized_id_fixture(root)
+      ensure
+        serialized_id_fixture_git!(root, "worktree", "remove", "--force", linked_root.to_s)
+      end
+    end
+    linked_worktree_rejected = linked_worktree_errors.any? do |message|
+      message.include?("#{approval_commit} -> #{linked_rename_commit}") &&
+        message.include?("renamed or changed its binding")
+    end
+    assertions << "rejects a forbidden rename reachable only from a detached linked-worktree HEAD" if
+      linked_worktree_rejected
+    unless linked_worktree_rejected
+      raise "serialized-ID Git self-test ignored a detached linked-worktree violation: " \
+            "#{linked_worktree_errors.join('; ')}"
+    end
+
+    sibling_key_value = 0xF102
+    sibling_branch_a = "sibling-key-owner-a"
+    sibling_branch_b = "sibling-key-owner-b"
+    sibling_symbol_a = "SERIALIZED_ID_SELF_TEST_SIBLING_A"
+    sibling_symbol_b = "SERIALIZED_ID_SELF_TEST_SIBLING_B"
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", sibling_branch_a)
+    sibling_a_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_stable)}\s*=\s*0xF101,\s*$/,
+      "    #{synthetic_stable} = 0xF101,\n    #{sibling_symbol_a} = 0xF102,"
+    )
+    raise "serialized-ID Git self-test could not append sibling owner A" if sibling_a_data == data_path.read
+
+    data_path.write(sibling_a_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF102|#{sibling_symbol_a}|LIVE|-")
+    end
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Claim a durable key on sibling branch A")
+
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", sibling_branch_b)
+    sibling_b_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_stable)}\s*=\s*0xF101,\s*$/,
+      "    #{synthetic_stable} = 0xF101,\n    #{sibling_symbol_b} = 0xF102,"
+    )
+    raise "serialized-ID Git self-test could not append sibling owner B" if sibling_b_data == data_path.read
+
+    data_path.write(sibling_b_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF102|#{sibling_symbol_b}|LIVE|-")
+    end
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Claim a durable key on sibling branch B")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    sibling_key_errors = validate_serialized_id_fixture(root)
+    sibling_key_rejected = sibling_key_errors.any? do |message|
+      message.include?(
+        "historical durable key #{synthetic_primary_domain}/#{format('0x%04X', sibling_key_value)} " \
+        "has conflicting live owners"
+      )
+    end
+    assertions << "rejects conflicting owners for one newly appended key across sibling public branches" if
+      sibling_key_rejected
+    unless sibling_key_rejected
+      raise "serialized-ID Git self-test accepted divergent sibling key owners: " \
+            "#{sibling_key_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", sibling_branch_a, sibling_branch_b)
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", public_main_ancestor)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "retained-incomparable-prebaseline-side")
+    root.join("retained-incomparable.txt").write("This retained branch predates the reviewed baseline.\n")
+    serialized_id_fixture_git!(root, "add", "retained-incomparable.txt")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Retain an incomparable prebaseline side branch")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    retained_incomparable_errors = validate_serialized_id_fixture(root)
+    assertions << "allows a standalone retained branch that never passed through the reviewed baseline" if
+      retained_incomparable_errors.empty?
+    unless retained_incomparable_errors.empty?
+      raise "serialized-ID Git self-test rejected a standalone prebaseline side branch: " \
+            "#{retained_incomparable_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", "retained-incomparable-prebaseline-side")
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", public_main_ancestor)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "github-public-merge")
+    serialized_id_fixture_git!(
+      root,
+      "merge",
+      "-q",
+      "--no-ff",
+      approval_commit,
+      "-m",
+      "Merge approved Gate 2 branch"
+    )
+    public_merge_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts a final merge commit whose other parent predates the reviewed baseline" if public_merge_errors.empty?
+    unless public_merge_errors.empty?
+      raise "serialized-ID Git self-test rejected ordinary final merge: #{public_merge_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", public_main_ancestor)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "incomparable-side")
+    root.join("incomparable-side.txt").write("This side history did not pass through the reviewed baseline.\n")
+    serialized_id_fixture_git!(root, "add", "incomparable-side.txt")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Create incomparable side history")
+    incomparable_commit, _incomparable_error, _incomparable_ok = git_capture(root, "rev-parse", "HEAD")
+    incomparable_commit = incomparable_commit.strip
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "incomparable-merge")
+    serialized_id_fixture_git!(
+      root,
+      "merge",
+      "-q",
+      "--no-ff",
+      incomparable_commit,
+      "-m",
+      "Merge incomparable side history"
+    )
+    incomparable_errors = validate_serialized_id_fixture(root)
+    incomparable_rejected = incomparable_errors.any? do |message|
+      message.include?("parent path that bypasses the serialized-ID baseline")
+    end
+    assertions << "rejects a merge parent incomparable with the reviewed baseline" if incomparable_rejected
+    unless incomparable_rejected
+      raise "serialized-ID Git self-test accepted incomparable merge: #{incomparable_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    serialized_id_fixture_git!(root, "branch", "-D", "incomparable-merge", "incomparable-side")
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "legal-tombstone")
+    tombstoned_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_owner)}\s*=\s*0xF100,\s*$\n/,
+      ""
+    )
+    raise "serialized-ID Git self-test cannot tombstone its synthetic primary owner" if
+      tombstoned_data == data_path.read
+
+    data_path.write(tombstoned_data)
+    tombstoned_registry = registry_path.read.sub(
+      /^#{Regexp.escape(synthetic_primary_domain)}\|0xF100\|#{Regexp.escape(synthetic_owner)}\|LIVE\|-$/,
+      "#{synthetic_primary_domain}|0xF100|0|TOMBSTONE|0"
+    )
+    raise "serialized-ID Git self-test cannot tombstone its synthetic primary registry row" if
+      tombstoned_registry == registry_path.read
+
+    registry_path.write(tombstoned_registry)
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Legally tombstone a durable ID")
+    tombstone_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts a committed same-index LIVE-to-TOMBSTONE transition" if tombstone_errors.empty?
+    raise "serialized-ID Git self-test rejected legal tombstone: #{tombstone_errors.join('; ')}" unless tombstone_errors.empty?
+    tombstone_commit, _tombstone_error, _tombstone_ok = git_capture(root, "rev-parse", "HEAD")
+    tombstone_commit = tombstone_commit.strip
+
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "same-domain-symbol-resurrection")
+    resurrected_primary_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_stable)}\s*=\s*0xF101,\s*$/,
+      "    #{synthetic_stable} = 0xF101,\n    #{synthetic_owner} = 0xF102,"
+    )
+    raise "serialized-ID Git self-test could not create same-domain resurrection" if
+      resurrected_primary_data == data_path.read
+
+    data_path.write(resurrected_primary_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF102|#{synthetic_owner}|LIVE|-")
+    end
+    worktree_resurrection_errors = validate_serialized_id_fixture(root)
+    worktree_resurrection_rejected = worktree_resurrection_errors.any? do |message|
+      message.include?("working tree: historical durable symbol #{synthetic_owner} was rebound")
+    end
+    assertions << "rejects a historical symbol rebind in the working tree" if worktree_resurrection_rejected
+    unless worktree_resurrection_rejected
+      raise "serialized-ID Git self-test accepted working-tree symbol resurrection: " \
+            "#{worktree_resurrection_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    index_resurrection_errors = validate_serialized_id_fixture(root)
+    index_resurrection_rejected = index_resurrection_errors.any? do |message|
+      message.include?("index: historical durable symbol #{synthetic_owner} was rebound")
+    end
+    assertions << "rejects a historical symbol rebind in the index" if index_resurrection_rejected
+    unless index_resurrection_rejected
+      raise "serialized-ID Git self-test accepted index symbol resurrection: #{index_resurrection_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Illegally resurrect symbol at a new value")
+    same_domain_errors = validate_serialized_id_fixture(root)
+    same_domain_rejected = same_domain_errors.any? do |message|
+      message.include?("historical durable symbol #{synthetic_owner} was rebound")
+    end
+    assertions << "rejects a tombstoned symbol rebound to a new value" if same_domain_rejected
+    unless same_domain_rejected
+      raise "serialized-ID Git self-test accepted same-domain symbol resurrection: #{same_domain_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", tombstone_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "same-domain-symbol-resurrection")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "cross-domain-symbol-resurrection")
+    resurrected_other_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_other_anchor)}\s*=\s*0xF200,\s*$/,
+      "    #{synthetic_other_anchor} = 0xF200,\n    #{synthetic_owner} = 0xF201,"
+    )
+    raise "serialized-ID Git self-test could not create cross-domain resurrection" if
+      resurrected_other_data == data_path.read
+
+    data_path.write(resurrected_other_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_other_domain}|0xF201|#{synthetic_owner}|LIVE|-")
+    end
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Illegally resurrect symbol in another domain")
+    cross_domain_errors = validate_serialized_id_fixture(root)
+    cross_domain_rejected = cross_domain_errors.any? do |message|
+      message.include?("historical durable symbol #{synthetic_owner} was rebound")
+    end
+    assertions << "rejects a tombstoned symbol rebound in another primary domain" if cross_domain_rejected
+    unless cross_domain_rejected
+      raise "serialized-ID Git self-test accepted cross-domain symbol resurrection: #{cross_domain_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "cross-domain-symbol-resurrection")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "derived-domain-symbol-resurrection")
+    next_once_bit = synthetic_derived_bit + 1
+    original_once_row =
+      "#{synthetic_derived_bit}|#{synthetic_derived_owner}|LIVE|#{synthetic_derived_binding}"
+    tombstoned_once_text = dialogue_once_path.read.sub(
+      /^#{Regexp.escape(original_once_row)}$/,
+      "#{synthetic_derived_bit}|0|TOMBSTONE|0"
+    )
+    raise "serialized-ID Git self-test cannot tombstone a derived-domain owner" if
+      tombstoned_once_text == dialogue_once_path.read
+
+    dialogue_once_path.write(tombstoned_once_text)
+    original_registry_row = format(
+      "DialogueOnceBit|0x%04X|%s|LIVE|%s",
+      synthetic_derived_bit,
+      synthetic_derived_owner,
+      synthetic_derived_binding
+    )
+    tombstoned_registry_text = registry_path.read.sub(
+      /^#{Regexp.escape(original_registry_row)}$/,
+      format("DialogueOnceBit|0x%04X|0|TOMBSTONE|0", synthetic_derived_bit)
+    )
+    raise "serialized-ID Git self-test cannot tombstone the derived registry owner" if
+      tombstoned_registry_text == registry_path.read
+
+    registry_path.write(tombstoned_registry_text)
+    serialized_id_fixture_git!(root, "add", "data/ids/dialogue_once_bits.lock", REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Legally tombstone a derived-domain owner")
+    derived_tombstone_errors = validate_serialized_id_fixture(root)
+    assertions << "accepts a committed derived-domain tombstone" if derived_tombstone_errors.empty?
+    unless derived_tombstone_errors.empty?
+      raise "serialized-ID Git self-test rejected a legal derived tombstone: " \
+            "#{derived_tombstone_errors.join('; ')}"
+    end
+
+    dialogue_once_path.open("a") do |file|
+      file.puts(
+        "#{next_once_bit}|#{synthetic_derived_owner}|LIVE|#{synthetic_derived_binding}"
+      )
+    end
+    registry_path.open("a") do |file|
+      file.puts(
+        format(
+          "DialogueOnceBit|0x%04X|%s|LIVE|%s",
+          next_once_bit,
+          synthetic_derived_owner,
+          synthetic_derived_binding
+        )
+      )
+    end
+    serialized_id_fixture_git!(root, "add", "data/ids/dialogue_once_bits.lock", REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Illegally resurrect a derived-domain owner")
+    derived_resurrection_errors = validate_serialized_id_fixture(root)
+    derived_resurrection_rejected = derived_resurrection_errors.any? do |message|
+      message.include?("historical durable symbol #{synthetic_derived_owner} was rebound")
+    end
+    assertions << "rejects a tombstoned symbol rebound inside one derived alias domain" if
+      derived_resurrection_rejected
+    unless derived_resurrection_rejected
+      raise "serialized-ID Git self-test accepted derived-domain symbol resurrection: " \
+            "#{derived_resurrection_errors.join('; ')}"
+    end
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "derived-domain-symbol-resurrection")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "forbidden-rename")
+    renamed_owner = "SERIALIZED_ID_SELF_TEST_RENAMED"
+    data_path.write(data_path.read.gsub(synthetic_owner, renamed_owner))
+    registry_path.write(registry_path.read.gsub(synthetic_owner, renamed_owner))
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Coordinated forbidden durable-ID rename")
+    rename_errors = validate_serialized_id_fixture(root)
+    rename_rejected = rename_errors.any? { |message| message.include?("renamed or changed its binding") }
+    assertions << "rejects a coordinated source-and-lock rename after approval" if rename_rejected
+    raise "serialized-ID Git self-test accepted coordinated rename: #{rename_errors.join('; ')}" unless rename_rejected
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "forbidden-rename")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "erased-approval-rename")
+    trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 remains in progress.\n")
+    erased_owner = "SERIALIZED_ID_SELF_TEST_ERASED"
+    data_path.write(data_path.read.gsub(synthetic_owner, erased_owner))
+    registry_path.write(registry_path.read.gsub(synthetic_owner, erased_owner))
+    serialized_id_fixture_git!(root, "add", "--all")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Erase approval record and rename durable ID")
+    erased_errors = validate_serialized_id_fixture(root)
+    erased_rejected = erased_errors.any? { |message| message.include?("renamed or changed its binding") }
+    assertions << "retains the historical baseline after current approval evidence is erased" if erased_rejected
+    raise "serialized-ID Git self-test lost erased historical baseline: #{erased_errors.join('; ')}" unless erased_rejected
+  end
+  assertions
+end
+
+def run_numeric_enum_expression_self_tests
+  valid_source = <<~MARKDOWN
+    ```c
+    enum SyntheticBaseValue {
+        SYNTH_BASE = 0x10u,
+    };
+
+    enum SyntheticIdValue {
+        SYNTH_FIRST = SYNTH_BASE,
+        SYNTH_SECOND = SYNTH_FIRST + 1,
+        SYNTH_THIRD,
+        SYNTH_MASK = (1 << 5) | 03u,
+    };
+
+    enum SyntheticInlineBase { SYNTH_INLINE_BASE = 0x40 };
+    enum SyntheticInlineIdValue { SYNTH_INLINE_FIRST = SYNTH_INLINE_BASE, SYNTH_INLINE_SECOND };
+
+    typedef enum HiddenStableTag {
+        SYNTH_HIDDEN_DURABLE_ID = 0xF001,
+    } HiddenIdValue;
+
+    typedef enum TaggedIdValue {
+        SYNTH_TAGGED_DURABLE_ID = 0xF002,
+    } HiddenStableAlias;
+
+    typedef uint16_t SyntheticCarrierId;
+
+    enum ObjectiveIdValue {
+        SYNTH_OBJECTIVE_NONE = 0,
+        OBJ_CAPACITY = 8,
+    };
+    enum MoveIdValue {
+        SYNTH_MOVE_NONE = 0,
+        MOVE_LOCKED_COUNT = 35,
+    };
+    enum SpawnIdValue {
+        SPAWN_NONE = 0,
+        SYNTH_SPAWN_LIVE = 1,
+    };
+    enum CutsceneIdValue {
+        CUTSCENE_NONE = 0,
+        SYNTH_CUTSCENE_LIVE = 1,
+    };
+    enum StoryFlagIndex {
+        SYNTH_STORY_FLAG = 0,
+        STORY_FLAG_LOCKED_COUNT = 1,
+        STORY_FLAG_CAPACITY = 64,
+    };
+    enum DestinationBit { SYNTH_DESTINATION_BIT = 0, };
+    enum RelayPageBit { SYNTH_RELAY_PAGE_BIT = 0, };
+    enum RewardClaimBit { SYNTH_REWARD_CLAIM_BIT = 0, };
+    ```
+  MARKDOWN
+  valid_errors = []
+  valid_blocks = numeric_enum_blocks(valid_source, valid_errors, "valid expression fixture")
+  valid_rows = if valid_blocks.key?("SyntheticIdValue")
+                 numeric_assignments(
+                   "SyntheticIdValue",
+                   valid_blocks.fetch("SyntheticIdValue"),
+                   valid_errors,
+                   "valid expression fixture"
+                 )
+               else
+                 []
+               end
+  expected_rows = [
+    [16, "SYNTH_FIRST"],
+    [17, "SYNTH_SECOND"],
+    [18, "SYNTH_THIRD"],
+    [35, "SYNTH_MASK"]
+  ]
+  inline_rows = if valid_blocks.key?("SyntheticInlineIdValue")
+                  numeric_assignments(
+                    "SyntheticInlineIdValue",
+                    valid_blocks.fetch("SyntheticInlineIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_inline_rows = [
+    [64, "SYNTH_INLINE_FIRST"],
+    [65, "SYNTH_INLINE_SECOND"]
+  ]
+  hidden_rows = if valid_blocks.key?("HiddenIdValue")
+                  numeric_assignments(
+                    "HiddenIdValue",
+                    valid_blocks.fetch("HiddenIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_hidden_rows = [[0xF001, "SYNTH_HIDDEN_DURABLE_ID"]]
+  tagged_rows = if valid_blocks.key?("TaggedIdValue")
+                  numeric_assignments(
+                    "TaggedIdValue",
+                    valid_blocks.fetch("TaggedIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_tagged_rows = [[0xF002, "SYNTH_TAGGED_DURABLE_ID"]]
+  registry_errors = []
+  source_registry_rows = build_source_registry(
+    valid_source,
+    SPECIALIZED_LOCK_PATHS.to_h { |relative| [relative, ""] },
+    registry_errors,
+    "valid expression registry fixture"
+  )
+  locked_expression_rows = source_registry_rows
+    .select { |row| row[:domain] == "SyntheticIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_inline_rows = source_registry_rows
+    .select { |row| row[:domain] == "SyntheticInlineIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_hidden_rows = source_registry_rows
+    .select { |row| row[:domain] == "HiddenIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_tagged_rows = source_registry_rows
+    .select { |row| row[:domain] == "TaggedIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  exhaustive_literal_rows = [
+    ["ObjectiveIdValue", 8, "OBJ_CAPACITY"],
+    ["MoveIdValue", 35, "MOVE_LOCKED_COUNT"],
+    ["SpawnIdValue", 0, "SPAWN_NONE"],
+    ["CutsceneIdValue", 0, "CUTSCENE_NONE"],
+    ["StoryFlagIndex", 1, "STORY_FLAG_LOCKED_COUNT"],
+    ["StoryFlagIndex", 64, "STORY_FLAG_CAPACITY"]
+  ]
+  actual_literal_rows = source_registry_rows.map { |row| [row[:domain], row[:value], row[:symbol]] }
+  specialized_source_rows = source_registry_rows
+    .select { |row| SPECIALIZED_ID_ENUMS.include?(row[:domain]) }
+    .map { |row| [row[:domain], row[:value], row[:symbol]] }
+
+  unresolved_errors = []
+  numeric_enum_blocks(
+    "```c\nenum UnresolvedIdValue { UNRESOLVED_FIRST = MISSING_ID + 1, };\n```\n",
+    unresolved_errors,
+    "unresolved expression fixture"
+  )
+
+  duplicate_errors = []
+  duplicate_blocks = numeric_enum_blocks(
+    "```c\nenum DuplicateIdValue { DUP_FIRST = 4, DUP_SECOND = DUP_FIRST + 0, };\n```\n",
+    duplicate_errors,
+    "duplicate expression fixture"
+  )
+  if duplicate_blocks.key?("DuplicateIdValue")
+    numeric_assignments(
+      "DuplicateIdValue",
+      duplicate_blocks.fetch("DuplicateIdValue"),
+      duplicate_errors,
+      "duplicate expression fixture"
+    )
+  end
+
+  invalid_errors = []
+  numeric_enum_blocks(
+    "```c\nenum InvalidIdValue { INVALID_FIRST = (1 ? 2 : 3), };\n```\n",
+    invalid_errors,
+    "invalid expression fixture"
+  )
+
+  unconsumed_errors = []
+  numeric_enum_blocks(
+    "```c\nenum UnsupportedIdValue { UNSUPPORTED_FIRST = 1 } *unsupported_pointer;\n```\n",
+    unconsumed_errors,
+    "unconsumed enum fixture"
+  )
+
+  repeated_symbol_errors = []
+  numeric_enum_blocks(
+    "```c\nenum FirstIdValue { REPEATED_ID = 1, };\n" \
+    "enum SecondIdValue { REPEATED_ID = 2, };\n```\n",
+    repeated_symbol_errors,
+    "repeated symbol fixture"
+  )
+
+  conflicting_alias_errors = []
+  numeric_enum_blocks(
+    "```c\ntypedef enum FirstIdValue { SYNTH_CONFLICTING_ID = 1 } SecondIdValue;\n```\n",
+    conflicting_alias_errors,
+    "conflicting durable alias fixture"
+  )
+
+  unsupported_declaration_sources = {
+    "residual forward enum" => "enum ForwardOnlyIdValue;",
+    "split enum typedef alias" =>
+      "enum AliasStableTag { ALIAS_STABLE_VALUE = 1 }; typedef enum AliasStableTag HiddenAliasIdValue;",
+    "two-stage ID typedef alias" =>
+      "typedef enum AliasRootTag { ALIAS_ROOT_VALUE = 1 } AliasRoot; typedef AliasRoot TwoStageIdValue;",
+    "qualified ID typedef alias" =>
+      "typedef enum QualifiedRootTag { QUALIFIED_ROOT_VALUE = 1 } QualifiedRoot; " \
+      "typedef const QualifiedRoot QualifiedHiddenIdValue;",
+    "parenthesized ID typedef alias" =>
+      "typedef enum ParenthesizedRootTag { PARENTHESIZED_ROOT_VALUE = 1 } ParenthesizedRoot; " \
+      "typedef ParenthesizedRoot (ParenthesizedHiddenIdValue);",
+    "multi-declarator ID typedef alias" =>
+      "typedef enum MultiRootTag { MULTI_ROOT_VALUE = 1 } MultiRoot; " \
+      "typedef MultiRoot MultiHiddenIdValue, MultiOtherAlias;"
+  }
+  unsupported_declaration_errors = unsupported_declaration_sources.to_h do |fixture, declaration|
+    declaration_errors = []
+    numeric_enum_blocks(
+      "```c\n#{declaration}\n```\n",
+      declaration_errors,
+      "#{fixture} fixture"
+    )
+    [fixture, declaration_errors]
+  end
+
+  fixtures = {
+    "resolves suffixes, cross-domain references, local expressions, implicit increments, and same-line enums" =>
+      valid_errors.empty? && registry_errors.empty? && valid_rows == expected_rows &&
+        locked_expression_rows == expected_rows && inline_rows == expected_inline_rows &&
+        locked_inline_rows == expected_inline_rows && hidden_rows == expected_hidden_rows &&
+        locked_hidden_rows == expected_hidden_rows && tagged_rows == expected_tagged_rows &&
+        locked_tagged_rows == expected_tagged_rows,
+    "exhaustively registers count, capacity, and specialized zero assignments" =>
+      exhaustive_literal_rows.all? { |row| actual_literal_rows.include?(row) } &&
+        specialized_source_rows.sort == [
+          ["CutsceneIdValue", 0, "CUTSCENE_NONE"],
+          ["SpawnIdValue", 0, "SPAWN_NONE"]
+        ],
+    "rejects an unresolved identifier instead of omitting its enumerator" =>
+      unresolved_errors.any? { |message| message.include?("unresolved enum dependency") },
+    "rejects a duplicate value produced by a valid expression" =>
+      duplicate_errors.any? { |message| message.include?("reuses value") },
+    "rejects unsupported expression syntax instead of omitting its enumerator" =>
+      invalid_errors.any? { |message| message.include?("invalid constant expression") },
+    "rejects unconsumed enum syntax instead of omitting its domain" =>
+      unconsumed_errors.any? { |message| message.include?("unparsed or unsupported enum syntax") },
+    "rejects duplicate global enum symbols" =>
+      repeated_symbol_errors.any? { |message| message.include?("duplicate global enum symbol") },
+    "rejects conflicting durable tag and typedef aliases" =>
+      conflicting_alias_errors.any? { |message| message.include?("conflicting durable ID domain aliases") }
+  }
+  unsupported_declaration_errors.each do |fixture, declaration_errors|
+    expected_error = fixture.include?("enum") ?
+      "unparsed or unsupported enum syntax" :
+      "unsupported durable-ID typedef alias"
+    fixtures["rejects #{fixture}"] = declaration_errors.any? { |message| message.include?(expected_error) }
+  end
+  failures = fixtures.reject { |_label, passed| passed }.keys
+  raise "serialized-ID expression self-test failed: #{failures.join(', ')}" unless failures.empty?
+
+  puts "Serialized-ID expression self-test passed: #{fixtures.length} isolated accept/reject fixtures."
+end
+
+def run_serialized_id_self_tests
+  run_numeric_enum_expression_self_tests
+  base = [
+    { domain: "SceneIdValue", value: 1, symbol: "SCENE_BOOT", state: "LIVE", binding: "-" },
+    { domain: "StoryFlagIndex", value: 0, symbol: "FLAG_OPENING", state: "LIVE", binding: "-" }
+  ]
+  appended = base + [{ domain: "SceneIdValue", value: 2, symbol: "SCENE_TITLE", state: "LIVE", binding: "-" }]
+  tombstoned = base.map(&:dup)
+  tombstoned[1] = { domain: "StoryFlagIndex", value: 0, symbol: "0", state: "TOMBSTONE", binding: "0" }
+  fixtures = {
+    "accepts unchanged history" => evolution_errors(base, base.map(&:dup), "fixture").empty?,
+    "accepts append" => evolution_errors(base, appended, "fixture").empty?,
+    "accepts same-index tombstone" => evolution_errors(base, tombstoned, "fixture").empty?,
+    "rejects deletion" => !evolution_errors(base, base.first(1), "fixture").empty?,
+    "rejects coordinated rename/reuse" => !evolution_errors(base, [base[0].merge(symbol: "SCENE_REUSED"), base[1]], "fixture").empty?,
+    "rejects insertion or reordering" => !evolution_errors(base, [appended[2], *base], "fixture").empty?,
+    "rejects tombstone resurrection" => !evolution_errors(tombstoned, base, "fixture").empty?
+  }
+  failures = fixtures.reject { |_label, passed| passed }.keys
+  raise "serialized-ID history self-test failed: #{failures.join(', ')}" unless failures.empty?
+
+  git_assertions = run_serialized_id_git_self_tests
+  puts "Serialized-ID history self-test passed: #{fixtures.length + git_assertions.length} isolated accept/reject fixtures, including committed approval history."
+end
+
+if ARGV == ["--self-test-serialized-id-history"]
+  run_serialized_id_self_tests
+  exit 0
+elsif !ARGV.empty?
+  warn "usage: scripts/validate-id-locks [--self-test-serialized-id-history]"
+  exit 2
+end
+
+run_serialized_id_self_tests
+errors = []
+worktree_texts = snapshot_texts_from_worktree(ROOT, errors, "working tree")
+worktree_rows = validate_snapshot_texts(worktree_texts, errors, "working tree")
+
+data = worktree_texts.fetch(DATA_PATH, "")
+graph_path = ROOT.join("docs/DIALOGUE_GRAPH.md")
+unless graph_path.file?
+  errors << "missing docs/DIALOGUE_GRAPH.md"
+  graph = ""
+else
+  graph = graph_path.read
+end
+
+dialogue = parse_once_lock_text("data/ids/dialogue_once_bits.lock", worktree_texts.fetch("data/ids/dialogue_once_bits.lock", ""), errors)
+examine = parse_once_lock_text("data/ids/examine_once_bits.lock", worktree_texts.fetch("data/ids/examine_once_bits.lock", ""), errors)
+npc = parse_once_lock_text("data/ids/npc_once_bits.lock", worktree_texts.fetch("data/ids/npc_once_bits.lock", ""), errors)
+spawn_ids = parse_numeric_lock_text("data/ids/spawn_ids.lock", worktree_texts.fetch("data/ids/spawn_ids.lock", ""), errors)
+cutscene_ids = parse_numeric_lock_text("data/ids/cutscene_ids.lock", worktree_texts.fetch("data/ids/cutscene_ids.lock", ""), errors)
+
+errors << "dialogue once lock: expected at least 10 rows, got #{dialogue.length}" unless dialogue.length >= 10
+errors << "examine once lock: expected at least 20 rows, got #{examine.length}" unless examine.length >= 20
+errors << "NPC once lock: expected at least 3 rows, got #{npc.length}" unless npc.length >= 3
+errors << "spawn ID lock: expected at least 35 rows, got #{spawn_ids.length}" unless spawn_ids.length >= 35
+errors << "cutscene ID lock: expected at least 1 row, got #{cutscene_ids.length}" unless cutscene_ids.length >= 1
+
+enum_blocks = numeric_enum_blocks(data, errors, DATA_PATH)
+{
+  "data/ids/spawn_ids.lock" => [spawn_ids, "SpawnIdValue", "SPAWN_NONE"],
+  "data/ids/cutscene_ids.lock" => [cutscene_ids, "CutsceneIdValue", "CUTSCENE_NONE"]
+}.each do |relative, (locked_rows, enum_name, zero_symbol)|
+  body = enum_blocks[enum_name]
+  declared = body ? numeric_assignments(enum_name, body, errors, DATA_PATH).reject { |_value, symbol| symbol == zero_symbol } : []
+  live = locked_rows.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol]] }
+  tombstones = locked_rows.select { |row| row[:state] == "TOMBSTONE" }.map { |row| row[:value] }
+  errors << "#{relative}: live rows differ from DATA_SCHEMAS enum" unless live.sort == declared.sort
+  declared.each do |value, symbol|
+    errors << "#{relative}: declared live #{symbol} reuses tombstoned #{format('0x%04X', value)}" if tombstones.include?(value)
+  end
+end
+
+dialogue_section = data[/The live dialogue-once lock assignments are exact:(.*?)(?=The live examine-once assignments are)/m]
+if dialogue_section
+  documented = dialogue_section.scan(
+    /^\|\s*(\d+)\s*\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*`[^`]*\/\s*([A-Z0-9_]+)`\s*\|/
+  ).map { |bit, owner, repeat| [bit.to_i, owner, repeat] }
+  locked = dialogue.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "dialogue once lock differs from DATA_SCHEMAS live assignment table" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing live dialogue-once assignment section"
+end
+
+examine_section = data[/The live examine-once assignments are the exact pairs(.*?)(?=The NPC occurrence and lock tables are literal:)/m]
+if examine_section
+  documented = examine_section.scan(/\((\d+),(INT_[A-Z0-9_]+),([A-Z][A-Z0-9_]+)\)/).map do |bit, owner, repeat|
+    [bit.to_i, owner, repeat]
+  end
+  locked = examine.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "examine once lock differs from DATA_SCHEMAS exact-pair list" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing live examine-once assignment section"
+end
+
+npc_section = data[/The NPC occurrence and lock tables are literal:(.*?)(?=The six variant rows are)/m]
+if npc_section
+  documented = npc_section.scan(
+    /^\|\s*`(NPC_OCCURRENCE_[A-Z0-9_]+)\s*\/\s*(CHAR_[A-Z0-9_]+)\s*\/[^`]*`\s*\|\s*`[^`]+`\s*\|\s*`[^`]+`\s*\|\s*`(\d+)\s*\//
+  ).map { |owner, character, bit| [bit.to_i, owner, character] }.sort_by(&:first)
+  locked = npc.select { |row| row[:state] == "LIVE" }.map { |row| [row[:value], row[:symbol], row[:binding]] }
+  errors << "NPC once lock differs from DATA_SCHEMAS literal table" unless locked == documented
+else
+  errors << "DATA_SCHEMAS.md: missing NPC occurrence/lock section"
+end
+
+graph_rows = {}
+graph.lines.each_with_index do |line, index|
+  next unless (match = line.match(/^DROW\(([A-Z][A-Z0-9_]+),(?:[^,]*,){11}\s*(0x[0-9A-Fa-f]+|\d+)\s*,/))
+
+  graph_rows[match[1]] = { flags: Integer(match[2], 0), line: index + 1 }
+end
+
+dialogue.select { |row| row[:state] == "LIVE" }.each do |row|
+  graph_row = graph_rows[row[:symbol]]
+  if graph_row.nil?
+    errors << "dialogue once owner #{row[:symbol]} has no DROW"
+  elsif (graph_row[:flags] & 0x04).zero?
+    errors << "dialogue once owner #{row[:symbol]} DROW lacks ONE_SHOT"
+  end
+  if row[:binding] != "0" && !graph_rows.key?(row[:binding])
+    errors << "dialogue once repeat #{row[:binding]} has no DROW"
+  end
+end
+examine.select { |row| row[:state] == "LIVE" && row[:binding] != "0" }.each do |row|
+  errors << "once lock repeat #{row[:binding]} has no DROW" unless graph_rows.key?(row[:binding])
+end
+npc.select { |row| row[:state] == "LIVE" }.each do |row|
+  unless data.match?(/^\s*#{Regexp.escape(row[:binding])}\s*=\s*(?:0x[0-9A-Fa-f]+|\d+)\b/)
+    errors << "NPC once lock character #{row[:binding]} lacks numeric CharacterId"
+  end
+end
+
+validate_approved_history(ROOT, worktree_rows, errors)
+
+if errors.empty?
+  live_count = worktree_rows.count { |row| row[:state] == "LIVE" }
+  tombstone_count = worktree_rows.length - live_count
+  puts "ID lock validation passed: #{dialogue.length} dialogue, #{examine.length} examine, #{npc.length} NPC bits, #{spawn_ids.length} spawns, #{cutscene_ids.length} cutscenes."
+  puts "Serialized registry: #{worktree_rows.length} rows (#{live_count} live, #{tombstone_count} tombstones), immutable from the committed Gate 2 baseline after approval."
+  exit 0
+end
+
+warn "ID lock validation failed with #{errors.length} error(s):"
+errors.each { |message| warn "- #{message}" }
+exit 1
