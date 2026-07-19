@@ -24,7 +24,7 @@ BANNED_PUBLIC_PATH_PREFIXES = %w[
 ].freeze
 CREDENTIAL_FILENAME = /\A(?:\.env(?:\..+)?|credentials?.*|.*\.(?:pem|key|p12|pfx|jks|keystore))\z/i
 SECRET_PATTERNS = {
-  "private key block" => /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+  "private key block" => /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/,
   "GitHub token" => /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/,
   "AWS access key" => /\bAKIA[0-9A-Z]{16}\b/,
   "Google API key" => /\bAIza[0-9A-Za-z_-]{30,}\b/,
@@ -37,6 +37,7 @@ REJECTED_NAME_EXEMPT_PATHS = %w[
   scripts/validate-preproduction
   scripts/validate-public-hygiene
 ].freeze
+UTF16_ASCII_RUN_MIN_CODEUNITS = REJECTED_NAMES.map(&:length).min
 
 def git_capture(root, *arguments, stdin_data: nil)
   stdout, stderr, status = Open3.capture3(
@@ -60,6 +61,9 @@ def decode_text(bytes)
   elsif bytes.start_with?("\xFE\xFF".b)
     candidate = bytes.byteslice(2..-1).dup.force_encoding(Encoding::UTF_16BE)
     return candidate.encode(Encoding::UTF_8)
+  elsif (encoding = bomless_utf16_encoding(bytes))
+    candidate = bytes.dup.force_encoding(encoding)
+    return candidate.encode(Encoding::UTF_8)
   else
     return nil if bytes.include?("\x00".b)
 
@@ -68,6 +72,68 @@ def decode_text(bytes)
   candidate.valid_encoding? ? candidate : nil
 rescue EncodingError
   nil
+end
+
+def bomless_utf16_encoding(bytes)
+  # Only infer BOM-less UTF-16 when a meaningful prefix looks like ordinary
+  # text in exactly one byte lane. This detects intentionally encoded policy
+  # strings without treating arbitrary ASCII or all-zero binary data as text.
+  sample = bytes.to_s.b.byteslice(0, 4096).to_s.b
+  sample = sample.byteslice(0, sample.bytesize - (sample.bytesize % 2))
+  pair_count = sample.bytesize / 2
+  return nil if pair_count < UTF16_ASCII_RUN_MIN_CODEUNITS
+
+  lanes = sample.bytes.each_slice(2).to_a.transpose
+  even_bytes, odd_bytes = lanes
+  text_byte = lambda do |byte|
+    byte == 9 || byte == 10 || byte == 13 || (byte >= 0x20 && byte <= 0x7e)
+  end
+  orientation = lambda do |text_lane, zero_lane|
+    zero_ratio = zero_lane.count(0).fdiv(pair_count)
+    text_zero_ratio = text_lane.count(0).fdiv(pair_count)
+    text_ratio = text_lane.count { |byte| text_byte.call(byte) }.fdiv(pair_count)
+    zero_ratio >= 0.75 && text_zero_ratio <= 0.10 && text_ratio >= 0.70
+  end
+  little_endian = orientation.call(even_bytes, odd_bytes)
+  big_endian = orientation.call(odd_bytes, even_bytes)
+  return Encoding::UTF_16LE if little_endian && !big_endian
+  return Encoding::UTF_16BE if big_endian && !little_endian
+
+  nil
+end
+
+def bomless_utf16_ascii_runs(bytes)
+  # Extract only long, contiguous ASCII-like UTF-16 runs. Checking both byte
+  # orders and both possible alignments catches policy text embedded anywhere
+  # in a binary payload while ordinary ASCII (no alternating NUL lane) yields
+  # no candidate and therefore no new false-positive surface.
+  bytes = bytes.to_s.b
+  return [] unless bytes.include?("\x00".b)
+
+  runs = []
+  ascii_text_byte = lambda do |byte|
+    byte == 9 || byte == 10 || byte == 13 || (byte >= 0x20 && byte <= 0x7e)
+  end
+  [[0, 1], [1, 0]].each do |text_index, zero_index|
+    [0, 1].each do |offset|
+      current = []
+      index = offset
+      while index + 1 < bytes.bytesize
+        pair = [bytes.getbyte(index), bytes.getbyte(index + 1)]
+        if pair[zero_index].zero? && ascii_text_byte.call(pair[text_index])
+          current << pair[text_index]
+        else
+          runs << current.pack("C*").force_encoding(Encoding::UTF_8) if
+            current.length >= UTF16_ASCII_RUN_MIN_CODEUNITS
+          current = []
+        end
+        index += 2
+      end
+      runs << current.pack("C*").force_encoding(Encoding::UTF_8) if
+        current.length >= UTF16_ASCII_RUN_MIN_CODEUNITS
+    end
+  end
+  runs.uniq
 end
 
 def magic_labels(bytes)
@@ -89,19 +155,62 @@ def magic_labels(bytes)
   labels
 end
 
+def rejected_name_exempt_path?(path)
+  raw_path = path.to_s.b
+  REJECTED_NAME_EXEMPT_PATHS.any? { |exempt| raw_path == exempt.b }
+end
+
+def content_policy_findings(bytes, scan_rejected_names: true)
+  content = bytes.to_s.b
+  findings = []
+  SECRET_PATTERNS.each do |label, pattern|
+    findings << "possible #{label}" if content.match?(pattern)
+  end
+  if scan_rejected_names
+    REJECTED_NAMES.each do |name|
+      findings << "rejected working name remains: #{name}" if
+        content.match?(/\b#{Regexp.escape(name)}\b/i)
+    end
+  end
+  findings
+rescue Encoding::CompatibilityError
+  # All configured patterns are ASCII. Retrying against an explicitly binary
+  # regexp keeps invalid-UTF-8 path bytes inspectable instead of skipping them.
+  binary = content.dup.force_encoding(Encoding::BINARY)
+  findings = []
+  SECRET_PATTERNS.each do |label, pattern|
+    findings << "possible #{label}" if binary.match?(Regexp.new(pattern.source, pattern.options, "n"))
+  end
+  if scan_rejected_names
+    REJECTED_NAMES.each do |name|
+      pattern = Regexp.new("\\b#{Regexp.escape(name)}\\b", Regexp::IGNORECASE, "n")
+      findings << "rejected working name remains: #{name}" if binary.match?(pattern)
+    end
+  end
+  findings
+end
+
 def path_findings(path)
-  normalized = path.to_s.tr("\\", "/")
+  raw_path = path.to_s.b
+  normalized = raw_path.tr("\\", "/")
   normalized_casefold = normalized.downcase
   extension = File.extname(normalized).downcase
   findings = []
   findings << "control character in public pathname" if normalized.match?(/[\x00-\x1F\x7F]/)
+  findings << "literal backslash in public pathname" if raw_path.include?("\\".b)
   findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
   if BANNED_PUBLIC_PATH_PREFIXES.any? { |prefix| normalized_casefold.start_with?(prefix) }
     findings << "forbidden generated-build path"
   end
   findings << "credential-like filename" if
     File.basename(normalized).match?(CREDENTIAL_FILENAME) && File.basename(normalized) != ".env.example"
-  findings
+  findings.concat(
+    content_policy_findings(
+      normalized,
+      scan_rejected_names: !rejected_name_exempt_path?(normalized)
+    )
+  )
+  findings.uniq
 end
 
 def artifact_findings(path, bytes, scan_rejected_names: true)
@@ -113,15 +222,13 @@ def artifact_findings(path, bytes, scan_rejected_names: true)
   if text.nil? && (bytes.start_with?("\xFF\xFE".b) || bytes.start_with?("\xFE\xFF".b))
     findings << "malformed BOM-marked UTF-16 content"
   end
-  [bytes, text].compact.each do |content|
-    SECRET_PATTERNS.each do |label, pattern|
-      findings << "possible #{label}" if content.match?(pattern)
-    end
-    if scan_rejected_names && !REJECTED_NAME_EXEMPT_PATHS.include?(path.to_s)
-      REJECTED_NAMES.each do |name|
-        findings << "rejected working name remains: #{name}" if content.match?(/\b#{Regexp.escape(name)}\b/i)
-      end
-    end
+  [bytes, text, *bomless_utf16_ascii_runs(bytes)].compact.each do |content|
+    findings.concat(
+      content_policy_findings(
+        content,
+        scan_rejected_names: scan_rejected_names && !rejected_name_exempt_path?(path)
+      )
+    )
   end
   findings.uniq
 end
@@ -132,13 +239,13 @@ def add_artifact_findings(errors, label, path, bytes, scan_rejected_names: true)
   end
 end
 
-def reachable_blob_records(root, errors)
+def reachable_object_records(root, errors, extra_roots = [])
   # Enumerate object IDs without path decorations. Git pathnames may contain
   # newlines, so line-parsing `rev-list --objects` output can otherwise detach
   # an OID from its path and silently omit a reachable blob. Path policy is
   # checked separately through NUL-delimited history traversal below.
   objects, stderr, success = git_capture(
-    root, "rev-list", "--objects", "--all", "--no-object-names"
+    root, "rev-list", "--objects", "--all", "--no-object-names", *extra_roots.uniq
   )
   unless success
     errors << "history: cannot enumerate reachable objects: #{stderr.strip}"
@@ -166,11 +273,37 @@ def reachable_blob_records(root, errors)
     errors << "history: cannot inspect reachable object metadata: #{check_error.strip}"
     return []
   end
-  checked.each_line.each_with_object([]) do |line, records|
-    oid, type, size_text = line.split
-    next unless type == "blob"
+  records = []
+  checked.each_line.with_index do |line, index|
+    oid, type, size_text, extra = line.split
+    unless extra.nil? && object_ids.include?(oid) && %w[blob commit tag tree].include?(type) &&
+           size_text&.match?(/\A(?:0|[1-9][0-9]*)\z/)
+      errors << "history: malformed reachable object metadata at row #{index + 1}"
+      next
+    end
+    records << { oid: oid, type: type, size: Integer(size_text, 10) }
+  end
+  metadata_ids = records.map { |record| record[:oid] }
+  (object_ids - metadata_ids).each do |oid|
+    errors << "history: reachable object #{oid} is missing metadata"
+  end
+  records
+end
 
-    records << { oid: oid, size: Integer(size_text, 10), paths: [] }
+def validate_complete_repository_history(root, errors)
+  output, stderr, success = git_capture(root, "rev-parse", "--is-shallow-repository")
+  unless success
+    errors << "history: cannot determine whether repository history is shallow: #{stderr.strip}"
+    return
+  end
+
+  case output.strip
+  when "false"
+    nil
+  when "true"
+    errors << "history: shallow repository cannot prove complete public history"
+  else
+    errors << "history: malformed shallow-repository status #{output.strip.inspect}"
   end
 end
 
@@ -178,31 +311,67 @@ def validate_public_ref_roots(root, errors)
   output, stderr, success = git_capture(root, "for-each-ref", "--format=%(refname)")
   unless success
     errors << "refs: cannot enumerate public history roots: #{stderr.strip}"
-    return
+    return [[], []]
   end
 
-  output.each_line.map(&:chomp).reject(&:empty?).sort.each do |refname|
-    _commit, _peel_error, peel_ok = git_capture(
+  object_roots = []
+  commit_roots = []
+  output.b.each_line.map(&:chomp).reject(&:empty?).sort.each do |refname|
+    display_name = refname.dup.force_encoding(Encoding::UTF_8)
+    display_name = refname.inspect unless display_name.valid_encoding?
+    path_findings(refname).each { |finding| errors << "ref #{display_name}: #{finding}" }
+
+    object, object_error, object_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{refname}^{object}"
+    )
+    if object_ok && object.strip.match?(/\A[0-9a-f]+\z/)
+      object_roots << object.strip
+    else
+      detail = object_error.strip.empty? ? "" : ": #{object_error.strip}"
+      errors << "ref #{display_name}: cannot resolve public history root object#{detail}"
+    end
+
+    commit, _peel_error, peel_ok = git_capture(
       root, "rev-parse", "--verify", "--quiet", "#{refname}^{commit}"
     )
-    next if peel_ok
+    if peel_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      commit_roots << commit.strip
+      next
+    end
 
-    errors << "ref #{refname}: public history root does not recursively peel to a commit"
+    errors << "ref #{display_name}: public history root does not recursively peel to a commit"
   end
 
-  _head_commit, _head_error, head_ok = git_capture(
+  head_object, head_object_error, head_object_ok = git_capture(
+    root, "rev-parse", "--verify", "--quiet", "HEAD^{object}"
+  )
+  if head_object_ok && head_object.strip.match?(/\A[0-9a-f]+\z/)
+    object_roots << head_object.strip
+  else
+    detail = head_object_error.strip.empty? ? "" : ": #{head_object_error.strip}"
+    errors << "HEAD: cannot resolve public history root object#{detail}"
+  end
+
+  head_commit, _head_error, head_ok = git_capture(
     root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"
   )
-  errors << "HEAD: public history root does not recursively peel to a commit" unless head_ok
+  if head_ok && head_commit.strip.match?(/\A[0-9a-f]+\z/)
+    commit_roots << head_commit.strip
+  else
+    errors << "HEAD: public history root does not recursively peel to a commit"
+  end
+  [object_roots.uniq, commit_roots.uniq]
 end
 
 def validate_public_worktree_heads(root, errors)
   output, stderr, success = git_capture(root, "worktree", "list", "--porcelain", "-z")
   unless success
     errors << "worktree roots: cannot enumerate linked HEADs: #{stderr.strip}"
-    return
+    return [[], []]
   end
 
+  object_roots = []
+  commit_roots = []
   records = output.b.split("\0\0").reject(&:empty?)
   records.each_with_index do |record, index|
     fields = record.split("\0")
@@ -221,18 +390,24 @@ def validate_public_worktree_heads(root, errors)
       errors << "worktree HEAD #{path_label.inspect}: malformed object ID"
       next
     end
-    _commit, _peel_error, peel_ok = git_capture(
+    object_roots << oid
+    commit, _peel_error, peel_ok = git_capture(
       root, "rev-parse", "--verify", "--quiet", "#{oid}^{commit}"
     )
-    next if peel_ok
+    if peel_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      commit_roots << commit.strip
+      next
+    end
 
     errors << "worktree HEAD #{path_label.inspect}: public history root does not recursively peel to a commit"
   end
+  [object_roots.uniq, commit_roots.uniq]
 end
 
-def validate_reachable_history_paths(root, errors)
+def validate_reachable_history_paths(root, errors, extra_commit_roots = [])
   output, stderr, success = git_capture(
-    root, "log", "-m", "--all", "--format=", "--name-only", "-z", "--no-renames"
+    root, "log", "-m", "--all", "--format=", "--name-only", "-z", "--no-renames",
+    *extra_commit_roots.uniq
   )
   unless success
     errors << "history paths: cannot enumerate every reachable changed path: #{stderr.strip}"
@@ -241,11 +416,14 @@ def validate_reachable_history_paths(root, errors)
 
   output.b.split("\0").reject(&:empty?).uniq.sort.each do |raw_path|
     path = raw_path.dup.force_encoding(Encoding::UTF_8)
+    display_path = path.valid_encoding? ? path : raw_path.inspect
+    path_findings(raw_path).each do |finding|
+      errors << "history path #{display_path}: #{finding}"
+    end
     unless path.valid_encoding?
       errors << "history path: invalid UTF-8 pathname"
       next
     end
-    path_findings(path).each { |finding| errors << "history path #{path}: #{finding}" }
   end
 end
 
@@ -253,26 +431,29 @@ def validate_reachable_history(root, errors)
   # Commit-backed refs let the NUL-delimited diff walk enumerate every path.
   # A ref rooted directly at a tree/blob has no commit diff, so reject that
   # uncommon shape rather than pretending its entry names were inspected.
-  validate_public_ref_roots(root, errors)
-  validate_public_worktree_heads(root, errors)
-  validate_reachable_history_paths(root, errors)
-  reachable_blob_records(root, errors).each do |record|
-    path_label = record[:paths].empty? ? "<unknown-path>" : record[:paths].sort.join(",")
-    label = "history blob #{record[:oid]} (#{path_label})"
-    record[:paths].each do |path|
-      path_findings(path).each { |finding| errors << "#{label}: #{finding}" }
-    end
+  validate_complete_repository_history(root, errors)
+  ref_object_roots, ref_commit_roots = validate_public_ref_roots(root, errors)
+  worktree_object_roots, worktree_commit_roots = validate_public_worktree_heads(root, errors)
+  object_roots = ref_object_roots + worktree_object_roots
+  commit_roots = ref_commit_roots + worktree_commit_roots
+  validate_reachable_history_paths(root, errors, commit_roots)
+  reachable_object_records(root, errors, object_roots).each do |record|
+    label = if record[:type] == "blob"
+              "history blob #{record[:oid]} (<unknown-path>)"
+            else
+              "history #{record[:type]} #{record[:oid]}"
+            end
     if record[:size] > MAX_GIT_BLOB_BYTES
-      errors << "#{label}: reachable Git blob exceeds 1 MiB (#{record[:size]} bytes)"
+      errors << "#{label}: reachable Git #{record[:type]} exceeds 1 MiB (#{record[:size]} bytes)"
       next
     end
-    bytes, read_error, read_ok = git_capture(root, "cat-file", "blob", record[:oid])
+    bytes, read_error, read_ok = git_capture(root, "cat-file", record[:type], record[:oid])
     unless read_ok
-      errors << "#{label}: cannot read blob bytes: #{read_error.strip}"
+      errors << "#{label}: cannot read #{record[:type]} bytes: #{read_error.strip}"
       next
     end
     errors << "#{label}: Git size metadata differs from decoded bytes" unless bytes.bytesize == record[:size]
-    add_artifact_findings(errors, label, record[:paths].first || record[:oid], bytes, scan_rejected_names: false)
+    add_artifact_findings(errors, label, record[:oid], bytes, scan_rejected_names: false)
   end
 end
 
@@ -321,14 +502,16 @@ def canonical_lfs_materialization?(root, relative, absolute)
 end
 
 def collect_stream_pattern_findings(window, scan_rejected_names, secret_labels, rejected_labels)
-  SECRET_PATTERNS.each do |label, pattern|
-    secret_labels << label if !secret_labels.include?(label) && window.match?(pattern)
-  end
-  return unless scan_rejected_names
+  [window, *bomless_utf16_ascii_runs(window)].each do |candidate|
+    SECRET_PATTERNS.each do |label, pattern|
+      secret_labels << label if !secret_labels.include?(label) && candidate.match?(pattern)
+    end
+    next unless scan_rejected_names
 
-  REJECTED_NAMES.each do |name|
-    rejected_labels << name if
-      !rejected_labels.include?(name) && window.match?(/\b#{Regexp.escape(name)}\b/i)
+    REJECTED_NAMES.each do |name|
+      rejected_labels << name if
+        !rejected_labels.include?(name) && candidate.match?(/\b#{Regexp.escape(name)}\b/i)
+    end
   end
 end
 
@@ -340,6 +523,7 @@ def streamed_file_findings(relative, absolute)
   decoded_overlap = +""
   utf16_converter = nil
   utf16_checked = false
+  utf16_bom_marked = false
   utf16_decode_failed = false
   secret_labels = Set.new
   rejected_labels = Set.new
@@ -350,9 +534,13 @@ def streamed_file_findings(relative, absolute)
       chunk = chunk.b
       unless utf16_checked
         utf16_converter = if chunk.start_with?("\xFF\xFE".b)
+                            utf16_bom_marked = true
                             Encoding::Converter.new(Encoding::UTF_16LE, Encoding::UTF_8)
                           elsif chunk.start_with?("\xFE\xFF".b)
+                            utf16_bom_marked = true
                             Encoding::Converter.new(Encoding::UTF_16BE, Encoding::UTF_8)
+                          elsif (encoding = bomless_utf16_encoding(chunk))
+                            Encoding::Converter.new(encoding, Encoding::UTF_8)
                           end
         utf16_checked = true
       end
@@ -375,7 +563,7 @@ def streamed_file_findings(relative, absolute)
         rescue EncodingError
           # Match decode_text semantics for malformed BOM-marked text: retain
           # any earlier findings, fail closed, and stop decoding later bytes.
-          utf16_decode_failed = true
+          utf16_decode_failed = true if utf16_bom_marked
           utf16_converter = nil
         end
       end
@@ -391,7 +579,7 @@ def streamed_file_findings(relative, absolute)
     rescue EncodingError
       # A trailing partial UTF-16 code unit makes the text malformed; raw-byte
       # and prior complete decoded-window findings still remain authoritative.
-      utf16_decode_failed = true
+      utf16_decode_failed = true if utf16_bom_marked
     end
   end
   magic_labels(prefix + suffix).each { |label| findings << label }
@@ -488,6 +676,44 @@ def run_public_hygiene_self_tests
     artifact_findings("notes", "credential=#{token}\n").include?("possible GitHub token"),
     "detects extensionless textual secrets by content"
   )
+  assert.call(
+    artifact_findings(
+      "encrypted-key.txt",
+      "-----BEGIN " + "ENCRYPTED " + "PRIVATE KEY-----\nsynthetic\n"
+    ).include?("possible private key block"),
+    "detects standard encrypted private-key headers"
+  )
+  {
+    "UTF-16LE" => Encoding::UTF_16LE,
+    "UTF-16BE" => Encoding::UTF_16BE
+  }.each do |label, encoding|
+    embedded = "\x01\x02binary-prefix\x03".b +
+      "credential=#{token}\nMara Quill\n".encode(encoding).b + "\x04binary-suffix".b
+    findings = artifact_findings("bomless-#{label.downcase}", embedded)
+    assert.call(
+      findings.include?("possible GitHub token") &&
+        findings.include?("rejected working name remains: Mara Quill"),
+      "detects embedded BOM-less #{label} policy text"
+    )
+  end
+  shortest_rejected_name = REJECTED_NAMES.min_by(&:length)
+  {
+    "UTF-16LE" => Encoding::UTF_16LE,
+    "UTF-16BE" => Encoding::UTF_16BE
+  }.each do |label, encoding|
+    findings = artifact_findings(
+      "bomless-short-#{label.downcase}",
+      shortest_rejected_name.encode(encoding).b
+    )
+    assert.call(
+      findings.include?("rejected working name remains: #{shortest_rejected_name}"),
+      "detects the shortest rejected name in BOM-less #{label}"
+    )
+  end
+  assert.call(
+    bomless_utf16_ascii_runs("ordinary ASCII text with no alternating NUL lane").empty?,
+    "does not infer BOM-less UTF-16 from ordinary ASCII"
+  )
   binary_findings = artifact_findings("binary-payload", "\x00#{token}\x00Mara Quill\x00".b)
   assert.call(
     binary_findings.include?("possible GitHub token") &&
@@ -530,6 +756,24 @@ def run_public_hygiene_self_tests
   end
 
   with_fixture_repo do |root|
+    fixture_write(root, "historical-only.txt", "credential=#{token}\n")
+    fixture_commit!(root, "history before shallow boundary")
+    FileUtils.rm(root.join("historical-only.txt"))
+    fixture_write(root, "safe.txt", "safe shallow tip\n")
+    fixture_commit!(root, "shallow public tip")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve shallow-history fixture HEAD: #{head_error}" unless head_ok
+
+    fixture_write(root, ".git/shallow", "#{head.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("history: shallow repository cannot prove complete public history"),
+      "fails closed when a shallow boundary can omit public history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
     fixture_git!(root, "lfs", "install", "--local")
     fixture_write(root, ".gitattributes", "*.dat filter=lfs diff=lfs merge=lfs -text\n")
     middle_offset = (STREAM_SCAN_CHUNK_BYTES * 3) - 3
@@ -541,6 +785,8 @@ def run_public_hygiene_self_tests
     utf16_text = ("A" * 100_000) + "\n#{token}\nMara Quill\n" + ("B" * 450_000)
     fixture_write(root, "payload-le.dat", "\xFF\xFE".b + utf16_text.encode(Encoding::UTF_16LE).b)
     fixture_write(root, "payload-be.dat", "\xFE\xFF".b + utf16_text.encode(Encoding::UTF_16BE).b)
+    fixture_write(root, "payload-bomless-le.dat", utf16_text.encode(Encoding::UTF_16LE).b)
+    fixture_write(root, "payload-bomless-be.dat", utf16_text.encode(Encoding::UTF_16BE).b)
     malformed_le = "\xFF\xFE\x00\xD8".b + utf16_text.encode(Encoding::UTF_16LE).b
     malformed_be = "\xFE\xFF\xD8\x00".b + utf16_text.encode(Encoding::UTF_16BE).b
     fixture_write(root, "payload-malformed-le.dat", malformed_le)
@@ -571,6 +817,21 @@ def run_public_hygiene_self_tests
         errors.join("; ")
       )
     end
+    %w[payload-bomless-le.dat payload-bomless-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") && message.include?("possible GitHub token")
+        end && errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "scans complete large canonical BOM-less #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
     %w[payload-malformed-le.dat payload-malformed-be.dat].each do |relative|
       assert.call(
         errors.any? do |message|
@@ -596,6 +857,122 @@ def run_public_hygiene_self_tests
     assert.call(
       errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") },
       "rejects a secret retained only in reachable history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "safe.txt", "safe public text after commit-message fixture\n")
+    fixture_commit!(root, "credential=#{token}")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history commit") && message.include?("possible GitHub token")
+      end,
+      "rejects a secret retained in a reachable commit payload",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_git!(root, "tag", "-a", "safe-tag", "-m", "credential=#{token}")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history tag") && message.include?("possible GitHub token")
+      end,
+      "rejects a secret retained in a reachable annotated-tag payload",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_git!(root, "branch", token)
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("ref refs/heads/#{token}") && message.include?("possible GitHub token")
+      end,
+      "rejects a configured secret pattern in a public ref name",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_write(root, "Mara Quill.txt", "safe bytes in a rejected-name pathname\n")
+    fixture_git!(root, "add", "Mara Quill.txt")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("worktree:Mara Quill.txt") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end && errors.any? do |message|
+        message.include?("index:Mara Quill.txt") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end,
+      "rejects a configured rejected name in staged and worktree pathnames",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    spoof_path = "docs\\NAMING_AND_ORIGINALITY_AUDIT.md"
+    fixture_write(root, spoof_path, "Mara Quill\n")
+    fixture_git!(root, "add", spoof_path)
+    current_errors = validate_public_hygiene(root)
+    assert.call(
+      %w[index worktree].all? do |surface|
+        current_errors.any? do |message|
+          message.include?("#{surface}:#{spoof_path}") &&
+            message.include?("literal backslash in public pathname")
+        end && current_errors.any? do |message|
+          message.include?("#{surface}:#{spoof_path}") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end
+      end,
+      "does not let a literal-backslash path spoof a current or staged name exemption",
+      current_errors.join("; ")
+    )
+
+    fixture_commit!(root, "commit literal-backslash exemption spoof")
+    FileUtils.rm(root.join(spoof_path))
+    fixture_commit!(root, "delete literal-backslash exemption spoof")
+    history_errors = validate_public_hygiene(root)
+    assert.call(
+      history_errors.any? do |message|
+        message.include?("history path #{spoof_path}") &&
+          message.include?("literal backslash in public pathname")
+      end,
+      "retains literal-backslash exemption-spoof rejection in history",
+      history_errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    historical_path = "archive-#{token}.txt"
+    fixture_write(root, historical_path, "safe historical pathname bytes\n")
+    fixture_commit!(root, "historical secret-shaped pathname fixture")
+    FileUtils.rm(root.join(historical_path))
+    fixture_commit!(root, "delete historical secret-shaped pathname fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path #{historical_path}") &&
+          message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history tree") && message.include?("possible GitHub token")
+      end,
+      "rejects a configured secret pattern retained in historical path and tree bytes",
       errors.join("; ")
     )
   end
@@ -796,7 +1173,7 @@ end
 run_public_hygiene_self_tests
 errors = validate_public_hygiene(ROOT)
 if errors.empty?
-  puts "Public hygiene validation passed: every reachable blob plus index and worktree candidates scanned by content."
+  puts "Public hygiene validation passed: every reachable Git object plus index and worktree candidates scanned by content."
   exit 0
 end
 

@@ -262,16 +262,41 @@ end
 
 DATA_ENUM_DECLARATION_PATTERN =
   /(?<![A-Za-z0-9_])(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
+DATA_BRACELESS_TYPEDEF_PATTERN = /(?<![A-Za-z0-9_])typedef\b[^;{}]*;/m
+DATA_FIXED_WIDTH_TYPEDEF_PATTERN =
+  /\Atypedef\s+((?:u?int)(?:8|16|32|64)_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\z/m
+DATA_DURABLE_ID_IDENTIFIER_PATTERN = /\b[A-Za-z_][A-Za-z0-9_]*Id(?:Value)?\b/
 
 def extract_data_enum_sources(source)
   enum_scan_code = strip_c_comments(source)
   enum_sources = enum_scan_code.scan(DATA_ENUM_DECLARATION_PATTERN)
   unconsumed_enum_code = enum_scan_code.gsub(DATA_ENUM_DECLARATION_PATTERN, " ")
   raise ArgumentError, "unparsed or unsupported enum syntax remains in DATA_SCHEMAS C blocks" if
-    unconsumed_enum_code.match?(/\benum\b[^;{}]*\{/)
+    unconsumed_enum_code.match?(/\benum\b/)
   raise ArgumentError, "no enum domains found" if enum_sources.empty?
 
   enum_sources
+end
+
+# A braceless typedef can otherwise hide a durable ID domain from enum parsing
+# (including split, qualified, parenthesized, multi-declarator, and two-stage
+# aliases). Fixed-width scalar aliases are the only supported braceless form;
+# every other statement that names an ID-shaped identifier fails closed.
+def extract_data_scalar_aliases(source)
+  typedef_scan_code = strip_c_comments(source)
+  aliases = []
+  typedef_scan_code.scan(DATA_BRACELESS_TYPEDEF_PATTERN).each do |statement|
+    fixed_width = statement.match(DATA_FIXED_WIDTH_TYPEDEF_PATTERN)
+    if fixed_width
+      aliases << [fixed_width[1], fixed_width[2]]
+      next
+    end
+    next unless statement.match?(DATA_DURABLE_ID_IDENTIFIER_PATTERN)
+
+    compact = statement.gsub(/\s+/, " ").strip
+    raise ArgumentError, "unsupported durable ID typedef alias in DATA_SCHEMAS C blocks: #{compact}"
+  end
+  aliases
 end
 
 # A tagged typedef has two C spellings for the same enum type.  Treat the one
@@ -407,7 +432,11 @@ abort("no C blocks found in #{DATA_PATH}") if blocks.empty?
 code = blocks.join("\n\n")
 
 # Scalar aliases and their machine ranges.
-alias_matches = code.scan(/^typedef\s+((?:u?int)(?:8|16|32|64)_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/)
+begin
+  alias_matches = extract_data_scalar_aliases(code)
+rescue ArgumentError => typedef_error
+  abort(typedef_error.message)
+end
 abort("no fixed-width scalar aliases found") if alias_matches.empty?
 duplicate_aliases = alias_matches.group_by { |_base, name| name }.select { |_name, rows| rows.length > 1 }.keys
 abort("duplicate scalar aliases: #{duplicate_aliases.sort.join(', ')}") unless duplicate_aliases.empty?
@@ -428,12 +457,35 @@ begin
     "enum VisibleValue { VISIBLE = 1 }; enum HiddenIdValue { HIDDEN = 0x1234 };"
   )
   abort("same-line enum extraction self-test did not find both domains") unless same_line_fixture.length == 2
-  begin
-    extract_data_enum_sources("enum UnsupportedIdValue { UNSUPPORTED = 1 } *pointer;")
-    abort("unsupported enum syntax self-test was silently accepted")
-  rescue ArgumentError => fixture_error
-    abort("unsupported enum syntax self-test returned the wrong failure") unless
-      fixture_error.message.include?("unparsed or unsupported enum syntax")
+  unsupported_enum_fixtures = {
+    "unsupported declarator" => "enum UnsupportedIdValue { UNSUPPORTED = 1 } *pointer;",
+    "forward declaration" => "enum ForwardOnlyIdValue;",
+    "split enum typedef" => "typedef enum AliasStableTag HiddenAliasIdValue;"
+  }
+  unsupported_enum_fixtures.each do |label, declaration|
+    begin
+      extract_data_enum_sources("enum VisibleValue { VISIBLE = 1 }; #{declaration}")
+      abort("#{label} enum syntax self-test was silently accepted")
+    rescue ArgumentError => fixture_error
+      abort("#{label} enum syntax self-test returned the wrong failure") unless
+        fixture_error.message.include?("unparsed or unsupported enum syntax")
+    end
+  end
+  unsupported_typedef_fixtures = {
+    "two-stage" => "typedef enum AliasRootTag { ALIAS_ROOT = 1 } AliasRoot; " \
+                   "typedef AliasRoot TwoStageIdValue;",
+    "qualified" => "typedef const AliasRoot QualifiedHiddenIdValue;",
+    "parenthesized" => "typedef AliasRoot (ParenthesizedHiddenIdValue);",
+    "multi-declarator" => "typedef AliasRoot MultiHiddenIdValue, MultiOtherAlias;"
+  }
+  unsupported_typedef_fixtures.each do |label, declaration|
+    begin
+      extract_data_scalar_aliases(declaration)
+      abort("#{label} durable-ID typedef self-test was silently accepted")
+    rescue ArgumentError => fixture_error
+      abort("#{label} durable-ID typedef self-test returned the wrong failure") unless
+        fixture_error.message.include?("unsupported durable ID typedef alias")
+    end
   end
   abort("tagged typedef durable-domain self-test ignored the typedef name") unless
     data_enum_domain_name(true, "HiddenStableTag", "HiddenIdValue", 0) == "HiddenIdValue"
