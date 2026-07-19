@@ -379,7 +379,7 @@ GENERATED_CAMERA_CHILDREN = {
   "ASSET_CAMERA_SHOT_POST_CHAPTER" => "col.common.camera_volumes",
   "ASSET_CAMERA_SHOT_MAP_UI" => "env.world_map.desert_relief"
 }.freeze
-GENERATED_CAMERA_INITIAL_ROWS_SHA256 = "3e8cd37d36a1b1cddfd48535220e897fc551228c956bfe459e0533504b6abbac"
+GENERATED_CAMERA_INITIAL_ROWS_SHA256 = "b39c3498840e3821a2c092404477a225620bba55a85255fd7a681aeaeb6ed2ca"
 GENERATED_CAMERA_SOURCE_ROWS_SHA256 = "7d176cacd076ffbf8dfb092103b6f82d4e4f5a5b658a822b8072c350410c3100"
 GENERATED_CAMERA_PAYLOADS_SHA256 = "b26a6697e47daf2787ab513b13dc36ac6bd79b43d895b0b21773228d39d28cde"
 GENERATED_CHILD_TRANSITION_HEADER = %w[
@@ -723,10 +723,13 @@ def regular_without_symlink?(relative, root: ROOT)
   cursor.file?
 end
 
-def git_capture(*args, root: ROOT, env: {}, unsetenv_others: false)
+def git_capture(*args, root: ROOT, env: {}, unsetenv_others: false, stdin_data: nil)
   isolated = unsetenv_others || Pathname.new(root).expand_path != ROOT.expand_path
   effective_env = isolated ? public_clone_env.merge(env) : env
-  Open3.capture3(effective_env, "git", *args, chdir: root.to_s, unsetenv_others: isolated)
+  Open3.capture3(
+    effective_env, "git", *args, chdir: root.to_s, unsetenv_others: isolated,
+    stdin_data: stdin_data
+  )
 end
 
 def canonical_lfs_pointer(bytes)
@@ -822,7 +825,7 @@ def new_manifest_context
 end
 
 def validate_manifest(relative, expected_digest, label, stack = [], commit = nil, fresh_clone = nil, context = nil,
-                      ancestor_digests: [])
+                      ancestor_digests = [])
   context ||= new_manifest_context
   if context[:manifests].key?(relative)
     error("#{label} cached manifest SHA-256 differs from caller binding") unless
@@ -920,7 +923,7 @@ def validate_manifest(relative, expected_digest, label, stack = [], commit = nil
     if File.basename(path).end_with?("MANIFEST.sha256")
       validate_manifest(
         path, digest, "#{label}/#{path}", stack + [relative], commit, fresh_clone, context,
-        ancestor_digests: ancestor_digests + [actual_manifest_digest]
+        ancestor_digests + [actual_manifest_digest]
       )
     end
   end
@@ -1436,6 +1439,310 @@ def run_hardening_self_test(data_schemas, verbose: false)
   check.call("Gate-1 attempt chain binds exact row bytes") do
     chained.match?(HEX64) && gate_attempt_row_sha256(sample_attempt.dup.tap { |row| row[1] = "2" }) != chained
   end
+  attempt_one = [sample_attempt]
+  attempt_two = [sample_attempt, sample_attempt.dup.tap { |row| row[1] = "2" }]
+  check.call("Gate-1 attempt history permits only initial add and exact append") do
+    gate_attempt_history_edge_append_only?(nil, attempt_one) &&
+      gate_attempt_history_edge_append_only?(attempt_one, attempt_two)
+  end
+  check.call("Gate-1 attempt history rejects deletion after first publication") do
+    !gate_attempt_history_edge_append_only?(attempt_one, nil)
+  end
+  check.call("Gate-1 attempt history rejects row removal, reorder, or rewrite") do
+    rewritten = [sample_attempt.dup.tap { |row| row[1] = "9" }]
+    !gate_attempt_history_edge_append_only?(attempt_two, attempt_one) &&
+      !gate_attempt_history_edge_append_only?(attempt_one, rewritten)
+  end
+  check.call("Gate-1 attempt retention scans every public Git edge and rejects linear or merge deletion") do
+    error_start = ERRORS.length
+    linear_result = false
+    merge_result = false
+    begin
+      Dir.mktmpdir("n64game-attempt-history-") do |fixture_root|
+        fixture_git = lambda do |*arguments|
+          _out, fixture_error, fixture_status = git_capture(*arguments, root: fixture_root)
+          raise fixture_error unless fixture_status.success?
+        end
+        fixture_git.call("init", "-q")
+        fixture_git.call("config", "user.name", "Attempt History Self Test")
+        fixture_git.call("config", "user.email", "attempt-history@example.invalid")
+        fixture_path = "review/fixture.asset/g1/attempts/ATTEMPT_HISTORY.tsv"
+        absolute_path = Pathname.new(fixture_root).join(fixture_path)
+        FileUtils.mkdir_p(absolute_path.dirname)
+        header = GATE_ATTEMPT_HISTORY_HEADER.join("\t") + "\n"
+        first_row = GATE_ATTEMPT_HISTORY_HEADER.each_index.map { |index| "v#{index}" }
+        second_row = first_row.dup.tap { |row| row[1] = "2" }
+        File.binwrite(absolute_path, header + first_row.join("\t") + "\n")
+        fixture_git.call("add", "--", fixture_path)
+        fixture_git.call("commit", "-q", "-m", "add immutable attempt")
+        File.binwrite(absolute_path, header + first_row.join("\t") + "\n" + second_row.join("\t") + "\n")
+        fixture_git.call("add", "--", fixture_path)
+        fixture_git.call("commit", "-q", "-m", "append immutable attempt")
+        append_commit, _append_error, append_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve append fixture" unless append_status.success?
+        validate_gate1_attempt_history_retention(
+          "fixture.asset", fixture_path, current_manifest_owns: true,
+          commit: append_commit.strip, fresh_clone: fixture_root
+        )
+        append_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+
+        FileUtils.rm(absolute_path)
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "delete immutable attempt")
+        delete_commit, _delete_error, delete_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve deletion fixture" unless delete_status.success?
+        validate_gate1_attempt_history_retention(
+          "fixture.asset", fixture_path, current_manifest_owns: false,
+          commit: delete_commit.strip, fresh_clone: fixture_root
+        )
+        deletion_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+        linear_result = append_errors.empty? &&
+          deletion_errors.any? { |message| message.include?("current Gate-1 evidence manifest dropped") } &&
+          deletion_errors.any? { |message| message.include?("canonical history was deleted") }
+      end
+      Dir.mktmpdir("n64game-attempt-history-merge-") do |fixture_root|
+        fixture_git = lambda do |*arguments|
+          _out, fixture_error, fixture_status = git_capture(*arguments, root: fixture_root)
+          raise fixture_error unless fixture_status.success?
+        end
+        fixture_git.call("init", "-q", "-b", "main")
+        fixture_git.call("config", "user.name", "Attempt History Merge Self Test")
+        fixture_git.call("config", "user.email", "attempt-history-merge@example.invalid")
+        safe_path = Pathname.new(fixture_root).join("safe.txt")
+        File.binwrite(safe_path, "baseline\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "baseline without attempt history")
+        fixture_git.call("switch", "-q", "-c", "attempt")
+        fixture_path = "review/fixture.asset/g1/attempts/ATTEMPT_HISTORY.tsv"
+        absolute_path = Pathname.new(fixture_root).join(fixture_path)
+        FileUtils.mkdir_p(absolute_path.dirname)
+        header = GATE_ATTEMPT_HISTORY_HEADER.join("\t") + "\n"
+        first_row = GATE_ATTEMPT_HISTORY_HEADER.each_index.map { |index| "v#{index}" }
+        File.binwrite(absolute_path, header + first_row.join("\t") + "\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "publish attempt on side branch")
+        fixture_git.call("switch", "-q", "main")
+        File.binwrite(safe_path, "mainline\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "advance mainline")
+        fixture_git.call("merge", "-q", "-s", "ours", "-m", "merge while dropping attempt history", "attempt")
+        merge_commit, _merge_error, merge_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve merge fixture" unless merge_status.success?
+        validate_gate1_attempt_history_retention(
+          "fixture.asset", fixture_path, current_manifest_owns: false,
+          commit: merge_commit.strip, fresh_clone: fixture_root
+        )
+        merge_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+        merge_result =
+          merge_errors.any? { |message| message.include?("current Gate-1 evidence manifest dropped") } &&
+          merge_errors.any? { |message| message.include?("canonical history was deleted") }
+      end
+    ensure
+      ERRORS.slice!(error_start, ERRORS.length - error_start) if ERRORS.length > error_start
+    end
+    linear_result && merge_result
+  end
+  check.call("Gate-1 promotion path cannot drop previously published attempt history") do
+    error_start = ERRORS.length
+    integration_result = false
+    begin
+      Dir.mktmpdir("n64game-attempt-history-promotion-") do |fixture_root|
+        fixture_git = lambda do |*arguments|
+          _out, fixture_error, fixture_status = git_capture(*arguments, root: fixture_root)
+          raise fixture_error unless fixture_status.success?
+        end
+        fixture_git.call("init", "-q")
+        fixture_git.call("config", "user.name", "Attempt Promotion Self Test")
+        fixture_git.call("config", "user.email", "attempt-promotion@example.invalid")
+
+        scope = "chr.fixture"
+        profile = "RIGGED_MODEL"
+        tier = "H2"
+        source_digest = "a" * 64
+        attempt_path = "review/#{scope}/g1/attempts/ATTEMPT_HISTORY.tsv"
+        attempt_absolute = Pathname.new(fixture_root).join(attempt_path)
+        FileUtils.mkdir_p(attempt_absolute.dirname)
+        attempt_row = GATE_ATTEMPT_HISTORY_HEADER.each_index.map { |index| "v#{index}" }
+        File.binwrite(
+          attempt_absolute,
+          GATE_ATTEMPT_HISTORY_HEADER.join("\t") + "\n" + attempt_row.join("\t") + "\n"
+        )
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "publish rejected attempt history")
+
+        FileUtils.rm(attempt_absolute)
+        observation_path = "review/#{scope}/g1/OBSERVATION.txt"
+        observation_bytes = "substantive Gate-1 observation\n"
+        observation_absolute = Pathname.new(fixture_root).join(observation_path)
+        FileUtils.mkdir_p(observation_absolute.dirname)
+        File.binwrite(observation_absolute, observation_bytes)
+        evidence_path = "review/#{scope}/g1/EVIDENCE_MANIFEST.sha256"
+        evidence_bytes = [
+          observation_path, observation_bytes.bytesize,
+          Digest::SHA256.hexdigest(observation_bytes), "build:-", "capture:-", "role:gate.observation"
+        ].join("\t") + "\n"
+        evidence_absolute = Pathname.new(fixture_root).join(evidence_path)
+        File.binwrite(evidence_absolute, evidence_bytes)
+        evidence_digest = Digest::SHA256.hexdigest(evidence_bytes)
+
+        review_path = "review/#{scope}/g1/REVIEW.md"
+        review_values = {
+          "schema" => "n64game-gate-review-v1", "scope_id" => scope, "gate" => "G1",
+          "decision" => "pass", "reviewer_id" => "artist.alex-042", "reviewer_non_owner" => "YES",
+          "source_manifest_sha256" => source_digest, "output_manifest_sha256" => "NONE",
+          "evidence_manifest" => "#{evidence_path}@#{evidence_digest}", "build_id" => "-",
+          "decided_at" => "2026-07-18T12:00:00Z", "defect_ids" => "NONE",
+          "disposition" => "NONE", "rationale" => "The promoted concept satisfies the Gate-1 review criteria."
+        }
+        review_bytes = GATE_REVIEW_RECORD_KEYS.map { |key| "#{key}: #{review_values.fetch(key)}" }.join("\n") + "\n"
+        review_absolute = Pathname.new(fixture_root).join(review_path)
+        File.binwrite(review_absolute, review_bytes)
+        review_digest = Digest::SHA256.hexdigest(review_bytes)
+
+        gate_path = "review/#{scope}/g1/GATE_RECORD.tsv"
+        gate_one = [
+          scope, profile, tier, "G1", "pass", "artist.alex-042", "YES", source_digest, "NONE",
+          evidence_path, evidence_digest, review_path, review_digest, "-", "2026-07-18T12:00:00Z", "NONE"
+        ]
+        pending_rows = (2..7).map do |gate_number|
+          [scope, profile, tier, "G#{gate_number}", "PENDING"] + Array.new(11, "PENDING")
+        end
+        gate_bytes = GATE_RECORD_HEADER.join("\t") + "\n" +
+          ([gate_one] + pending_rows).map { |row| row.join("\t") }.join("\n") + "\n"
+        gate_absolute = Pathname.new(fixture_root).join(gate_path)
+        File.binwrite(gate_absolute, gate_bytes)
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "promote while dropping rejected attempt history")
+        current_commit, _current_error, current_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve promotion fixture" unless current_status.success?
+
+        validate_gate_record(
+          "#{gate_path}@#{Digest::SHA256.hexdigest(gate_bytes)}", "Gate-1 promotion integration fixture",
+          scope: scope, profile: profile, tier: tier, source_digest: source_digest,
+          output_digest: "NONE", build_id: "-", expected_vector: ["pass"] + Array.new(6, "PENDING"),
+          commit: current_commit.strip, fresh_clone: fixture_root,
+          owner_ids: %w[artist.owner-042 studio.n64game]
+        )
+        integration_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+        integration_result = integration_errors.any? do |message|
+          message.include?("current Gate-1 evidence manifest dropped the canonical attempt-history member")
+        end
+      end
+    ensure
+      ERRORS.slice!(error_start, ERRORS.length - error_start) if ERRORS.length > error_start
+    end
+    integration_result
+  end
+  check.call("Gate-1 history universe rejects removal of the entire current owner") do
+    error_start = ERRORS.length
+    universe_result = false
+    begin
+      Dir.mktmpdir("n64game-attempt-history-owner-removal-") do |fixture_root|
+        fixture_git = lambda do |*arguments|
+          _out, fixture_error, fixture_status = git_capture(*arguments, root: fixture_root)
+          raise fixture_error unless fixture_status.success?
+        end
+        fixture_git.call("init", "-q")
+        fixture_git.call("config", "user.name", "Attempt Owner Removal Self Test")
+        fixture_git.call("config", "user.email", "attempt-owner-removal@example.invalid")
+        scope = "chr.abandoned"
+        attempt_path = "review/#{scope}/g1/attempts/ATTEMPT_HISTORY.tsv"
+        attempt_absolute = Pathname.new(fixture_root).join(attempt_path)
+        FileUtils.mkdir_p(attempt_absolute.dirname)
+        attempt_row = GATE_ATTEMPT_HISTORY_HEADER.each_index.map { |index| "v#{index}" }
+        File.binwrite(
+          attempt_absolute,
+          GATE_ATTEMPT_HISTORY_HEADER.join("\t") + "\n" + attempt_row.join("\t") + "\n"
+        )
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "publish owner attempt history")
+
+        FileUtils.rm_r(Pathname.new(fixture_root).join("review"))
+        File.binwrite(Pathname.new(fixture_root).join("safe.txt"), "current tree without prior owner\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "remove current owner and history")
+        current_commit, _current_error, current_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve owner-removal fixture" unless current_status.success?
+
+        validate_gate1_attempt_history_universe(current_commit.strip, fixture_root, {})
+        universe_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+        universe_result =
+          universe_errors.any? { |message| message.include?("current Gate-1 evidence manifest dropped") } &&
+          universe_errors.any? { |message| message.include?("canonical history was deleted") }
+      end
+    ensure
+      ERRORS.slice!(error_start, ERRORS.length - error_start) if ERRORS.length > error_start
+    end
+    universe_result
+  end
+  check.call("Gate-1 history universe discovers merge-result-only publication and deletion") do
+    error_start = ERRORS.length
+    merge_universe_result = false
+    begin
+      Dir.mktmpdir("n64game-attempt-history-merge-universe-") do |fixture_root|
+        fixture_git = lambda do |*arguments|
+          _out, fixture_error, fixture_status = git_capture(*arguments, root: fixture_root)
+          raise fixture_error unless fixture_status.success?
+        end
+        fixture_write = lambda do |relative, bytes|
+          absolute = Pathname.new(fixture_root).join(relative)
+          FileUtils.mkdir_p(absolute.dirname)
+          File.binwrite(absolute, bytes)
+        end
+        fixture_git.call("init", "-q", "-b", "main")
+        fixture_git.call("config", "user.name", "Attempt Merge Universe Self Test")
+        fixture_git.call("config", "user.email", "attempt-merge-universe@example.invalid")
+        fixture_write.call("baseline.txt", "baseline\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "merge universe baseline")
+
+        fixture_git.call("switch", "-q", "-c", "add-side")
+        fixture_write.call("add-side.txt", "side parent without attempt history\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "advance add side")
+        fixture_git.call("switch", "-q", "main")
+        fixture_write.call("add-main.txt", "main parent without attempt history\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "advance add main")
+        fixture_git.call("merge", "-q", "--no-commit", "--no-ff", "add-side")
+        scope = "chr.merge_only"
+        attempt_path = "review/#{scope}/g1/attempts/ATTEMPT_HISTORY.tsv"
+        attempt_row = GATE_ATTEMPT_HISTORY_HEADER.each_index.map { |index| "v#{index}" }
+        fixture_write.call(
+          attempt_path,
+          GATE_ATTEMPT_HISTORY_HEADER.join("\t") + "\n" + attempt_row.join("\t") + "\n"
+        )
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "publish history only in merge result")
+
+        fixture_git.call("switch", "-q", "-c", "delete-side")
+        fixture_write.call("delete-side.txt", "side parent retaining attempt history\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "advance delete side")
+        fixture_git.call("switch", "-q", "main")
+        fixture_write.call("delete-main.txt", "main parent retaining attempt history\n")
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "advance delete main")
+        fixture_git.call("merge", "-q", "--no-commit", "--no-ff", "delete-side")
+        FileUtils.rm_r(Pathname.new(fixture_root).join("review"))
+        fixture_git.call("add", "--all")
+        fixture_git.call("commit", "-q", "-m", "delete history only in merge result")
+        current_commit, _current_error, current_status = git_capture("rev-parse", "HEAD", root: fixture_root)
+        raise "cannot resolve merge-universe fixture" unless current_status.success?
+
+        discovered_paths = gate1_attempt_history_paths_in_graph(current_commit.strip, fixture_root)
+        validate_gate1_attempt_history_universe(current_commit.strip, fixture_root, {})
+        universe_errors = ERRORS.slice!(error_start, ERRORS.length - error_start) || []
+        merge_universe_result =
+          discovered_paths.include?([scope, attempt_path]) &&
+          universe_errors.any? { |message| message.include?("current Gate-1 evidence manifest dropped") } &&
+          universe_errors.count { |message| message.include?("canonical history was deleted") } >= 2
+      end
+    ensure
+      ERRORS.slice!(error_start, ERRORS.length - error_start) if ERRORS.length > error_start
+    end
+    merge_universe_result
+  end
   check.call("Gate-1 defect IDs accept sorted canonical values") do
     canonical_defect_ids?("ART_LIGHTING_001,MODEL_TOPOLOGY_002")
   end
@@ -1507,6 +1814,12 @@ def run_hardening_self_test(data_schemas, verbose: false)
   check.call("approval remains fail closed without audited fixture and Ares pins") do
     !approval_lifecycle_pins_ready?("PENDING", "PENDING") &&
       approval_lifecycle_pins_ready?("a" * 64, "b" * 64)
+  end
+  check.call("generated camera review snapshots stay outside the ignored build tree") do
+    GENERATED_CAMERA_CHILDREN.keys.all? do |child_id|
+      generated_camera_review_snapshot_path(child_id) ==
+        "review/generated/#{child_id}/g5/CAMERA_PAYLOAD.n64cam"
+    end
   end
 
   failed = tests.reject(&:last).map(&:first)
@@ -2379,6 +2692,12 @@ def validate_gate_record(path_hash, label, scope:, profile:, tier:, source_diges
                         "review/benchmark/rollups/#{rollup_slug}/g#{index + 1}/"
                       end
       validate_manifest_member_roots(local_context, evidence_path, [evidence_root], "#{label} #{gate} evidence")
+      if canonical_asset_scope && index.zero?
+        validate_gate1_attempt_history(
+          scope, evidence_path, owner_ids, commit: commit, fresh_clone: fresh_clone,
+          payload_context: local_context, owned_paths: owned_paths || Set.new
+        )
+      end
       owned_paths&.merge(manifest_owned_paths(local_context, evidence_path))
       owned_paths << evidence_path if owned_paths
     else
@@ -2491,6 +2810,10 @@ def expected_camera_output_bytes(source_bytes, child_id, label)
 rescue ArgumentError, TypeError
   error("#{label}: camera payload table contains a noncanonical integer")
   nil
+end
+
+def generated_camera_review_snapshot_path(child_id)
+  "review/generated/#{child_id}/g5/CAMERA_PAYLOAD.n64cam"
 end
 
 def validate_generated_child_transition_registry(ledger_body, decision, camera_lines, current_ledger_by_id)
@@ -2635,7 +2958,7 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
     result[:source_paths] << "docs/DATA_SCHEMAS.md"
 
     has_output = %w[converted review approved].include?(row["state"])
-    expected_output_path = "build/generated/assets/data/#{child_id.delete_prefix('ASSET_').downcase}.bin"
+    expected_output_path = generated_camera_review_snapshot_path(child_id)
     output_digest = "NONE"
     if has_output
       error("#{label}: generated output path/hash is noncanonical") unless
@@ -2918,7 +3241,7 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
     paths.merge(historical_owned_paths.fetch(production_id, Set.new))
   end
   historical_paths.merge(historical_control_paths)
-  current_root_paths = %w[assets-src review build/generated].each_with_object(Set.new) do |root_name, paths|
+  current_root_paths = %w[assets-src review].each_with_object(Set.new) do |root_name, paths|
     root = ROOT.join(root_name)
     next unless root.exist?
     Dir.glob(root.join("**", "*").to_s, File::FNM_DOTMATCH).each do |absolute|
@@ -2987,6 +3310,7 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
   if full_ledger_history_exact && full_inventory_history_exact && new_active.empty? && new_root_paths.empty?
     error("current post-approval ledger contains active rows not present in signed history") unless
       active_local.all? { |entry| historical_exact_ids.include?(entry[:id]) }
+    validate_gate1_attempt_history_universe(local_head, clone, historical_owned_paths)
     return
   end
 
@@ -3091,7 +3415,7 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
     if has_output && output_digest&.match?(HEX64)
       validate_manifest(output_path, output_digest, "#{label} output manifest", [], local_head, clone, context)
       validate_manifest_member_roots(
-        context, output_path, ["review/#{production_id}/g5/", "build/generated/"], "#{label} output manifest"
+        context, output_path, ["review/#{production_id}/g5/"], "#{label} output manifest"
       )
     end
     row = {
@@ -3150,6 +3474,7 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
   control_owned.merge(retained_historical_control_paths)
   control_owned.merge(validated_pair_control_paths)
   control_owned.merge(generated_transition[:control_paths]) if generated_transition[:populated]
+  validate_gate1_attempt_history_universe(local_head, clone, owned_paths)
   tree_entries = commit_tree_entries(local_head, clone)
   scan_payload_production_tree(tree_entries, payload_by_id, owned_paths, control_owned)
   scan_production_roots(
@@ -3374,7 +3699,12 @@ def scan_production_roots(ledger_by_id, owned_paths, active_states, decision, be
       next unless File.file?(absolute)
       production_id = nil
       review_gate = nil
-      if relative.start_with?("review/benchmark/", "review/production/", "review/generated/", "review/pairs/")
+      if relative.start_with?("review/generated/")
+        generated_owners = owned_paths.select { |_owner_id, paths| paths.include?(relative) }.keys
+        error("generated special-namespace file lacks an exact control or child owner: #{relative}") unless
+          benchmark_owned_paths.include?(relative) || generated_owners.length == 1
+        next
+      elsif relative.start_with?("review/benchmark/", "review/production/", "review/pairs/")
         error("preapproval benchmark file is outside every populated aggregate manifest/record binding: #{relative}") unless
           benchmark_owned_paths.include?(relative)
         next
@@ -3406,22 +3736,6 @@ def scan_production_roots(ledger_by_id, owned_paths, active_states, decision, be
       end
     end
   end
-  generated_root = ROOT.join("build", "generated")
-  if generated_root.exist?
-    Dir.glob(generated_root.join("**", "*").to_s, File::FNM_DOTMATCH).sort.each do |absolute|
-      next unless File.file?(absolute) || File.symlink?(absolute)
-      relative = Pathname.new(absolute).relative_path_from(ROOT).to_s
-      if File.symlink?(absolute)
-        error("generated output tree contains forbidden symlink: #{relative}")
-        next
-      end
-      owners = owned_paths.select { |_production_id, paths| paths.include?(relative) }.keys
-      error("generated output must resolve to exactly one declared output-manifest owner: #{relative}") unless owners.length == 1
-      if owners.length == 1 && decision != "APPROVED" && !%w[AUTHORIZED REPAIR_ONLY].include?(active_states[owners.first])
-        error("generated prebenchmark output lacks active exact authorization: #{relative}")
-      end
-    end
-  end
 end
 
 def commit_tree_entries(commit, fresh_clone)
@@ -3444,7 +3758,7 @@ end
 def scan_payload_production_tree(tree_entries, payload_ledger_by_id, owned_paths, benchmark_owned_paths)
   tree_entries.each do |tree_entry|
     relative = tree_entry[:path]
-    relevant = relative.start_with?("assets-src/", "review/", "build/generated/")
+    relevant = relative.start_with?("assets-src/", "review/", "build/")
     next unless relevant
     unless safe_repo_path?(relative)
       error("reviewed payload production path is unsafe: #{relative.inspect}")
@@ -3455,7 +3769,15 @@ def scan_payload_production_tree(tree_entries, payload_ledger_by_id, owned_paths
       next
     end
 
-    if relative.start_with?("review/benchmark/", "review/production/", "review/generated/", "review/pairs/")
+    if relative.start_with?("build/")
+      error("reviewed payload must not commit generated build paths: #{relative}")
+      next
+    elsif relative.start_with?("review/generated/")
+      generated_owners = owned_paths.select { |_owner_id, paths| paths.include?(relative) }.keys
+      error("reviewed payload generated file lacks an exact control or child owner: #{relative}") unless
+        benchmark_owned_paths.include?(relative) || generated_owners.length == 1
+      next
+    elsif relative.start_with?("review/benchmark/", "review/production/", "review/pairs/")
       error("reviewed payload benchmark file lacks an exact aggregate/rollup/evidence owner: #{relative}") unless
         benchmark_owned_paths.include?(relative)
       next
@@ -3468,10 +3790,6 @@ def scan_payload_production_tree(tree_entries, payload_ledger_by_id, owned_paths
       error("reviewed payload source category/ID prefix mismatch: #{relative}") unless production_id.split(".", 2).first == category
     elsif relative =~ %r{\Areview/([^/]+)/g([1-7])/}
       production_id = Regexp.last_match(1)
-    elsif relative.start_with?("build/generated/")
-      owners = owned_paths.select { |_owner_id, paths| paths.include?(relative) }.keys
-      error("reviewed payload generated output must have exactly one output-manifest owner: #{relative}") unless owners.length == 1
-      next
     else
       error("reviewed payload has orphan file outside canonical production owner layout: #{relative}")
       next
@@ -4318,22 +4636,209 @@ def validate_manifest_member_roots(context, manifest_path, allowed_roots, label)
   end
 end
 
+def gate_attempt_history_edge_append_only?(parent_rows, child_rows)
+  return true if parent_rows.nil?
+  return false if child_rows.nil? || parent_rows.length > child_rows.length
+
+  child_rows.first(parent_rows.length) == parent_rows
+end
+
+def gate_attempt_history_rows_at(path, commit, fresh_clone, label, cache)
+  return cache[commit] if cache.key?(commit)
+
+  tree_out, tree_error, tree_status = git_capture("ls-tree", commit, "--", path, root: fresh_clone)
+  unless tree_status.success?
+    error("#{label}: cannot inspect attempt-history tree state at #{commit}: #{tree_error.lines.first.to_s.strip}")
+    return cache[commit] = nil
+  end
+  return cache[commit] = nil if tree_out.empty?
+
+  mode, type, oid_and_path = tree_out.lines.first.to_s.split(/\s+/, 3)
+  oid, actual_path = oid_and_path.to_s.split("\t", 2)
+  unless %w[100644 100755].include?(mode) && type == "blob" && oid&.match?(HEX40) && actual_path.to_s.chomp == path
+    error("#{label}: attempt-history tree entry is not one exact regular Git blob at #{commit}")
+    return cache[commit] = []
+  end
+  blob, blob_error, blob_status = git_capture("cat-file", "blob", oid, root: fresh_clone)
+  unless blob_status.success?
+    error("#{label}: cannot read attempt-history blob at #{commit}: #{blob_error.lines.first.to_s.strip}")
+    return cache[commit] = []
+  end
+  digest = Digest::SHA256.hexdigest(blob.b)
+  cache[commit] = parse_variable_tsv(
+    "#{path}@#{digest}", "#{label} at #{commit}", GATE_ATTEMPT_HISTORY_HEADER,
+    minimum_rows: 1, commit: commit, fresh_clone: fresh_clone
+  )
+end
+
+def gate_attempt_commit_graph(commit, fresh_clone, label)
+  cache = (@gate_attempt_commit_graph_cache ||= {})
+  key = [Pathname.new(fresh_clone).expand_path.to_s, commit]
+  return cache[key] if cache.key?(key)
+
+  graph_out, graph_error, graph_status = git_capture("rev-list", "--parents", commit, root: fresh_clone)
+  unless graph_status.success?
+    error("#{label}: cannot enumerate the complete public commit graph: #{graph_error.lines.first.to_s.strip}")
+    return nil
+  end
+  graph = {}
+  graph_out.each_line do |line|
+    child, *parents = line.split
+    unless child&.match?(HEX40) && parents.all? { |parent| parent.match?(HEX40) } && !graph.key?(child)
+      error("#{label}: complete public commit graph is malformed or contains duplicate commits")
+      return nil
+    end
+    graph[child] = parents
+  end
+  unless graph.key?(commit) && graph.values.flatten.all? { |parent| graph.key?(parent) }
+    error("#{label}: public commit graph is incomplete or shallow")
+    return nil
+  end
+  cache[key] = graph
+end
+
+def gate_attempt_path_states(path, graph, fresh_clone, label)
+  commits = graph.keys
+  queries = commits.map { |candidate| "#{candidate}:#{path}" }
+  states_out, states_error, states_status = git_capture(
+    "cat-file", "--batch-check=%(objectname) %(objecttype)",
+    root: fresh_clone, stdin_data: queries.join("\n") + "\n"
+  )
+  unless states_status.success?
+    error("#{label}: cannot resolve attempt-history state across the complete commit graph: #{states_error.lines.first.to_s.strip}")
+    return nil
+  end
+  lines = states_out.lines.map(&:chomp)
+  unless lines.length == commits.length
+    error("#{label}: attempt-history batch state count differs from the complete commit graph")
+    return nil
+  end
+
+  commits.zip(lines).each_with_object({}) do |(candidate, line), states|
+    if line == "#{candidate}:#{path} missing"
+      states[candidate] = nil
+    elsif (match = line.match(/\A([0-9a-f]{40}) blob\z/))
+      states[candidate] = match[1]
+    else
+      error("#{label}: attempt-history state is not a blob or an exact missing path at #{candidate}")
+      states[candidate] = :invalid
+    end
+  end
+end
+
+def validate_gate1_attempt_history_retention(production_id, path, current_manifest_owns:, commit:, fresh_clone:)
+  label = "#{production_id} Gate-1 attempt history retention"
+  unless commit&.match?(HEX40) && fresh_clone
+    error("#{label}: requires an exact current public commit and credential-free fresh clone")
+    return
+  end
+
+  graph = gate_attempt_commit_graph(commit, fresh_clone, label)
+  return unless graph
+  states = gate_attempt_path_states(path, graph, fresh_clone, label)
+  return unless states
+
+  row_cache = {}
+  current_state = states[commit]
+  gate_attempt_history_rows_at(path, commit, fresh_clone, label, row_cache) if current_state.is_a?(String)
+  history_exists = states.values.any? { |state| state.is_a?(String) }
+  if history_exists && !current_manifest_owns
+    error("#{label}: current Gate-1 evidence manifest dropped the canonical attempt-history member")
+  end
+
+  graph.each do |child_commit, parents|
+    child_state = states[child_commit]
+    parents.each do |parent_commit|
+      parent_state = states[parent_commit]
+      next if child_state == parent_state
+      next if parent_state.nil? && child_state.is_a?(String)
+
+      parent_rows = if parent_state.is_a?(String)
+                      gate_attempt_history_rows_at(path, parent_commit, fresh_clone, label, row_cache)
+                    end
+      child_rows = if child_state.is_a?(String)
+                     gate_attempt_history_rows_at(path, child_commit, fresh_clone, label, row_cache)
+                   end
+      next if gate_attempt_history_edge_append_only?(parent_rows, child_rows)
+
+      if parent_rows && child_rows.nil?
+        error("#{label}: canonical history was deleted at #{child_commit} from parent #{parent_commit}")
+      else
+        error("#{label}: rows were removed, reordered, or rewritten at #{child_commit} from parent #{parent_commit}")
+      end
+    end
+  end
+end
+
+def gate1_attempt_history_paths_in_graph(commit, fresh_clone)
+  label = "Gate-1 attempt-history universe"
+  unless commit&.match?(HEX40) && fresh_clone
+    error("#{label}: requires an exact current public commit and credential-free fresh clone")
+    return []
+  end
+  output, history_error, history_status = git_capture(
+    "log", "-m", commit, "--format=", "--name-only", "-z", "--no-renames", root: fresh_clone
+  )
+  unless history_status.success?
+    error("#{label}: cannot enumerate every reachable changed path: #{history_error.lines.first.to_s.strip}")
+    return []
+  end
+
+  paths = []
+  output.b.split("\0").reject(&:empty?).each do |raw_path|
+    path = raw_path.dup.force_encoding(Encoding::UTF_8)
+    unless path.valid_encoding?
+      error("#{label}: reachable history contains an invalid UTF-8 pathname")
+      next
+    end
+    match = path.match(%r{\Areview/([^/]+)/g1/attempts/ATTEMPT_HISTORY\.tsv\z})
+    next unless match
+    production_id = match[1]
+    error("#{label}: historical path has no canonical production profile/tier: #{path}") unless
+      expected_profile_tier(production_id)
+    paths << [production_id, path]
+  end
+  paths.uniq.sort_by { |production_id, path| [production_id, path] }
+end
+
+def validate_gate1_attempt_history_universe(commit, fresh_clone, owned_paths_by_id)
+  gate1_attempt_history_paths_in_graph(commit, fresh_clone).each do |production_id, path|
+    _exists_out, _exists_error, exists_status = git_capture(
+      "cat-file", "-e", "#{commit}:#{path}", root: fresh_clone
+    )
+    current_owner_paths = owned_paths_by_id.fetch(production_id, Set.new)
+    validate_gate1_attempt_history_retention(
+      production_id, path,
+      current_manifest_owns: exists_status.success? && current_owner_paths.include?(path),
+      commit: commit, fresh_clone: fresh_clone
+    )
+  end
+end
+
 def validate_gate1_attempt_history(production_id, evidence_manifest_path, owner_ids, commit:, fresh_clone:,
                                    payload_context:, owned_paths:)
   entries = payload_context[:manifests].fetch(evidence_manifest_path, [])
   attempts = entries.select { |entry| entry[:role] == "gate.attempt_history" }
   error("#{production_id}: Gate-1 evidence may contain at most one attempt-history member") unless attempts.length <= 1
-  return if attempts.empty?
-
-  history = attempts.first
   expected_history_path = "review/#{production_id}/g1/attempts/ATTEMPT_HISTORY.tsv"
-  error("#{production_id}: Gate-1 attempt history path/capture/build is noncanonical") unless
-    history[:path] == expected_history_path && history[:capture] == "-" && history[:build] == "-"
-  rows = parse_variable_tsv(
-    "#{history[:path]}@#{history[:digest]}", "#{production_id} Gate-1 attempt history",
-    GATE_ATTEMPT_HISTORY_HEADER, minimum_rows: 1, commit: commit, fresh_clone: fresh_clone,
-    payload_context: payload_context
+  history = attempts.first
+  rows = []
+  if history
+    error("#{production_id}: Gate-1 attempt history path/capture/build is noncanonical") unless
+      history[:path] == expected_history_path && history[:capture] == "-" && history[:build] == "-"
+    rows = parse_variable_tsv(
+      "#{history[:path]}@#{history[:digest]}", "#{production_id} Gate-1 attempt history",
+      GATE_ATTEMPT_HISTORY_HEADER, minimum_rows: 1, commit: commit, fresh_clone: fresh_clone,
+      payload_context: payload_context
+    )
+  end
+  validate_gate1_attempt_history_retention(
+    production_id, expected_history_path,
+    current_manifest_owns: attempts.length == 1 && history[:path] == expected_history_path,
+    commit: commit, fresh_clone: fresh_clone
   )
+  return unless history
+
   owned_paths << history[:path]
   previous_row_sha = "NONE"
   previous_commit = nil
@@ -4376,7 +4881,7 @@ def validate_gate1_attempt_history(production_id, evidence_manifest_path, owner_
       _ancestor_out, _ancestor_error, ancestor_status = git_capture(
         "merge-base", "--is-ancestor", attempt_commit, commit, root: fresh_clone
       )
-      error("#{production_id} #{attempt_id}: attempt commit must be a strict public ancestor of the current concept commit") unless
+      error("#{production_id} #{attempt_id}: attempt commit must be a strict public ancestor of the current reviewed commit") unless
         ancestor_status.success? && attempt_commit != commit
       if previous_commit
         _forward_out, _forward_error, forward_status = git_capture(
@@ -5106,7 +5611,7 @@ end
 camera_section.lines.grep(/^\| `ASSET_CAMERA_SHOT_/).each do |line|
   cells = table_cells(line)
   child_id = strip_code(cells[0])
-  expected_output = "build/generated/assets/data/#{child_id.delete_prefix('ASSET_').downcase}.bin"
+  expected_output = generated_camera_review_snapshot_path(child_id)
   error("#{child_id}: concept camera child must retain exact GENERATED_CHILD/C7/concept profile") unless
     strip_code(cells[2]) == "GENERATED_CHILD / C7 / concept"
   error("#{child_id}: reserved generated output path changed") unless strip_code(cells[7]) == expected_output
@@ -5625,7 +6130,7 @@ registry_rows.each_with_index do |fields, index|
     )
     validate_manifest_member_roots(
       preapproval_payload_context, row["output_manifest_path"],
-      ["review/#{production_id}/g5/", "build/generated/"], "#{basis} output manifest"
+      ["review/#{production_id}/g5/"], "#{basis} output manifest"
     )
   end
   validate_subset_export_allowlist(
@@ -5871,6 +6376,9 @@ if decision != "APPROVED" && preapproval_evidence_registry_rows.length == 14
   )
 end
 if decision != "APPROVED" && preapproval_commit && preapproval_fresh_clone
+  validate_gate1_attempt_history_universe(
+    preapproval_commit, preapproval_fresh_clone, owned_paths_by_id
+  )
   scan_payload_production_tree(
     preapproval_tree_entries, preapproval_ledger_by_id, owned_paths_by_id,
     preapproval_benchmark_owned_paths
@@ -6337,7 +6845,7 @@ if decision == "APPROVED"
     validate_manifest(row["output_manifest_path"], row["output_manifest_sha256"], "#{basis} output manifest", [], payload_commit, fresh_clone, payload_context)
     validate_manifest_member_roots(
       payload_context, row["output_manifest_path"],
-      ["review/#{production_id}/g5/", "build/generated/"], "#{basis} output manifest"
+      ["review/#{production_id}/g5/"], "#{basis} output manifest"
     )
     validate_subset_export_allowlist(
       authorization_record, provenance_record, row, row["source_manifest_path"], row["output_manifest_path"],
@@ -6440,6 +6948,7 @@ if decision == "APPROVED"
     local_rom_path: rom_path && ROOT.join(rom_path).to_s
   ) if evidence_registry_rows.length == 14 && fresh_clone
   valid_evidence_refs ||= Set.new
+  validate_gate1_attempt_history_universe(payload_commit, fresh_clone, approved_owned_paths) if fresh_clone
   scan_payload_production_tree(
     payload_tree_entries, payload_ledger_by_id, approved_owned_paths,
     approved_benchmark_owned_paths
@@ -6688,6 +7197,17 @@ error("inventory does not require reproducible runtime-generating sources with v
 error("ledger provenance contract omits input rights") unless ledger.include?("Input rights / license evidence")
 error("ledger provenance contract omits material transformations") unless ledger.include?("Transformations / material human edits")
 error("ledger provenance contract omits output rights") unless ledger.include?("Output license")
+error("art contract permits committed generated-build products or omits Gate-5 review snapshots") unless
+  art.include?("no `build/` byte may be a public payload member") &&
+  art.include?("immutable converted-output review snapshots")
+error("inventory omits the ignored-build/review-snapshot separation") unless
+  inventory.include?("generated runtime tree is ignored `build/generated/assets/` and is never committed") &&
+  inventory.include?("Gate-5 review snapshots live under `review/<production-id>/g5/`")
+error("ledger omits the ignored-build/review-snapshot separation") unless
+  ledger.include?("Ignored `build/` products are reproducibly regenerated") &&
+  ledger.include?("never committed, never a payload member")
+error("Gate-5 template permits a committed build product") unless
+  reviews.include?("never a committed build product")
 
 # This runs on every validation so an unexercised production-unlock branch cannot
 # silently become reachable; --self-test-hardening additionally prints its count.

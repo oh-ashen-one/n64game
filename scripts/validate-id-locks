@@ -25,6 +25,189 @@ SPECIAL_BIT_ENUMS = {
   "RewardClaimBit" => []
 }.freeze
 
+class UnknownIdLockEnumIdentifier < StandardError; end
+
+# Keep serialized-ID extraction aligned with validate-data-c: every enum value
+# that DATA_SCHEMAS accepts must resolve to an exact integer here as well.  The
+# intentionally small grammar rejects casts, calls, ternaries, and other C
+# syntax instead of silently omitting an assignment from the durable registry.
+class IdLockCIntegerExpression
+  Token = Struct.new(:kind, :value)
+
+  def initialize(source, symbols)
+    @source = source
+    @symbols = symbols
+    @tokens = tokenize(source)
+    @index = 0
+  end
+
+  def evaluate
+    value = parse_or
+    token = peek
+    raise "unexpected token #{token.value.inspect} in #{@source.inspect}" unless token.kind == :eof
+
+    value
+  end
+
+  private
+
+  def tokenize(source)
+    tokens = []
+    index = 0
+    while index < source.length
+      rest = source[index..-1]
+      if (match = rest.match(/\A\s+/))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[xX][0-9A-Fa-f]+[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A0[0-7]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[1-9][0-9]*[uUlL]*/))
+        tokens << Token.new(:integer, integer_literal(match[0]))
+        index += match[0].length
+      elsif (match = rest.match(/\A[A-Za-z_][A-Za-z0-9_]*/))
+        tokens << Token.new(:identifier, match[0])
+        index += match[0].length
+      elsif rest.start_with?("<<", ">>")
+        tokens << Token.new(:operator, rest[0, 2])
+        index += 2
+      elsif "+-~!*/%&^|()".include?(rest[0])
+        kind = rest[0] == "(" || rest[0] == ")" ? :paren : :operator
+        tokens << Token.new(kind, rest[0])
+        index += 1
+      else
+        raise "unsupported C enum expression near #{rest.inspect} in #{source.inspect}"
+      end
+    end
+    tokens << Token.new(:eof, nil)
+    tokens
+  end
+
+  def integer_literal(token)
+    bare = token.sub(/[uUlL]+\z/, "")
+    if bare.match?(/\A0[xX]/)
+      bare.to_i(16)
+    elsif bare.length > 1 && bare.start_with?("0")
+      bare.to_i(8)
+    else
+      bare.to_i(10)
+    end
+  end
+
+  def peek
+    @tokens.fetch(@index)
+  end
+
+  def take(value = nil)
+    token = peek
+    return nil if value && token.value != value
+
+    @index += 1
+    token
+  end
+
+  def parse_or
+    left = parse_xor
+    left |= parse_xor while take("|")
+    left
+  end
+
+  def parse_xor
+    left = parse_and
+    left ^= parse_and while take("^")
+    left
+  end
+
+  def parse_and
+    left = parse_shift
+    left &= parse_shift while take("&")
+    left
+  end
+
+  def parse_shift
+    left = parse_additive
+    loop do
+      if take("<<")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left <<= shift
+      elsif take(">>")
+        shift = parse_additive
+        raise "negative shift in #{@source.inspect}" if shift.negative?
+        left >>= shift
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_additive
+    left = parse_multiplicative
+    loop do
+      if take("+")
+        left += parse_multiplicative
+      elsif take("-")
+        left -= parse_multiplicative
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_multiplicative
+    left = parse_unary
+    loop do
+      if take("*")
+        left *= parse_unary
+      elsif take("/")
+        divisor = parse_unary
+        raise "division by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        left = (left.negative? == divisor.negative?) ? quotient : -quotient
+      elsif take("%")
+        divisor = parse_unary
+        raise "modulo by zero in #{@source.inspect}" if divisor.zero?
+        quotient = left.abs / divisor.abs
+        quotient = -quotient unless left.negative? == divisor.negative?
+        left -= quotient * divisor
+      else
+        break
+      end
+    end
+    left
+  end
+
+  def parse_unary
+    return parse_unary if take("+")
+    return -parse_unary if take("-")
+    return ~parse_unary if take("~")
+    return parse_unary.zero? ? 1 : 0 if take("!")
+
+    parse_primary
+  end
+
+  def parse_primary
+    token = peek
+    if token.kind == :integer
+      take.value
+    elsif token.kind == :identifier
+      name = take.value
+      raise UnknownIdLockEnumIdentifier, name unless @symbols.key?(name)
+      @symbols.fetch(name)
+    elsif take("(")
+      value = parse_or
+      raise "missing ')' in #{@source.inspect}" unless take(")")
+      value
+    else
+      raise "expected integer, identifier, or '(' in #{@source.inspect}"
+    end
+  end
+end
+
 def git_capture(root, *arguments)
   stdout, stderr, status = Open3.capture3(
     { "GIT_NO_REPLACE_OBJECTS" => "1" },
@@ -114,30 +297,167 @@ def parse_numeric_lock_text(relative, text, errors)
   rows
 end
 
-def numeric_enum_blocks(text, errors, label)
-  blocks = {}
-  text.scan(/typedef enum\s+([A-Za-z0-9_]+)\s*\{(.*?)\}\s*\1\s*;/m).each do |name, body|
-    if blocks.key?(name)
-      errors << "#{label}: duplicate enum definition #{name}"
-    else
-      blocks[name] = body
-    end
-  end
-  text.scan(/^enum\s+([A-Za-z0-9_]+)\s*\{(.*?)^\};/m).each do |name, body|
-    if blocks.key?(name)
-      errors << "#{label}: duplicate enum definition #{name}"
-    else
-      blocks[name] = body
-    end
-  end
-  blocks
+def strip_id_lock_c_comments(source)
+  source.gsub(%r{/\*.*?\*/}m, "").gsub(%r{//[^\n]*}, "")
 end
 
-def numeric_assignments(enum_name, body, errors, label)
-  rows = body.scan(/^\s*([A-Z][A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\b/).map do |symbol, value|
-    [Integer(value, 0), symbol]
+def split_id_lock_c_top_level(source)
+  fields = []
+  start = 0
+  depth = 0
+  quote = nil
+  escaped = false
+  source.each_char.with_index do |character, index|
+    if quote
+      if escaped
+        escaped = false
+      elsif character == "\\"
+        escaped = true
+      elsif character == quote
+        quote = nil
+      end
+    elsif character == '"' || character == "'"
+      quote = character
+    elsif "{([".include?(character)
+      depth += 1
+    elsif "})]".include?(character)
+      depth -= 1
+      raise "unbalanced C enum expression" if depth.negative?
+    elsif character == "," && depth.zero?
+      fields << source[start...index].strip
+      start = index + 1
+    end
   end
-  errors << "#{label}: #{enum_name} has no literal numeric assignments" if rows.empty?
+  raise "unterminated C string/character literal" if quote
+  raise "unbalanced C enum expression" unless depth.zero?
+
+  tail = source[start..-1].strip
+  fields << tail unless tail.empty?
+  fields.reject(&:empty?)
+end
+
+def numeric_enum_blocks(text, errors, label)
+  c_blocks = text.scan(/^```c\s*$\n(.*?)^```\s*$/m).flatten
+  if c_blocks.empty?
+    errors << "#{label}: no fenced C blocks found"
+    return {}
+  end
+  code = c_blocks.join("\n\n")
+  enum_scan_code = strip_id_lock_c_comments(code)
+  enum_pattern =
+    /(?<![A-Za-z0-9_])(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
+  enum_sources = enum_scan_code.scan(enum_pattern)
+  unconsumed_enum_code = enum_scan_code.gsub(enum_pattern, " ")
+  if unconsumed_enum_code.match?(/\benum\b[^;{}]*\{/)
+    errors << "#{label}: unparsed or unsupported enum syntax remains in fenced C blocks"
+  end
+  if enum_sources.empty?
+    errors << "#{label}: no enum domains found"
+    return {}
+  end
+
+  enum_rows = []
+  enum_sources.each_with_index do |enum_source, index|
+    match = enum_source.match(
+      /\A(?:(typedef)\s+)?enum(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\{(.*)\}\s*([A-Za-z_][A-Za-z0-9_]*)?\s*;\z/m
+    )
+    unless match
+      errors << "#{label}: cannot parse enum declaration #{enum_source.lines.first.to_s.strip.inspect}"
+      next
+    end
+    typedef = !match[1].nil?
+    tag = match[2]
+    trailing = match[4]
+    if typedef && trailing.nil?
+      errors << "#{label}: typedef enum lacks trailing type name"
+      next
+    elsif !typedef && trailing
+      errors << "#{label}: non-typedef enum has an illegal trailing name #{trailing}"
+      next
+    end
+    name = tag || trailing || format("__anonymous_enum_%03d", index)
+    begin
+      entries = split_id_lock_c_top_level(strip_id_lock_c_comments(match[3])).map do |entry|
+        entry_match = entry.match(/\A([A-Z][A-Z0-9_]*)(?:\s*=\s*(.+))?\z/m)
+        raise "cannot parse enumerator #{entry.inspect}" unless entry_match
+
+        { symbol: entry_match[1], expression: entry_match[2]&.strip }
+      end
+    rescue StandardError => error
+      errors << "#{label}: #{name}: #{error.message}"
+      next
+    end
+    if entries.empty?
+      errors << "#{label}: enum #{name} has no named values"
+      next
+    end
+    enum_rows << { name: name, anonymous: tag.nil? && trailing.nil?, entries: entries }
+  end
+
+  enum_rows.reject { |row| row[:anonymous] }.group_by { |row| row[:name] }.each do |name, rows|
+    errors << "#{label}: duplicate enum definition #{name}" if rows.length > 1
+  end
+  symbol_owners = {}
+  enum_rows.each do |row|
+    row[:entries].each do |entry|
+      symbol = entry[:symbol]
+      if symbol_owners.key?(symbol)
+        errors << "#{label}: duplicate global enum symbol #{symbol}"
+      else
+        symbol_owners[symbol] = row[:name]
+      end
+    end
+  end
+
+  resolved_symbols = {}
+  resolved_blocks = {}
+  remaining = enum_rows.dup
+  until remaining.empty?
+    progressed = false
+    remaining.dup.each do |row|
+      local = {}
+      previous = nil
+      begin
+        row[:entries].each do |entry|
+          value = if entry[:expression]
+                    IdLockCIntegerExpression.new(entry[:expression], resolved_symbols.merge(local)).evaluate
+                  elsif previous.nil?
+                    0
+                  else
+                    previous + 1
+                  end
+          entry[:value] = value
+          local[entry[:symbol]] = value
+          previous = value
+        end
+      rescue UnknownIdLockEnumIdentifier
+        next
+      rescue StandardError => error
+        errors << "#{label}: invalid constant expression in #{row[:name]}: #{error.message}"
+        remaining.delete(row)
+        progressed = true
+        next
+      end
+
+      resolved_symbols.merge!(local)
+      unless row[:anonymous]
+        resolved_blocks[row[:name]] ||= row[:entries].map { |entry| [entry[:value], entry[:symbol]] }
+      end
+      remaining.delete(row)
+      progressed = true
+    end
+    next if progressed
+
+    names = remaining.map { |row| row[:name] }.sort
+    errors << "#{label}: cyclic, forward, or unresolved enum dependency: #{names.join(', ')}"
+    break
+  end
+  resolved_blocks
+end
+
+def numeric_assignments(enum_name, resolved_rows, errors, label)
+  rows = resolved_rows.map(&:dup)
+  errors << "#{label}: #{enum_name} has no named assignments" if rows.empty?
   rows.group_by(&:first).each do |value, collisions|
     errors << "#{label}: #{enum_name} reuses value #{format('0x%04X', value)}" if collisions.length > 1
   end
@@ -541,7 +861,147 @@ def run_serialized_id_git_self_tests
   assertions
 end
 
+def run_numeric_enum_expression_self_tests
+  valid_source = <<~MARKDOWN
+    ```c
+    enum SyntheticBaseValue {
+        SYNTH_BASE = 0x10u,
+    };
+
+    enum SyntheticIdValue {
+        SYNTH_FIRST = SYNTH_BASE,
+        SYNTH_SECOND = SYNTH_FIRST + 1,
+        SYNTH_THIRD,
+        SYNTH_MASK = (1 << 5) | 03u,
+    };
+
+    enum SyntheticInlineBase { SYNTH_INLINE_BASE = 0x40 };
+    enum SyntheticInlineIdValue { SYNTH_INLINE_FIRST = SYNTH_INLINE_BASE, SYNTH_INLINE_SECOND };
+
+    enum StoryFlagIndex {
+        SYNTH_STORY_FLAG = 0,
+        STORY_FLAG_LOCKED_COUNT = 1,
+        STORY_FLAG_CAPACITY = 64,
+    };
+    enum DestinationBit { SYNTH_DESTINATION_BIT = 0, };
+    enum RelayPageBit { SYNTH_RELAY_PAGE_BIT = 0, };
+    enum RewardClaimBit { SYNTH_REWARD_CLAIM_BIT = 0, };
+    ```
+  MARKDOWN
+  valid_errors = []
+  valid_blocks = numeric_enum_blocks(valid_source, valid_errors, "valid expression fixture")
+  valid_rows = if valid_blocks.key?("SyntheticIdValue")
+                 numeric_assignments(
+                   "SyntheticIdValue",
+                   valid_blocks.fetch("SyntheticIdValue"),
+                   valid_errors,
+                   "valid expression fixture"
+                 )
+               else
+                 []
+               end
+  expected_rows = [
+    [16, "SYNTH_FIRST"],
+    [17, "SYNTH_SECOND"],
+    [18, "SYNTH_THIRD"],
+    [35, "SYNTH_MASK"]
+  ]
+  inline_rows = if valid_blocks.key?("SyntheticInlineIdValue")
+                  numeric_assignments(
+                    "SyntheticInlineIdValue",
+                    valid_blocks.fetch("SyntheticInlineIdValue"),
+                    valid_errors,
+                    "valid expression fixture"
+                  )
+                else
+                  []
+                end
+  expected_inline_rows = [
+    [64, "SYNTH_INLINE_FIRST"],
+    [65, "SYNTH_INLINE_SECOND"]
+  ]
+  registry_errors = []
+  source_registry_rows = build_source_registry(
+    valid_source,
+    SPECIALIZED_LOCK_PATHS.to_h { |relative| [relative, ""] },
+    registry_errors,
+    "valid expression registry fixture"
+  )
+  locked_expression_rows = source_registry_rows
+    .select { |row| row[:domain] == "SyntheticIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+  locked_inline_rows = source_registry_rows
+    .select { |row| row[:domain] == "SyntheticInlineIdValue" }
+    .map { |row| [row[:value], row[:symbol]] }
+
+  unresolved_errors = []
+  numeric_enum_blocks(
+    "```c\nenum UnresolvedIdValue { UNRESOLVED_FIRST = MISSING_ID + 1, };\n```\n",
+    unresolved_errors,
+    "unresolved expression fixture"
+  )
+
+  duplicate_errors = []
+  duplicate_blocks = numeric_enum_blocks(
+    "```c\nenum DuplicateIdValue { DUP_FIRST = 4, DUP_SECOND = DUP_FIRST + 0, };\n```\n",
+    duplicate_errors,
+    "duplicate expression fixture"
+  )
+  if duplicate_blocks.key?("DuplicateIdValue")
+    numeric_assignments(
+      "DuplicateIdValue",
+      duplicate_blocks.fetch("DuplicateIdValue"),
+      duplicate_errors,
+      "duplicate expression fixture"
+    )
+  end
+
+  invalid_errors = []
+  numeric_enum_blocks(
+    "```c\nenum InvalidIdValue { INVALID_FIRST = (1 ? 2 : 3), };\n```\n",
+    invalid_errors,
+    "invalid expression fixture"
+  )
+
+  unconsumed_errors = []
+  numeric_enum_blocks(
+    "```c\nenum UnsupportedIdValue { UNSUPPORTED_FIRST = 1 } *unsupported_pointer;\n```\n",
+    unconsumed_errors,
+    "unconsumed enum fixture"
+  )
+
+  repeated_symbol_errors = []
+  numeric_enum_blocks(
+    "```c\nenum FirstIdValue { REPEATED_ID = 1, };\n" \
+    "enum SecondIdValue { REPEATED_ID = 2, };\n```\n",
+    repeated_symbol_errors,
+    "repeated symbol fixture"
+  )
+
+  fixtures = {
+    "resolves suffixes, cross-domain references, local expressions, implicit increments, and same-line enums" =>
+      valid_errors.empty? && registry_errors.empty? && valid_rows == expected_rows &&
+        locked_expression_rows == expected_rows && inline_rows == expected_inline_rows &&
+        locked_inline_rows == expected_inline_rows,
+    "rejects an unresolved identifier instead of omitting its enumerator" =>
+      unresolved_errors.any? { |message| message.include?("unresolved enum dependency") },
+    "rejects a duplicate value produced by a valid expression" =>
+      duplicate_errors.any? { |message| message.include?("reuses value") },
+    "rejects unsupported expression syntax instead of omitting its enumerator" =>
+      invalid_errors.any? { |message| message.include?("invalid constant expression") },
+    "rejects unconsumed enum syntax instead of omitting its domain" =>
+      unconsumed_errors.any? { |message| message.include?("unparsed or unsupported enum syntax") },
+    "rejects duplicate global enum symbols" =>
+      repeated_symbol_errors.any? { |message| message.include?("duplicate global enum symbol") }
+  }
+  failures = fixtures.reject { |_label, passed| passed }.keys
+  raise "serialized-ID expression self-test failed: #{failures.join(', ')}" unless failures.empty?
+
+  puts "Serialized-ID expression self-test passed: #{fixtures.length} isolated accept/reject fixtures."
+end
+
 def run_serialized_id_self_tests
+  run_numeric_enum_expression_self_tests
   base = [
     { domain: "SceneIdValue", value: 1, symbol: "SCENE_BOOT", state: "LIVE", binding: "-" },
     { domain: "StoryFlagIndex", value: 0, symbol: "FLAG_OPENING", state: "LIVE", binding: "-" }

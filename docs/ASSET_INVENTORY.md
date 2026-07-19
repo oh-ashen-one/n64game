@@ -4,7 +4,7 @@ Status: Gate 2 implementation inventory
 
 This is the authoritative planned inventory for production assets. It defines what must be authored; `docs/ASSET_LEDGER.md` records who made each asset, its provenance, license, transformations, gate status, and evidence. An inventory row is not proof that an asset exists or has passed review.
 
-All runtime art must fit standard 4 MB Nintendo 64 operation, the scene caps in `docs/ART_BIBLE.md`, a ROM target below 16 MiB, 30 FPS, and at least 512 KiB peak free heap. The generated runtime tree is `build/generated/assets/`; editable sources live under `assets-src/` and appropriate binary sources use Git LFS.
+All runtime art must fit standard 4 MB Nintendo 64 operation, the scene caps in `docs/ART_BIBLE.md`, a ROM target below 16 MiB, 30 FPS, and at least 512 KiB peak free heap. The reproducible generated runtime tree is ignored `build/generated/assets/` and is never committed; editable sources live under `assets-src/`, exact Gate-5 review snapshots live under `review/<production-id>/g5/`, and appropriate binary sources use Git LFS.
 
 ## 1. Status, priority, and dependency keys
 

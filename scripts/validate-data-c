@@ -260,6 +260,20 @@ def split_c_top_level(source)
   fields.reject(&:empty?)
 end
 
+DATA_ENUM_DECLARATION_PATTERN =
+  /(?<![A-Za-z0-9_])(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
+
+def extract_data_enum_sources(source)
+  enum_scan_code = strip_c_comments(source)
+  enum_sources = enum_scan_code.scan(DATA_ENUM_DECLARATION_PATTERN)
+  unconsumed_enum_code = enum_scan_code.gsub(DATA_ENUM_DECLARATION_PATTERN, " ")
+  raise ArgumentError, "unparsed or unsupported enum syntax remains in DATA_SCHEMAS C blocks" if
+    unconsumed_enum_code.match?(/\benum\b[^;{}]*\{/)
+  raise ArgumentError, "no enum domains found" if enum_sources.empty?
+
+  enum_sources
+end
+
 def markdown_cells(line)
   bytes = line.b
   delimiters = []
@@ -389,12 +403,26 @@ alias_declarations = alias_matches.map do |base, name|
   "typedef #{base} #{name};"
 end.sort
 
-# Parse every enum first, then evaluate domains iteratively so an explicit
-# cross-domain reference is accepted only when it can be resolved exactly.
-enum_sources = code.scan(
-  /^(?:typedef\s+)?enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[^}]*\}\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*;/m
-)
-abort("no enum domains found") if enum_sources.empty?
+# Parse every enum first, including multiple declarations on one physical line,
+# then evaluate domains iteratively so an explicit cross-domain reference is
+# accepted only when it can be resolved exactly. Any residual enum token fails
+# closed rather than silently disappearing from generated C or ID coverage.
+begin
+  same_line_fixture = extract_data_enum_sources(
+    "enum VisibleValue { VISIBLE = 1 }; enum HiddenIdValue { HIDDEN = 0x1234 };"
+  )
+  abort("same-line enum extraction self-test did not find both domains") unless same_line_fixture.length == 2
+  begin
+    extract_data_enum_sources("enum UnsupportedIdValue { UNSUPPORTED = 1 } *pointer;")
+    abort("unsupported enum syntax self-test was silently accepted")
+  rescue ArgumentError => fixture_error
+    abort("unsupported enum syntax self-test returned the wrong failure") unless
+      fixture_error.message.include?("unparsed or unsupported enum syntax")
+  end
+  enum_sources = extract_data_enum_sources(code)
+rescue ArgumentError => enum_error
+  abort(enum_error.message)
+end
 
 enum_rows = enum_sources.each_with_index.map do |enum_source, index|
   match = enum_source.match(

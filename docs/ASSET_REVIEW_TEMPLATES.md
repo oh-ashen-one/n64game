@@ -332,7 +332,7 @@ All ROM-bound profiles must pass deterministic conversion even when Blender is n
 - [ ] Source revision and converter inputs match Gate 2/3/4 evidence.
 - [ ] Blender, Fast64/exporter, Tiny3D, and libdragon pins are recorded.
 - [ ] Conversion runs from a clean checkout with no manual untracked output required.
-- [ ] Generated output appears only under `build/generated/assets/...`.
+- [ ] The clean build regenerates runtime output only under ignored `build/generated/assets/...`; the output manifest owns an exact byte-matching Gate-5 review snapshot under `review/<production-id>/g5/`, never a committed build product.
 - [ ] No missing texture, material fallback, invalid index, unsupported feature, animation omission, or unexplained warning remains.
 - [ ] Exported mesh keeps the intended silhouette, normals, material assignment, UVs, vertex colors, and transparency mode.
 - [ ] Exported skin has one bone per vertex and no triangle references more than three bones.

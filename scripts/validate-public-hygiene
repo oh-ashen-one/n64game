@@ -15,6 +15,9 @@ BANNED_EXTENSIONS = %w[
   .bin .iso .img .dmg
   .zip .7z .rar .tar .gz .tgz .bz2 .xz .lz .lz4 .zst
 ].freeze
+BANNED_PUBLIC_PATH_PREFIXES = %w[
+  build/
+].freeze
 CREDENTIAL_FILENAME = /\A(?:\.env(?:\..+)?|credentials?.*|.*\.(?:pem|key|p12|pfx|jks|keystore))\z/i
 SECRET_PATTERNS = {
   "private key block" => /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
@@ -82,12 +85,23 @@ def magic_labels(bytes)
   labels
 end
 
+def path_findings(path)
+  normalized = path.to_s.tr("\\", "/")
+  normalized_casefold = normalized.downcase
+  extension = File.extname(normalized).downcase
+  findings = []
+  findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
+  if BANNED_PUBLIC_PATH_PREFIXES.any? { |prefix| normalized_casefold.start_with?(prefix) }
+    findings << "forbidden generated-build path"
+  end
+  findings << "credential-like filename" if
+    File.basename(normalized).match?(CREDENTIAL_FILENAME) && File.basename(normalized) != ".env.example"
+  findings
+end
+
 def artifact_findings(path, bytes, scan_rejected_names: true)
   bytes = bytes.dup.force_encoding(Encoding::BINARY)
-  findings = []
-  extension = File.extname(path.to_s).downcase
-  findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
-  findings << "credential-like filename" if File.basename(path.to_s).match?(CREDENTIAL_FILENAME) && File.basename(path.to_s) != ".env.example"
+  findings = path_findings(path)
   magic_labels(bytes).each { |label| findings << label }
 
   text = decode_text(bytes)
@@ -142,14 +156,32 @@ def reachable_blob_records(root, errors)
   end
 end
 
+def validate_reachable_history_paths(root, errors)
+  output, stderr, success = git_capture(
+    root, "log", "-m", "--all", "--format=", "--name-only", "-z", "--no-renames"
+  )
+  unless success
+    errors << "history paths: cannot enumerate every reachable changed path: #{stderr.strip}"
+    return
+  end
+
+  output.b.split("\0").reject(&:empty?).uniq.sort.each do |raw_path|
+    path = raw_path.dup.force_encoding(Encoding::UTF_8)
+    unless path.valid_encoding?
+      errors << "history path: invalid UTF-8 pathname"
+      next
+    end
+    path_findings(path).each { |finding| errors << "history path #{path}: #{finding}" }
+  end
+end
+
 def validate_reachable_history(root, errors)
+  validate_reachable_history_paths(root, errors)
   reachable_blob_records(root, errors).each do |record|
     path_label = record[:paths].empty? ? "<unknown-path>" : record[:paths].sort.join(",")
     label = "history blob #{record[:oid]} (#{path_label})"
     record[:paths].each do |path|
-      extension = File.extname(path).downcase
-      errors << "#{label}: forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
-      errors << "#{label}: credential-like filename" if File.basename(path).match?(CREDENTIAL_FILENAME) && File.basename(path) != ".env.example"
+      path_findings(path).each { |finding| errors << "#{label}: #{finding}" }
     end
     if record[:size] > MAX_GIT_BLOB_BYTES
       errors << "#{label}: reachable Git blob exceeds 1 MiB (#{record[:size]} bytes)"
@@ -304,6 +336,18 @@ def run_public_hygiene_self_tests
     artifact_findings("release.rom", "plain text").any? { |finding| finding.include?("forbidden public artifact extension") },
     "detects common ROM extensions without relying on magic"
   )
+  assert.call(
+    artifact_findings(
+      "build/generated/assets/data/camera_shot_ui_none.n64cam", "\x00".b * 36
+    ).include?("forbidden generated-build path"),
+    "rejects generated build directories even with an otherwise permitted extension"
+  )
+  assert.call(
+    artifact_findings(
+      "review/generated/ASSET_CAMERA_SHOT_UI_NONE/g5/CAMERA_PAYLOAD.n64cam", "\x00".b * 36
+    ).empty?,
+    "accepts a size-bounded nonmagic generated-child review snapshot outside build"
+  )
 
   with_fixture_repo do |root|
     fixture_write(root, "safe.txt", "safe public text\n")
@@ -322,6 +366,62 @@ def run_public_hygiene_self_tests
     assert.call(
       errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") },
       "rejects a secret retained only in reachable history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "duplicate public bytes\n")
+    fixture_commit!(root, "safe duplicate-content baseline")
+    fixture_write(root, "build/generated/output.dat", "duplicate public bytes\n")
+    fixture_commit!(root, "historical generated-build path with reused blob")
+    FileUtils.rm_r(root.join("build"))
+    fixture_commit!(root, "delete generated-build path")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path build/generated/output.dat") &&
+          message.include?("forbidden generated-build path")
+      end,
+      "rejects a deleted historical build path even when its blob OID is reused by a safe path",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "baseline.txt", "merge-only path baseline\n")
+    fixture_commit!(root, "merge-only path baseline")
+    branch_out, branch_error, branch_success = git_capture(root, "branch", "--show-current")
+    raise "cannot resolve fixture branch: #{branch_error}" unless branch_success
+    main_branch = branch_out.strip
+
+    fixture_git!(root, "switch", "-q", "-c", "add-build-side")
+    fixture_write(root, "add-side.txt", "side parent without generated build path\n")
+    fixture_commit!(root, "advance add-build side")
+    fixture_git!(root, "switch", "-q", main_branch)
+    fixture_write(root, "add-main.txt", "main parent without generated build path\n")
+    fixture_commit!(root, "advance add-build main")
+    fixture_git!(root, "merge", "-q", "--no-commit", "--no-ff", "add-build-side")
+    fixture_write(root, "build/generated/merge-only.dat", "merge-result-only generated bytes\n")
+    fixture_commit!(root, "add generated build path only in merge result")
+
+    fixture_git!(root, "switch", "-q", "-c", "delete-build-side")
+    fixture_write(root, "delete-side.txt", "side parent retaining generated build path\n")
+    fixture_commit!(root, "advance delete-build side")
+    fixture_git!(root, "switch", "-q", main_branch)
+    fixture_write(root, "delete-main.txt", "main parent retaining generated build path\n")
+    fixture_commit!(root, "advance delete-build main")
+    fixture_git!(root, "merge", "-q", "--no-commit", "--no-ff", "delete-build-side")
+    FileUtils.rm_r(root.join("build"))
+    fixture_commit!(root, "delete generated build path only in merge result")
+
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history path build/generated/merge-only.dat") &&
+          message.include?("forbidden generated-build path")
+      end,
+      "rejects a generated-build path added and deleted only in merge results",
       errors.join("; ")
     )
   end
