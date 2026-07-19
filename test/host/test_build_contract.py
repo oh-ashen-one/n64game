@@ -18,6 +18,17 @@ import n64game_build as build  # noqa: E402
 
 
 class BuildContractTests(unittest.TestCase):
+    def test_host_report_expectation_matches_canonical_runner_exactly(self) -> None:
+        runner = (ROOT / "scripts" / "test-host").read_text(encoding="utf-8")
+        match = re.search(
+            r"^printf '([^']*)' > build/reports/host-tests\.txt$",
+            runner,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(match)
+        emitted = match.group(1).replace(r"\n", "\n")
+        self.assertEqual(emitted, build.EXPECTED_HOST_TEST_REPORT)
+
     def test_canonical_host_runner_is_python_isolated_and_bytecode_free(self) -> None:
         self.assertEqual(sys.flags.isolated, 1)
         self.assertEqual(sys.flags.ignore_environment, 1)
