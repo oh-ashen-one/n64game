@@ -6,4 +6,4 @@ cd "$ROOT"
 
 mkdir -p build/reports
 /usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_*.py' -v
-printf 'suite=gate3_build_and_gate4_contracts\nresult=PASS\nscope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest, Gate 4 semantic snapshot plus production-shared lifecycle branch/death tests (live adapters excluded; not approval evidence); gameplay suites begin at Gate 5\n' > build/reports/host-tests.txt
+printf 'suite=n64game_host_contracts\nresult=PASS\nscope=dependency pins, runtime manifest, ROM header parser, report contract, boot-capture manifest, semantic snapshot, production-shared lifecycle branch/death tests, exact opening timing, controller disconnect freeze, battle UI, one-survivor victory, retry, canonical checkpoints, corruption rejection, and dual-slot copy-on-write save recovery (live adapters and emulator interaction excluded; not release approval evidence)\n' > build/reports/host-tests.txt
