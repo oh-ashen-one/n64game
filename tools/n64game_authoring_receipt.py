@@ -41,9 +41,11 @@ GENERIC_BUILD_PARTS = {
 CHECKER_BUNDLE_DOMAIN = b"n64game-authoring-checker-bundle-v1\n"
 CHECKER_BUNDLE_PATHS = (
     "scripts/check-authoring-stack",
+    "scripts/export-gate5-asset",
     "scripts/record-authoring-stack-receipt",
     "tools/n64game_authoring.py",
     "tools/n64game_authoring_receipt.py",
+    "tools/n64game_gate5_export.py",
 )
 CANONICAL_GATE5_EXPORTER_PATH = "scripts/export-gate5-asset"
 GATE5_EXPORT_IMPLEMENTED = False
@@ -330,6 +332,69 @@ def write_receipt(path: Path, payload: bytes, *, root: Path = ROOT, replace: boo
             temporary.unlink()
 
 
+def write_receipts_atomically(
+    records: Sequence[tuple[Path, bytes]],
+    *,
+    root: Path = ROOT,
+    replace: bool = False,
+    replace_func: Callable[[os.PathLike[str] | str, os.PathLike[str] | str], None] = os.replace,
+) -> None:
+    """Install multiple owner receipts with rollback on any promotion failure."""
+    if not records or len({Path(path) for path, _payload in records}) != len(records):
+        raise AuthoringReceiptError("paired receipt targets are empty or duplicated")
+    for path, _payload in records:
+        preflight_receipt_target(path, root=root, replace=replace)
+    prepared: dict[Path, Path] = {}
+    backups: dict[Path, tuple[bytes, int] | None] = {}
+    promoted: list[Path] = []
+    try:
+        for path, payload in records:
+            destination = Path(os.path.abspath(path))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            backups[destination] = (
+                (destination.read_bytes(), destination.stat().st_mode & 0o777)
+                if destination.exists() else None
+            )
+            descriptor, name = tempfile.mkstemp(prefix=".authoring-pair-receipt-", dir=destination.parent)
+            temporary = Path(name)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o644)
+            prepared[destination] = temporary
+        for destination, _payload in records:
+            destination = Path(os.path.abspath(destination))
+            replace_func(prepared[destination], destination)
+            prepared.pop(destination, None)
+            promoted.append(destination)
+    except BaseException as exc:
+        rollback_errors: list[str] = []
+        for destination in reversed(promoted):
+            backup = backups[destination]
+            try:
+                if backup is None:
+                    destination.unlink(missing_ok=True)
+                else:
+                    descriptor, name = tempfile.mkstemp(
+                        prefix=".authoring-pair-rollback-", dir=destination.parent
+                    )
+                    temporary = Path(name)
+                    with os.fdopen(descriptor, "wb") as handle:
+                        handle.write(backup[0])
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.chmod(temporary, backup[1])
+                    replace_func(temporary, destination)
+            except BaseException as rollback_exc:  # pragma: no cover - catastrophic host failure
+                rollback_errors.append(f"{destination}: {rollback_exc}")
+        detail = f"; rollback failures: {', '.join(rollback_errors)}" if rollback_errors else ""
+        raise AuthoringReceiptError(f"paired receipt promotion failed and was rolled back{detail}: {exc}") from exc
+    finally:
+        for temporary in prepared.values():
+            temporary.unlink(missing_ok=True)
+
+
 def preflight_receipt_target(path: Path, *, root: Path = ROOT, replace: bool = False) -> None:
     root = Path(os.path.abspath(root))
     path = Path(os.path.abspath(path))
@@ -418,6 +483,49 @@ def add_stack_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--replace", action="store_true")
 
 
+def gate5_exporter_command(scope_id: str, build_id: str, exporter_args: Sequence[str]) -> list[str]:
+    """Inject receipt authority and expose only the reviewed deterministic switch."""
+    if scope_id not in {"echo.quarrune", "anm.echo.quarrune"}:
+        raise AuthoringReceiptError("Gate-5 exporter is limited to the exact Quarrune scope pair")
+    if list(exporter_args) != ["--deterministic"]:
+        raise AuthoringReceiptError(
+            "Gate-5 exporter arguments must be exactly '--deterministic'; scope/build are injected"
+        )
+    return [
+        str(ROOT / CANONICAL_GATE5_EXPORTER_PATH),
+        "--scope",
+        "echo.quarrune",
+        "--paired-scope",
+        "anm.echo.quarrune",
+        "--build-id",
+        build_id,
+        "--deterministic",
+    ]
+
+
+def gate5_pair_exporter_command(
+    scope_id: str, paired_scope_id: str, build_id: str, *, replace: bool
+) -> list[str]:
+    """Build the sole production command vector for the Quarrune owner pair."""
+    if scope_id != "echo.quarrune" or paired_scope_id != "anm.echo.quarrune":
+        raise AuthoringReceiptError(
+            "paired Gate-5 receipt accepts only echo.quarrune + anm.echo.quarrune"
+        )
+    if not replace:
+        raise AuthoringReceiptError(
+            "paired Gate-5 receipt requires --replace after candidate outputs are reviewed and bound"
+        )
+    command = [
+        str(ROOT / CANONICAL_GATE5_EXPORTER_PATH),
+        "--scope", scope_id,
+        "--paired-scope", paired_scope_id,
+        "--build-id", build_id,
+        "--deterministic",
+    ]
+    command.append("--replace")
+    return command
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Produce exact per-asset authoring-stack receipts.")
     subparsers = parser.add_subparsers(dest="operation", required=True)
@@ -433,13 +541,83 @@ def main(argv: list[str] | None = None) -> int:
         nargs=argparse.REMAINDER,
         help=f"arguments passed only to {CANONICAL_GATE5_EXPORTER_PATH}",
     )
+    gate5_pair = subparsers.add_parser(
+        "g5-export-pair",
+        help="atomically export and receipt the paired Quarrune model/animation package",
+    )
+    gate5_pair.add_argument("--scope", required=True)
+    gate5_pair.add_argument("--paired-scope", required=True)
+    gate5_pair.add_argument("--build-id", required=True)
+    add_stack_arguments(gate5_pair)
     args = parser.parse_args(argv)
     try:
+        if args.operation == "g5-export-pair":
+            if not canonical_build_id(args.build_id):
+                raise AuthoringReceiptError("G5 requires one substantive clean-build ID before export")
+            require_approved_gate5_exporter()
+            scopes = (args.scope, args.paired_scope)
+            destinations = tuple(canonical_receipt_path(scope, "G5") for scope in scopes)
+            for destination in destinations:
+                preflight_receipt_target(destination, replace=args.replace)
+            source_paths = tuple(canonical_source_manifest(scope) for scope in scopes)
+            for source_path in source_paths:
+                require_repo_regular(source_path, "source manifest")
+            source_digests = tuple(sha256_file(path) for path in source_paths)
+            output_paths = tuple(canonical_output_manifest(scope) for scope in scopes)
+            check = lambda: stack_report(
+                blender=args.blender,
+                fast64_root=args.fast64_root,
+                blender_dmg=args.blender_dmg,
+                fast64_zip=args.fast64_zip,
+            )
+            command = gate5_pair_exporter_command(
+                args.scope, args.paired_scope, args.build_id, replace=args.replace
+            )
+
+            def pair_snapshot() -> tuple[tuple[str, str], ...]:
+                observed: list[tuple[str, str]] = []
+                for source_path, expected_digest in zip(source_paths, source_digests):
+                    require_repo_regular(source_path, "source manifest")
+                    digest = sha256_file(source_path)
+                    if digest != expected_digest:
+                        raise AuthoringReceiptError("source manifest changed during paired Gate-5 export")
+                    observed.append((str(source_path), digest))
+                for output_path in output_paths:
+                    require_repo_regular(output_path, "Gate-5 output manifest")
+                    observed.append((str(output_path), sha256_file(output_path)))
+                return tuple(observed)
+
+            identity = run_checked_export(command, check=check, snapshot=pair_snapshot)
+            checked_at = canonical_checked_at()
+            records: list[tuple[Path, bytes]] = []
+            for scope, source_digest, output_path, destination in zip(
+                scopes, source_digests, output_paths, destinations
+            ):
+                record = build_receipt(
+                    scope_id=scope,
+                    gate="G5",
+                    source_manifest_sha256=source_digest,
+                    output_manifest_sha256=sha256_file(output_path),
+                    build_id=args.build_id,
+                    checked_at=checked_at,
+                    stack_identity=identity,
+                )
+                records.append((destination, render_receipt(record)))
+            write_receipts_atomically(records, replace=args.replace)
+            print(
+                "authoring_receipt=PASS "
+                + ",".join(str(path) for path in destinations)
+            )
+            return 0
         gate = "G2" if args.operation == "g2" else "G5"
         destination = canonical_receipt_path(args.scope, gate)
         preflight_receipt_target(destination, replace=args.replace)
         if gate == "G5" and not canonical_build_id(args.build_id):
             raise AuthoringReceiptError("G5 requires one substantive clean-build ID before export")
+        if args.operation == "g5-export":
+            raise AuthoringReceiptError(
+                "single-scope Gate-5 export is disabled; use g5-export-pair for the Quarrune owner pair"
+            )
         if gate == "G5":
             require_approved_gate5_exporter()
         source_path = canonical_source_manifest(args.scope)
@@ -459,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             exporter_args = list(args.exporter_args)
             if exporter_args[:1] == ["--"]:
                 exporter_args = exporter_args[1:]
-            command = [str(ROOT / CANONICAL_GATE5_EXPORTER_PATH), *exporter_args]
+            command = gate5_exporter_command(args.scope, args.build_id, exporter_args)
             output_path = canonical_output_manifest(args.scope)
             def export_snapshot() -> tuple[str, str]:
                 require_repo_regular(source_path, "source manifest")

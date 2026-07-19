@@ -21,9 +21,11 @@ module N64Game
     CHECKER_BUNDLE_DOMAIN = "n64game-authoring-checker-bundle-v1\n".b.freeze
     CHECKER_BUNDLE_PATHS = %w[
       scripts/check-authoring-stack
+      scripts/export-gate5-asset
       scripts/record-authoring-stack-receipt
       tools/n64game_authoring.py
       tools/n64game_authoring_receipt.py
+      tools/n64game_gate5_export.py
     ].freeze
     RECEIPT_BASENAME = "AUTHORING_STACK_RECEIPT.txt".freeze
     ROOT_REQUIRED_MODES = {
@@ -34,16 +36,18 @@ module N64Game
       "lib/n64game/tiny3d_package_contract.rb" => "100644",
       "config/toolchain.lock.json" => "100644",
       "scripts/check-authoring-stack" => "100755",
+      "scripts/export-gate5-asset" => "100755",
       "scripts/record-authoring-stack-receipt" => "100755",
       "tools/n64game_authoring.py" => "100644",
-      "tools/n64game_authoring_receipt.py" => "100644"
+      "tools/n64game_authoring_receipt.py" => "100644",
+      "tools/n64game_gate5_export.py" => "100644"
     }.freeze
     APPLICABLE_PROFILES = %w[RIGGED_MODEL STATIC_MODEL_ENV ANIMATION].freeze
     BLENDER_EXECUTABLE_SHA256 = "8156431a9b9ec1daf49bccea4bd92f327f6efc1ca330d5103881580f3e7773ef".freeze
     FAST64_SOURCE_MANIFEST_SHA256 = "14bb6c7b527ba364fa5e2a5011779ddd24c61f998c79c120f28d895d92e62e6b".freeze
     FAST64_COMMIT = "8e9630c11824a9c00e9379279d43c64264eda87e".freeze
     APPROVED_TOOLCHAIN_LOCK_SHA256 = "818a0232394f58698906c30c3ebcd9ca84bb6f35c5bae8fb3bed297d78628f80".freeze
-    APPROVED_CHECKER_BUNDLE_SHA256 = "92b65d0356b7e25c12d2881f050f87780fd08284175b660c6da15471030f2adc".freeze
+    APPROVED_CHECKER_BUNDLE_SHA256 = "e4c207d76bd93bf61c5051da1151e197c9d0bdb9790a51282bb2c9eb2df7de17".freeze
     GATE5_EXPORT_IMPLEMENTED = false
     APPROVED_GATE5_EXPORTER_SHA256 = "PENDING".freeze
     HEX64 = /\A[0-9a-f]{64}\z/.freeze
