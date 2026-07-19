@@ -38,10 +38,14 @@ REJECTED_NAME_EXEMPT_PATHS = %w[
   scripts/validate-public-hygiene
 ].freeze
 UTF16_ASCII_RUN_MIN_CODEUNITS = REJECTED_NAMES.map(&:length).min
+SAFE_GIT_ENVIRONMENT = {
+  "GIT_NO_REPLACE_OBJECTS" => "1",
+  "GIT_GRAFT_FILE" => nil
+}.freeze
 
 def git_capture(root, *arguments, stdin_data: nil)
   stdout, stderr, status = Open3.capture3(
-    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    SAFE_GIT_ENVIRONMENT,
     "git", *arguments,
     chdir: root.to_s,
     stdin_data: stdin_data
@@ -327,6 +331,9 @@ def reachable_blob_paths(root, records, errors)
 end
 
 def validate_no_legacy_grafts(root, errors)
+  if ENV.key?("GIT_GRAFT_FILE")
+    errors << "history: GIT_GRAFT_FILE environment override can hide real public ancestry"
+  end
   output, stderr, success = git_capture(root, "rev-parse", "--git-common-dir")
   unless success
     errors << "history: cannot resolve Git common directory: #{stderr.strip}"
@@ -855,6 +862,40 @@ def run_public_hygiene_self_tests
     assert.call(
       errors.include?("history: legacy Git graft metadata can hide real public ancestry"),
       "fails closed when legacy graft metadata can replace real ancestry",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "external-grafted-history.txt", "Mara Quill\n")
+    fixture_commit!(root, "history before external graft override")
+    FileUtils.rm(root.join("external-grafted-history.txt"))
+    fixture_write(root, "safe.txt", "safe external-grafted tip\n")
+    fixture_commit!(root, "tip targeted by external graft override")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve external-graft fixture HEAD: #{head_error}" unless head_ok
+
+    external_grafts = root.join(".git/external-grafts")
+    fixture_write(root, ".git/external-grafts", "#{head.strip}\n")
+    previous_graft_file = ENV["GIT_GRAFT_FILE"]
+    had_graft_file = ENV.key?("GIT_GRAFT_FILE")
+    begin
+      ENV["GIT_GRAFT_FILE"] = external_grafts.to_s
+      errors = validate_public_hygiene(root)
+    ensure
+      if had_graft_file
+        ENV["GIT_GRAFT_FILE"] = previous_graft_file
+      else
+        ENV.delete("GIT_GRAFT_FILE")
+      end
+    end
+    assert.call(
+      errors.include?("history: GIT_GRAFT_FILE environment override can hide real public ancestry") &&
+        errors.any? do |message|
+          message.include?("history blob") &&
+            message.include?("rejected working name remains: Mara Quill")
+        end,
+      "neutralizes and rejects an external GIT_GRAFT_FILE ancestry override",
       errors.join("; ")
     )
   end

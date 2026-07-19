@@ -30,6 +30,10 @@ HISTORICAL_SYMBOL_ALIAS_DOMAINS = %w[
   NpcOnceBit
   EncounterClearBit
 ].freeze
+SAFE_GIT_ENVIRONMENT = {
+  "GIT_NO_REPLACE_OBJECTS" => "1",
+  "GIT_GRAFT_FILE" => nil
+}.freeze
 
 class UnknownIdLockEnumIdentifier < StandardError; end
 
@@ -216,7 +220,7 @@ end
 
 def git_capture(root, *arguments)
   stdout, stderr, status = Open3.capture3(
-    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    SAFE_GIT_ENVIRONMENT,
     "git", *arguments,
     chdir: root.to_s
   )
@@ -225,7 +229,7 @@ end
 
 def git_ancestor_status(root, ancestor, descendant, errors, label)
   _stdout, stderr, status = Open3.capture3(
-    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    SAFE_GIT_ENVIRONMENT,
     "git",
     "merge-base",
     "--is-ancestor",
@@ -1146,15 +1150,28 @@ def run_serialized_id_git_self_tests
     retained_rename_commit, _retained_rename_error, _retained_rename_ok = git_capture(root, "rev-parse", "HEAD")
     retained_rename_commit = retained_rename_commit.strip
     serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
-    retained_rename_errors = validate_serialized_id_fixture(root)
+    external_graft_file = root.join(".git/serialized-id-external-grafts")
+    external_graft_file.write("#{retained_rename_commit}\n")
+    previous_graft_file = ENV["GIT_GRAFT_FILE"]
+    had_graft_file = ENV.key?("GIT_GRAFT_FILE")
+    begin
+      ENV["GIT_GRAFT_FILE"] = external_graft_file.to_s
+      retained_rename_errors = validate_serialized_id_fixture(root)
+    ensure
+      if had_graft_file
+        ENV["GIT_GRAFT_FILE"] = previous_graft_file
+      else
+        ENV.delete("GIT_GRAFT_FILE")
+      end
+    end
     retained_rename_rejected = retained_rename_errors.any? do |message|
       message.include?("#{approval_commit} -> #{retained_rename_commit}") &&
         message.include?("renamed or changed its binding")
     end
-    assertions << "rejects a forbidden rename retained only on a non-HEAD public branch" if
+    assertions << "rejects a non-HEAD forbidden rename despite an external GIT_GRAFT_FILE override" if
       retained_rename_rejected
     unless retained_rename_rejected
-      raise "serialized-ID Git self-test ignored a forbidden rename on a retained branch: " \
+      raise "serialized-ID Git self-test let an external graft hide a retained-branch rename: " \
             "#{retained_rename_errors.join('; ')}"
     end
     serialized_id_fixture_git!(root, "branch", "-D", retained_rename_branch)
