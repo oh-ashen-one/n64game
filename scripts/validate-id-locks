@@ -223,6 +223,23 @@ def git_capture(root, *arguments)
   [stdout, stderr, status.success?]
 end
 
+def git_ancestor_status(root, ancestor, descendant, errors, label)
+  _stdout, stderr, status = Open3.capture3(
+    { "GIT_NO_REPLACE_OBJECTS" => "1" },
+    "git",
+    "merge-base",
+    "--is-ancestor",
+    ancestor,
+    descendant,
+    chdir: root.to_s
+  )
+  return true if status.exitstatus == 0
+  return false if status.exitstatus == 1
+
+  errors << "#{label}: cannot determine Git ancestry: #{stderr.strip}"
+  nil
+end
+
 def parse_once_lock_text(relative, text, errors)
   rows = []
   text.each_line.with_index do |line, index|
@@ -692,6 +709,87 @@ def register_historical_symbol_owners(rows, owners, errors, label)
   end
 end
 
+def register_historical_key_owners(rows, owners, errors, label)
+  rows.each do |row|
+    next unless row[:state] == "LIVE"
+
+    key = [row[:domain], row[:value]]
+    owner = [row[:symbol], row[:binding]]
+    previous = owners[key]
+    if previous && previous != owner
+      errors << "#{label}: historical durable key #{row[:domain]}/#{format('0x%04X', row[:value])} " \
+                "has conflicting live owners #{previous[0]}/#{previous[1]} and " \
+                "#{owner[0]}/#{owner[1]}"
+    else
+      owners[key] ||= owner
+    end
+  end
+end
+
+def serialized_id_public_commit_roots(root, errors)
+  roots = []
+  refs, refs_error, refs_ok = git_capture(root, "for-each-ref", "--format=%(refname)")
+  unless refs_ok
+    errors << "cannot enumerate public refs for serialized-ID history: #{refs_error.strip}"
+    return []
+  end
+  refs.each_line.map(&:strip).reject(&:empty?).sort.each do |refname|
+    commit, commit_error, commit_ok = git_capture(
+      root,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "#{refname}^{commit}"
+    )
+    if commit_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      roots << commit.strip
+    else
+      detail = commit_error.strip.empty? ? "" : ": #{commit_error.strip}"
+      errors << "serialized-ID public ref #{refname.inspect} does not peel to a commit#{detail}"
+    end
+  end
+
+  head, head_error, head_ok = git_capture(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+  if head_ok && head.strip.match?(/\A[0-9a-f]+\z/)
+    roots << head.strip
+  else
+    detail = head_error.strip.empty? ? "" : ": #{head_error.strip}"
+    errors << "serialized-ID HEAD does not peel to a commit#{detail}"
+  end
+
+  worktrees, worktrees_error, worktrees_ok = git_capture(root, "worktree", "list", "--porcelain", "-z")
+  unless worktrees_ok
+    errors << "cannot enumerate linked worktree HEADs for serialized-ID history: #{worktrees_error.strip}"
+    return roots.uniq
+  end
+  worktrees.b.split("\0\0").reject(&:empty?).each_with_index do |record, index|
+    head_fields = record.split("\0").select { |field| field.start_with?("HEAD ".b) }
+    unless head_fields.length == 1
+      errors << "serialized-ID linked worktree row #{index + 1} has no unique HEAD"
+      next
+    end
+    oid = head_fields.first.byteslice("HEAD ".bytesize..-1)
+    unless oid.match?(/\A[0-9a-f]+\z/)
+      errors << "serialized-ID linked worktree row #{index + 1} has a malformed HEAD"
+      next
+    end
+    commit, commit_error, commit_ok = git_capture(
+      root,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "#{oid}^{commit}"
+    )
+    if commit_ok && commit.strip.match?(/\A[0-9a-f]+\z/)
+      roots << commit.strip
+    else
+      detail = commit_error.strip.empty? ? "" : ": #{commit_error.strip}"
+      errors << "serialized-ID linked worktree HEAD #{oid.inspect} does not peel to a commit#{detail}"
+    end
+  end
+  roots.uniq
+end
+
 def snapshot_texts_from_commit(root, commit, errors, label)
   SNAPSHOT_PATHS.each_with_object({}) do |relative, texts|
     stdout, _stderr, success = git_capture(root, "show", "#{commit}:#{relative}")
@@ -756,16 +854,14 @@ def reviewed_commit_from_traceability(text, errors, label)
   commits.first
 end
 
-def approved_baseline_commit(root, errors)
+def approved_baseline_commit(root, public_commit_roots, errors)
   candidates = []
   trace_path = root.join("docs/PREPRODUCTION_TRACEABILITY.md")
   candidates << reviewed_commit_from_traceability(trace_path.read, errors, "working tree approval record") if trace_path.file?
-  head_trace, _stderr, head_ok = git_capture(root, "show", "HEAD:docs/PREPRODUCTION_TRACEABILITY.md")
-  candidates << reviewed_commit_from_traceability(head_trace, errors, "HEAD approval record") if head_ok
   history, history_error, history_ok = git_capture(
     root,
     "rev-list",
-    "HEAD",
+    *public_commit_roots,
     "--",
     "docs/PREPRODUCTION_TRACEABILITY.md"
   )
@@ -781,14 +877,15 @@ def approved_baseline_commit(root, errors)
   end
   candidates.compact!
   if candidates.uniq.length > 1
-    errors << "working tree and HEAD name different Gate 2 reviewed baselines"
+    errors << "working tree and public history name different Gate 2 reviewed baselines"
     return nil
   end
   candidates.first
 end
 
 def validate_approved_history(root, worktree_rows, errors)
-  baseline = approved_baseline_commit(root, errors)
+  public_commit_roots = serialized_id_public_commit_roots(root, errors)
+  baseline = approved_baseline_commit(root, public_commit_roots, errors)
   return unless baseline
 
   _stdout, _stderr, exists = git_capture(root, "cat-file", "-e", "#{baseline}^{commit}")
@@ -796,8 +893,15 @@ def validate_approved_history(root, worktree_rows, errors)
     errors << "serialized-ID baseline commit is unavailable: #{baseline}"
     return
   end
-  _ancestor_out, _ancestor_err, ancestor = git_capture(root, "merge-base", "--is-ancestor", baseline, "HEAD")
-  unless ancestor
+  head_descends_from_baseline = git_ancestor_status(
+    root,
+    baseline,
+    "HEAD",
+    errors,
+    "serialized-ID baseline ancestry"
+  )
+  return if head_descends_from_baseline.nil?
+  unless head_descends_from_baseline
     errors << "serialized-ID baseline commit is not an ancestor of HEAD: #{baseline}"
     return
   end
@@ -813,6 +917,7 @@ def validate_approved_history(root, worktree_rows, errors)
     end
   end
   historical_symbol_owners = {}
+  historical_key_owners = {}
   baseline_rows = load_commit.call(baseline)
   register_historical_symbol_owners(
     baseline_rows,
@@ -820,10 +925,35 @@ def validate_approved_history(root, worktree_rows, errors)
     errors,
     "commit #{baseline}"
   )
+  register_historical_key_owners(
+    baseline_rows,
+    historical_key_owners,
+    errors,
+    "commit #{baseline}"
+  )
 
-  history, _history_error, history_ok = git_capture(root, "rev-list", "--reverse", "--topo-order", "--parents", "#{baseline}..HEAD")
+  governed_roots = public_commit_roots.select do |commit|
+    baseline_ancestor = git_ancestor_status(
+      root,
+      baseline,
+      commit,
+      errors,
+      "serialized-ID public root #{commit}"
+    )
+    baseline_ancestor == true
+  end
+  history_arguments = governed_roots.map { |commit| "#{baseline}..#{commit}" }
+  history, history_error, history_ok = git_capture(
+    root,
+    "rev-list",
+    "--reverse",
+    "--topo-order",
+    "--parents",
+    *history_arguments
+  )
   unless history_ok
-    errors << "cannot enumerate serialized-ID history after #{baseline}"
+    detail = history_error.strip.empty? ? "" : ": #{history_error.strip}"
+    errors << "cannot enumerate serialized-ID history after #{baseline} across every public root#{detail}"
     return
   end
   history.each_line do |line|
@@ -835,21 +965,34 @@ def validate_approved_history(root, worktree_rows, errors)
       errors,
       "commit #{commit}"
     )
+    register_historical_key_owners(
+      current_rows,
+      historical_key_owners,
+      errors,
+      "commit #{commit}"
+    )
     parents.each do |parent|
-      _out, _err, parent_on_path = git_capture(root, "merge-base", "--is-ancestor", baseline, parent)
-      if parent_on_path
+      parent_on_path = git_ancestor_status(
+        root,
+        baseline,
+        parent,
+        errors,
+        "serialized-ID parent #{parent}"
+      )
+      if parent_on_path == true
         errors.concat(evolution_errors(load_commit.call(parent), current_rows, "#{parent} -> #{commit}"))
         next
       end
+      next if parent_on_path.nil?
 
-      _before_out, _before_err, parent_before_baseline = git_capture(
+      parent_before_baseline = git_ancestor_status(
         root,
-        "merge-base",
-        "--is-ancestor",
         parent,
-        baseline
+        baseline,
+        errors,
+        "serialized-ID prebaseline parent #{parent}"
       )
-      next if parent_before_baseline
+      next if parent_before_baseline.nil? || parent_before_baseline
 
       errors << "commit #{commit} has a parent path that bypasses the serialized-ID baseline: #{parent}"
     end
@@ -865,6 +1008,8 @@ def validate_approved_history(root, worktree_rows, errors)
     errors.concat(evolution_errors(index_rows, worktree_rows, "index -> working tree"))
     register_historical_symbol_owners(index_rows, historical_symbol_owners, errors, "index")
     register_historical_symbol_owners(worktree_rows, historical_symbol_owners, errors, "working tree")
+    register_historical_key_owners(index_rows, historical_key_owners, errors, "index")
+    register_historical_key_owners(worktree_rows, historical_key_owners, errors, "working tree")
   else
     errors << "approved history requires #{REGISTRY_PATH} in the index"
   end
@@ -970,6 +1115,163 @@ def run_serialized_id_git_self_tests
     assertions << "accepts the exact committed reviewed/approval baseline" if approval_errors.empty?
     raise "serialized-ID Git self-test rejected valid approval: #{approval_errors.join('; ')}" unless approval_errors.empty?
 
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "conflicting-public-approval")
+    trace.write(
+      "# Gate 2\n\n## Gate 2 approval record\n\n" \
+      "| Reviewed content commit | `#{public_main_ancestor}` |\n" \
+      "| Decision | `APPROVED` |\n"
+    )
+    serialized_id_fixture_git!(root, "add", "docs/PREPRODUCTION_TRACEABILITY.md")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Publish a conflicting approval baseline")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    conflicting_approval_errors = validate_serialized_id_fixture(root)
+    conflicting_approval_rejected = conflicting_approval_errors.include?(
+      "working tree and public history name different Gate 2 reviewed baselines"
+    )
+    assertions << "rejects a conflicting approval baseline retained only on a non-HEAD public branch" if
+      conflicting_approval_rejected
+    unless conflicting_approval_rejected
+      raise "serialized-ID Git self-test ignored a conflicting public approval baseline: " \
+            "#{conflicting_approval_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", "conflicting-public-approval")
+
+    retained_rename_branch = "retained-non-head-forbidden-rename"
+    retained_renamed_owner = "SERIALIZED_ID_SELF_TEST_RETAINED_RENAME"
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", retained_rename_branch)
+    data_path.write(data_path.read.gsub(synthetic_owner, retained_renamed_owner))
+    registry_path.write(registry_path.read.gsub(synthetic_owner, retained_renamed_owner))
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Hide a forbidden rename on a retained branch")
+    retained_rename_commit, _retained_rename_error, _retained_rename_ok = git_capture(root, "rev-parse", "HEAD")
+    retained_rename_commit = retained_rename_commit.strip
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    retained_rename_errors = validate_serialized_id_fixture(root)
+    retained_rename_rejected = retained_rename_errors.any? do |message|
+      message.include?("#{approval_commit} -> #{retained_rename_commit}") &&
+        message.include?("renamed or changed its binding")
+    end
+    assertions << "rejects a forbidden rename retained only on a non-HEAD public branch" if
+      retained_rename_rejected
+    unless retained_rename_rejected
+      raise "serialized-ID Git self-test ignored a forbidden rename on a retained branch: " \
+            "#{retained_rename_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", retained_rename_branch)
+
+    linked_worktree_errors = []
+    linked_rename_commit = nil
+    Dir.mktmpdir("n64game-serialized-id-linked-worktree-") do |linked_parent|
+      linked_root = Pathname.new(linked_parent).join("checkout")
+      serialized_id_fixture_git!(
+        root,
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        linked_root.to_s,
+        approval_commit
+      )
+      begin
+        linked_data_path = linked_root.join(DATA_PATH)
+        linked_registry_path = linked_root.join(REGISTRY_PATH)
+        linked_owner = "SERIALIZED_ID_SELF_TEST_LINKED_RENAME"
+        linked_data_path.write(linked_data_path.read.gsub(synthetic_owner, linked_owner))
+        linked_registry_path.write(linked_registry_path.read.gsub(synthetic_owner, linked_owner))
+        serialized_id_fixture_git!(linked_root, "add", DATA_PATH, REGISTRY_PATH)
+        serialized_id_fixture_git!(
+          linked_root,
+          "commit",
+          "-q",
+          "-m",
+          "Hide a forbidden rename on a detached linked worktree"
+        )
+        linked_rename_out, _linked_rename_error, _linked_rename_ok = git_capture(
+          linked_root,
+          "rev-parse",
+          "HEAD"
+        )
+        linked_rename_commit = linked_rename_out.strip
+        linked_worktree_errors = validate_serialized_id_fixture(root)
+      ensure
+        serialized_id_fixture_git!(root, "worktree", "remove", "--force", linked_root.to_s)
+      end
+    end
+    linked_worktree_rejected = linked_worktree_errors.any? do |message|
+      message.include?("#{approval_commit} -> #{linked_rename_commit}") &&
+        message.include?("renamed or changed its binding")
+    end
+    assertions << "rejects a forbidden rename reachable only from a detached linked-worktree HEAD" if
+      linked_worktree_rejected
+    unless linked_worktree_rejected
+      raise "serialized-ID Git self-test ignored a detached linked-worktree violation: " \
+            "#{linked_worktree_errors.join('; ')}"
+    end
+
+    sibling_key_value = 0xF102
+    sibling_branch_a = "sibling-key-owner-a"
+    sibling_branch_b = "sibling-key-owner-b"
+    sibling_symbol_a = "SERIALIZED_ID_SELF_TEST_SIBLING_A"
+    sibling_symbol_b = "SERIALIZED_ID_SELF_TEST_SIBLING_B"
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", sibling_branch_a)
+    sibling_a_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_stable)}\s*=\s*0xF101,\s*$/,
+      "    #{synthetic_stable} = 0xF101,\n    #{sibling_symbol_a} = 0xF102,"
+    )
+    raise "serialized-ID Git self-test could not append sibling owner A" if sibling_a_data == data_path.read
+
+    data_path.write(sibling_a_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF102|#{sibling_symbol_a}|LIVE|-")
+    end
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Claim a durable key on sibling branch A")
+
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", sibling_branch_b)
+    sibling_b_data = data_path.read.sub(
+      /^\s*#{Regexp.escape(synthetic_stable)}\s*=\s*0xF101,\s*$/,
+      "    #{synthetic_stable} = 0xF101,\n    #{sibling_symbol_b} = 0xF102,"
+    )
+    raise "serialized-ID Git self-test could not append sibling owner B" if sibling_b_data == data_path.read
+
+    data_path.write(sibling_b_data)
+    registry_path.open("a") do |file|
+      file.puts("#{synthetic_primary_domain}|0xF102|#{sibling_symbol_b}|LIVE|-")
+    end
+    serialized_id_fixture_git!(root, "add", DATA_PATH, REGISTRY_PATH)
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Claim a durable key on sibling branch B")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    sibling_key_errors = validate_serialized_id_fixture(root)
+    sibling_key_rejected = sibling_key_errors.any? do |message|
+      message.include?(
+        "historical durable key #{synthetic_primary_domain}/#{format('0x%04X', sibling_key_value)} " \
+        "has conflicting live owners"
+      )
+    end
+    assertions << "rejects conflicting owners for one newly appended key across sibling public branches" if
+      sibling_key_rejected
+    unless sibling_key_rejected
+      raise "serialized-ID Git self-test accepted divergent sibling key owners: " \
+            "#{sibling_key_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", sibling_branch_a, sibling_branch_b)
+
+    serialized_id_fixture_git!(root, "switch", "-q", "--detach", public_main_ancestor)
+    serialized_id_fixture_git!(root, "switch", "-q", "-c", "retained-incomparable-prebaseline-side")
+    root.join("retained-incomparable.txt").write("This retained branch predates the reviewed baseline.\n")
+    serialized_id_fixture_git!(root, "add", "retained-incomparable.txt")
+    serialized_id_fixture_git!(root, "commit", "-q", "-m", "Retain an incomparable prebaseline side branch")
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    retained_incomparable_errors = validate_serialized_id_fixture(root)
+    assertions << "allows a standalone retained branch that never passed through the reviewed baseline" if
+      retained_incomparable_errors.empty?
+    unless retained_incomparable_errors.empty?
+      raise "serialized-ID Git self-test rejected a standalone prebaseline side branch: " \
+            "#{retained_incomparable_errors.join('; ')}"
+    end
+    serialized_id_fixture_git!(root, "branch", "-D", "retained-incomparable-prebaseline-side")
+
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", public_main_ancestor)
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "github-public-merge")
     serialized_id_fixture_git!(
@@ -1013,6 +1315,8 @@ def run_serialized_id_git_self_tests
     unless incomparable_rejected
       raise "serialized-ID Git self-test accepted incomparable merge: #{incomparable_errors.join('; ')}"
     end
+    serialized_id_fixture_git!(root, "switch", "-q", "approval-line")
+    serialized_id_fixture_git!(root, "branch", "-D", "incomparable-merge", "incomparable-side")
 
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "legal-tombstone")
@@ -1083,6 +1387,7 @@ def run_serialized_id_git_self_tests
     end
 
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", tombstone_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "same-domain-symbol-resurrection")
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "cross-domain-symbol-resurrection")
     resurrected_other_data = data_path.read.sub(
       /^\s*#{Regexp.escape(synthetic_other_anchor)}\s*=\s*0xF200,\s*$/,
@@ -1107,6 +1412,7 @@ def run_serialized_id_git_self_tests
     end
 
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "cross-domain-symbol-resurrection")
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "derived-domain-symbol-resurrection")
     next_once_bit = synthetic_derived_bit + 1
     original_once_row =
@@ -1171,6 +1477,7 @@ def run_serialized_id_git_self_tests
     end
 
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "derived-domain-symbol-resurrection")
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "forbidden-rename")
     renamed_owner = "SERIALIZED_ID_SELF_TEST_RENAMED"
     data_path.write(data_path.read.gsub(synthetic_owner, renamed_owner))
@@ -1183,6 +1490,7 @@ def run_serialized_id_git_self_tests
     raise "serialized-ID Git self-test accepted coordinated rename: #{rename_errors.join('; ')}" unless rename_rejected
 
     serialized_id_fixture_git!(root, "switch", "-q", "--detach", approval_commit)
+    serialized_id_fixture_git!(root, "branch", "-D", "forbidden-rename")
     serialized_id_fixture_git!(root, "switch", "-q", "-c", "erased-approval-rename")
     trace.write("# Gate 2\n\n## Gate 2 approval record\n\nGate 2 remains in progress.\n")
     erased_owner = "SERIALIZED_ID_SELF_TEST_ERASED"

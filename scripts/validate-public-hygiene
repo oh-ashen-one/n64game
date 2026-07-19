@@ -290,6 +290,56 @@ def reachable_object_records(root, errors, extra_roots = [])
   records
 end
 
+def reachable_blob_paths(root, records, errors)
+  paths_by_blob = Hash.new { |hash, oid| hash[oid] = Set.new }
+  seen_root_trees = Set.new
+  records.select { |record| record[:type] == "commit" }.each do |record|
+    tree_out, tree_error, tree_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{record[:oid]}^{tree}"
+    )
+    tree_oid = tree_out.strip
+    unless tree_ok && tree_oid.match?(/\A[0-9a-f]+\z/)
+      errors << "history commit #{record[:oid]}: cannot resolve root tree: #{tree_error.strip}"
+      next
+    end
+    next unless seen_root_trees.add?(tree_oid)
+
+    output, stderr, success = git_capture(
+      root, "ls-tree", "-r", "-z", "--full-tree", tree_oid
+    )
+    unless success
+      errors << "history tree #{tree_oid}: cannot enumerate blob paths: #{stderr.strip}"
+      next
+    end
+    output.b.split("\0").reject(&:empty?).each_with_index do |entry, index|
+      metadata, raw_path = entry.split("\t", 2)
+      match = metadata&.match(/\A([0-7]{6}) (blob|commit) ([0-9a-f]+)\z/)
+      unless match && raw_path && !raw_path.empty?
+        errors << "history tree #{tree_oid}: malformed recursive entry at row #{index + 1}"
+        next
+      end
+      next unless match[2] == "blob"
+
+      paths_by_blob[match[3]] << raw_path
+    end
+  end
+  paths_by_blob
+end
+
+def validate_no_legacy_grafts(root, errors)
+  output, stderr, success = git_capture(root, "rev-parse", "--git-common-dir")
+  unless success
+    errors << "history: cannot resolve Git common directory: #{stderr.strip}"
+    return
+  end
+  common = Pathname.new(output.strip)
+  common = root.join(common) unless common.absolute?
+  grafts = common.cleanpath.join("info/grafts")
+  return unless grafts.exist? || grafts.symlink?
+
+  errors << "history: legacy Git graft metadata can hide real public ancestry"
+end
+
 def validate_complete_repository_history(root, errors)
   output, stderr, success = git_capture(root, "rev-parse", "--is-shallow-repository")
   unless success
@@ -431,15 +481,25 @@ def validate_reachable_history(root, errors)
   # Commit-backed refs let the NUL-delimited diff walk enumerate every path.
   # A ref rooted directly at a tree/blob has no commit diff, so reject that
   # uncommon shape rather than pretending its entry names were inspected.
+  validate_no_legacy_grafts(root, errors)
   validate_complete_repository_history(root, errors)
   ref_object_roots, ref_commit_roots = validate_public_ref_roots(root, errors)
   worktree_object_roots, worktree_commit_roots = validate_public_worktree_heads(root, errors)
   object_roots = ref_object_roots + worktree_object_roots
   commit_roots = ref_commit_roots + worktree_commit_roots
   validate_reachable_history_paths(root, errors, commit_roots)
-  reachable_object_records(root, errors, object_roots).each do |record|
+  records = reachable_object_records(root, errors, object_roots)
+  paths_by_blob = reachable_blob_paths(root, records, errors)
+  records.each do |record|
+    blob_paths = record[:type] == "blob" ? paths_by_blob.fetch(record[:oid], Set.new) : Set.new
+    nonexempt_blob_paths = blob_paths.reject { |path| rejected_name_exempt_path?(path) }
     label = if record[:type] == "blob"
-              "history blob #{record[:oid]} (<unknown-path>)"
+              path_label = if blob_paths.empty?
+                             "<unknown-path>"
+                           else
+                             blob_paths.first(3).map(&:inspect).join(",")
+                           end
+              "history blob #{record[:oid]} (#{path_label})"
             else
               "history #{record[:type]} #{record[:oid]}"
             end
@@ -453,7 +513,15 @@ def validate_reachable_history(root, errors)
       next
     end
     errors << "#{label}: Git size metadata differs from decoded bytes" unless bytes.bytesize == record[:size]
-    add_artifact_findings(errors, label, record[:oid], bytes, scan_rejected_names: false)
+    scan_rejected_names = record[:type] != "blob" || blob_paths.empty? || !nonexempt_blob_paths.empty?
+    policy_path = nonexempt_blob_paths.first || blob_paths.first || record[:oid]
+    add_artifact_findings(
+      errors,
+      label,
+      policy_path,
+      bytes,
+      scan_rejected_names: scan_rejected_names
+    )
   end
 end
 
@@ -774,6 +842,24 @@ def run_public_hygiene_self_tests
   end
 
   with_fixture_repo do |root|
+    fixture_write(root, "grafted-history.txt", "credential=#{token}\n")
+    fixture_commit!(root, "history before graft override")
+    FileUtils.rm(root.join("grafted-history.txt"))
+    fixture_write(root, "safe.txt", "safe grafted tip\n")
+    fixture_commit!(root, "tip hidden behind graft override")
+    head, head_error, head_ok = git_capture(root, "rev-parse", "HEAD")
+    raise "cannot resolve graft-history fixture HEAD: #{head_error}" unless head_ok
+
+    fixture_write(root, ".git/info/grafts", "#{head.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("history: legacy Git graft metadata can hide real public ancestry"),
+      "fails closed when legacy graft metadata can replace real ancestry",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
     fixture_git!(root, "lfs", "install", "--local")
     fixture_write(root, ".gitattributes", "*.dat filter=lfs diff=lfs merge=lfs -text\n")
     middle_offset = (STREAM_SCAN_CHUNK_BYTES * 3) - 3
@@ -862,16 +948,53 @@ def run_public_hygiene_self_tests
   end
 
   with_fixture_repo do |root|
-    fixture_write(root, "safe.txt", "safe public text\n")
-    fixture_commit!(root, "safe baseline")
-    fixture_write(root, "safe.txt", "safe public text after commit-message fixture\n")
-    fixture_commit!(root, "credential=#{token}")
+    fixture_write(root, "deleted-nonexempt.txt", "Mara Quill\n")
+    fixture_commit!(root, "historical nonexempt name fixture")
+    FileUtils.rm(root.join("deleted-nonexempt.txt"))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical nonexempt name fixture")
     errors = validate_public_hygiene(root)
     assert.call(
       errors.any? do |message|
-        message.include?("history commit") && message.include?("possible GitHub token")
+        message.include?("history blob") &&
+          message.include?("rejected working name remains: Mara Quill")
       end,
-      "rejects a secret retained in a reachable commit payload",
+      "rejects a working name retained only in a nonexempt historical blob",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    audit_path = "docs/NAMING_AND_ORIGINALITY_AUDIT.md"
+    fixture_write(root, audit_path, "Mara Quill\n")
+    fixture_commit!(root, "historical exempt audit fixture")
+    FileUtils.rm(root.join(audit_path))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical exempt audit fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.none? { |message| message.include?("rejected working name remains: Mara Quill") },
+      "preserves the exact rejected-name exemption for an audit-only historical blob",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    shared_bytes = "Mara Quill\n"
+    fixture_write(root, "docs/NAMING_AND_ORIGINALITY_AUDIT.md", shared_bytes)
+    fixture_write(root, "deleted-nonexempt-copy.txt", shared_bytes)
+    fixture_commit!(root, "historical mixed-path reuse fixture")
+    FileUtils.rm(root.join("docs/NAMING_AND_ORIGINALITY_AUDIT.md"))
+    FileUtils.rm(root.join("deleted-nonexempt-copy.txt"))
+    fixture_write(root, "safe.txt", "safe current replacement\n")
+    fixture_commit!(root, "delete historical mixed-path reuse fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history blob") &&
+          message.include?("rejected working name remains: Mara Quill")
+      end,
+      "rejects an exempt blob reused by any nonexempt historical path",
       errors.join("; ")
     )
   end
@@ -879,13 +1002,34 @@ def run_public_hygiene_self_tests
   with_fixture_repo do |root|
     fixture_write(root, "safe.txt", "safe public text\n")
     fixture_commit!(root, "safe baseline")
-    fixture_git!(root, "tag", "-a", "safe-tag", "-m", "credential=#{token}")
+    fixture_write(root, "safe.txt", "safe public text after commit-message fixture\n")
+    fixture_commit!(root, "credential=#{token}; retired name Qorrum")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("history commit") && message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history commit") &&
+          message.include?("rejected working name remains: Qorrum")
+      end,
+      "rejects secret and working-name text retained in a reachable commit payload",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe baseline")
+    fixture_git!(root, "tag", "-a", "safe-tag", "-m", "credential=#{token}; retired name Vantrel")
     errors = validate_public_hygiene(root)
     assert.call(
       errors.any? do |message|
         message.include?("history tag") && message.include?("possible GitHub token")
+      end && errors.any? do |message|
+        message.include?("history tag") &&
+          message.include?("rejected working name remains: Vantrel")
       end,
-      "rejects a secret retained in a reachable annotated-tag payload",
+      "rejects secret and working-name text retained in an annotated-tag payload",
       errors.join("; ")
     )
   end
