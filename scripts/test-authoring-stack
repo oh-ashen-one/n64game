@@ -1,6 +1,11 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+if [ -L "$0" ]; then
+  /bin/echo "authoring test entrypoint must not be invoked through a symlink" >&2
+  exit 1
+fi
+SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && /bin/pwd -P)"
+ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && /bin/pwd -P)"
+CDPATH= cd -- "$ROOT"
 exec /usr/bin/python3 -I -B -m unittest discover -s test/authoring -p 'test_*.py' -v

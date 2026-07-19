@@ -60,6 +60,12 @@ class LfsAttributeTests(unittest.TestCase):
         self.assertNotIn("*.png", patterns)
         self.assertNotIn("*.mp4", patterns)
 
+    def test_authoring_receipts_are_explicit_lf_text_not_lfs(self) -> None:
+        self.assertEqual(
+            self.attributes("review/echo.quarrune/g2/AUTHORING_STACK_RECEIPT.txt"),
+            {"filter": "unspecified", "diff": "unspecified", "merge": "unspecified", "text": "set"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

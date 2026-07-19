@@ -1,0 +1,57 @@
+{
+  "branch": "move_pair",
+  "payload": {
+    "capture_has_audio": true,
+    "children": [
+      {
+        "asset_id": "sfx.move.quarrune.ridge_ram",
+        "build_id": "benchmark-pair-fixture",
+        "gate_record_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "gates": [
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass"
+        ],
+        "output_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "status": "approved"
+      },
+      {
+        "asset_id": "vfx.move.quarrune.ridge_ram",
+        "build_id": "benchmark-pair-fixture",
+        "gate_record_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "gates": [
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass",
+          "pass"
+        ],
+        "output_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "status": "approved"
+      }
+    ],
+    "measurement": {
+      "build_id": "benchmark-pair-fixture",
+      "capture_path": "review/pairs/quarrune.ridge_ram/SYNC_CAPTURE.mp4",
+      "capture_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "measured_at": "2026-07-19T12:02:00Z",
+      "pair_key": "quarrune.ridge_ram",
+      "sync_error_ms": "17"
+    },
+    "pair_key": "quarrune.ridge_ram",
+    "proof": {
+      "build_id": "benchmark-pair-fixture",
+      "capture_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "decided_at": "2026-07-19T12:03:00Z",
+      "pair_key": "quarrune.ridge_ram",
+      "sync_error_ms": "17"
+    }
+  },
+  "schema": "n64game-production-lifecycle-fixture-v1"
+}

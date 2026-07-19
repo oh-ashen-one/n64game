@@ -35,12 +35,14 @@ The Gate 3 bootstrap check is observational: it reports architecture, free disk,
 make validate  # pins, data/contracts, asset lock, public hygiene
 make assets    # asset-production contract plus Gate 3 empty runtime manifest
 make rom       # clean immutable-container build
-make test      # Gate 3 build tests plus Gate 4 lifecycle semantic snapshots/tamper tests; not approval evidence
+make test      # Gate 3 build tests plus Gate 4 semantic and shared-kernel lifecycle branch/death tests; not approval evidence
 make authoring-check # exact installed Blender/Fast64 check; macOS authoring host only
 make test-authoring  # portable unit/tamper tests for the authoring checker
 make report    # ROM checksum, header/size, map, dependency and validation reports
 make clean     # remove ignored build/ plus the one transient root ROM staging path
 ```
+
+The production lifecycle is split at an explicit normalized-record boundary. `lib/n64game/asset_lifecycle_contract.rb` is the pure Ruby kernel called by the live populated, approved, repair, generated-child, move-pair, H2, and release validator paths; `scripts/test-asset-lifecycle-production` runs those seven entrypoints plus twelve fail-closed death mutations from the byte-bound manifest under `test/fixtures/asset_lifecycle_production/`. Its receipt says `live_adapter_coverage=EXCLUDED_BY_DESIGN`: public GitHub/API state, signed tags, LFS materialization, media decode, Ares execution, and ROM rebuild remain mandatory live-validator adapters and are never synthesized by the runner. Independent audit accepted the boundary, exact callsite coupling, controlled malformed-input behavior, profile/gate semantics, and fresh-clone execution. `PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED=true` now binds manifest SHA-256 `af9b403081b175e9977ad0b6748d19f9c3220f1a58b8d12d5242b27a8ab750d6`; this satisfies only the lifecycle-harness prerequisite and does not bypass any payload, evidence, release, performance, or approval requirement.
 
 `scripts/build-rom` starts by deleting only the resolved repository `build/` path and the exact transient root-level `n64game-gate3.z64` staging path used by libdragon's upstream make rule. It exports each pinned submodule through `git archive` into `build/deps/`, so generated headers and dependency objects never dirty the public gitlinks. CLI 12.2.1 creates or starts the digest-addressed container; the wrapper then verifies its running state, exact image identity, and one expected read-write project mount before invoking the audited project build with Docker. The wrapper resolves the positive `SOURCE_DATE_EPOCH` from the trusted host checkout and passes that value into the container, so the container never needs to weaken Git ownership checks for differently presented bind mounts. Direct `libdragon exec` is intentionally avoided because its fresh-container recovery path silently runs the vendor's broader `build.sh` before the requested command. The audited container entrypoint installs the pinned libdragon library/tools, builds Tiny3D locally, and compiles the project with warnings as errors.
 
@@ -137,6 +139,27 @@ scripts/check-authoring-stack \
 ```
 
 Without those optional arguments, the report labels each archive `NOT_SUPPLIED_PIN_RECORDED`; this is not a claim that the archive was re-hashed during that run. The installed executable and add-on still must pass. Use `--json` for a machine-readable host observation. That path-bearing observation is not a Gate 2 or Gate 5 per-asset approval receipt and cannot unlock a production row; the asset pipeline must separately bind an exact stack pass to the reviewed source, output manifest, build, and gate evidence. Run `make test-authoring` for portable positive, wrong-version, missing-add-on, symlink, bytecode/updater-state, contaminated-interpreter/environment, deep-signature-command, disabled-add-on, and byte-tamper tests.
+
+For a canonical `RIGGED_MODEL`, `STATIC_MODEL_ENV`, or `ANIMATION` asset—or any other canonical asset whose transitive source-manifest closure owns a `.blend` file—the binding is an exact per-asset receipt at both Gate 2 and Gate 5. Produce the source-stage record only after the canonical source manifest exists:
+
+```sh
+scripts/record-authoring-stack-receipt g2 --scope echo.quarrune
+```
+
+Gate 5 may not create a receipt after an unrelated manual export. Wrap the deterministic converter so the exact stack is checked before and after the command, the output manifest is materialized by that command, and only then the receipt is written:
+
+```sh
+scripts/record-authoring-stack-receipt g5-export \
+  --scope echo.quarrune \
+  --build-id n64game-g4-6531e405 \
+  -- --deterministic
+```
+
+The destination is fixed as `review/<scope>/g2/AUTHORING_STACK_RECEIPT.txt` or `review/<scope>/g5/AUTHORING_STACK_RECEIPT.txt`. An intentional replacement after a new source/build check additionally uses `--replace`; silent overwrite is rejected. The record contains exactly 14 ordered fields: schema, scope, gate, source/output hashes, build, reviewed toolchain-lock hash, checker-bundle hash, Blender/Fast64 pins and seals, result, and check time. G2 binds output `NONE` and build `-`; G5 binds the exact current output-manifest digest and substantive clean-build ID. The G5 producer strips Python injection state and refuses a missing, symlinked, non-executable, failing, or stack-changing exporter. It accepts no caller-selected executable: only the reviewed repository path `scripts/export-gate5-asset` is legal. That exporter is intentionally absent while its clean staged-output protocol is still being implemented. In addition, both producer and consumer freeze `GATE5_EXPORT_IMPLEMENTED=false` and `APPROVED_GATE5_EXPORTER_SHA256=PENDING`; merely adding a file—even an executable at the canonical path—cannot unlock G5. A reviewed implementation must atomically stage real output, be assigned an exact SHA-256, enter the frozen checker bundle, flip the implementation gate, and update the consumer pin in one audited change.
+
+`checker_sha256` is not the digest of the five-line wrapper alone. It is SHA-256 over the domain line `n64game-authoring-checker-bundle-v1`, followed by sorted `path<TAB>sha256<LF>` rows for `scripts/check-authoring-stack`, `scripts/record-authoring-stack-receipt`, `tools/n64game_authoring.py`, and `tools/n64game_authoring_receipt.py`. The production validator recomputes that bundle and `config/toolchain.lock.json` from the exact reviewed historical commit. It verifies the frozen Blender/Fast64 identities, exact gate source/output/build bindings, strict timestamp ordering, and direct evidence ownership. Each receipt is one ordinary-Git text member of only its own G2/G5 `EVIDENCE_MANIFEST.sha256` at role `authoring.stack_receipt`; it is never owned by `OUTPUT_MANIFEST.sha256`, another gate, a rollup, or multiple manifests.
+
+The receipt is deterministic workflow evidence, not a standalone cryptographic claim that can defeat a malicious repository author: its fields are public and therefore could be hand-written. Acceptance also requires the independently reviewed gate graph, the complete deterministic conversion/in-engine evidence, and the signed public benchmark approval whose pinned external key covers the payload bytes. Until that trust anchor and the canonical clean-staging exporter exist, the receipt cannot by itself unlock G5 or global approval. The validator freezes the full approved lock-file and checker/producer-bundle digests so ordinary code/pin drift cannot self-authorize a matching receipt.
 
 ## Public CI
 
