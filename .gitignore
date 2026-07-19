@@ -35,6 +35,7 @@ filesystem/
 # generated Tiny3D files everywhere else remain ignored.
 !review/**/*.t3dm
 !review/**/*.sdata
+!review/**/*.sprite
 *.wav64
 *.xm64
 *.z64

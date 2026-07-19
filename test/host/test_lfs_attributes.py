@@ -38,6 +38,7 @@ class LfsAttributeTests(unittest.TestCase):
             "review/benchmark/evidence/capture_60s/REPRESENTATIVE_60S.mp4",
             "review/echo.quarrune/g5/quarrune_hero.t3dm",
             "review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata",
+            "review/echo.quarrune/g5/tex_quarrune_body_ci8_64x64.sprite",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -69,10 +70,13 @@ class LfsAttributeTests(unittest.TestCase):
         )
 
     def test_skeleton_binding_is_explicit_lf_text_not_lfs(self) -> None:
-        self.assertEqual(
-            self.attributes("review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv"),
-            {"filter": "unspecified", "diff": "unspecified", "merge": "unspecified", "text": "set"},
-        )
+        expected = {"filter": "unspecified", "diff": "unspecified", "merge": "unspecified", "text": "set"}
+        for path in (
+            "review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv",
+            "review/echo.quarrune/g5/RUNTIME_BINDING.tsv",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self.attributes(path), expected)
 
     def test_gate5_tiny3d_review_snapshots_are_not_ignored(self) -> None:
         paths = (
@@ -81,6 +85,10 @@ class LfsAttributeTests(unittest.TestCase):
             "review/anm.echo.quarrune/g5/anm_echo_quarrune.t3dm",
             "review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata",
             "review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv",
+            "review/echo.quarrune/g5/tex_quarrune_body_ci8_64x64.sprite",
+            "review/echo.quarrune/g5/tex_quarrune_accent_ci4_32x32.sprite",
+            "review/echo.quarrune/g5/tex_quarrune_blob_shadow_ia8_32x32.sprite",
+            "review/echo.quarrune/g5/RUNTIME_BINDING.tsv",
         )
         result = subprocess.run(
             ["git", "check-ignore", "--no-index", "--", *paths],
@@ -93,7 +101,10 @@ class LfsAttributeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
         generated = subprocess.run(
-            ["git", "check-ignore", "--no-index", "scratch/generated.t3dm", "scratch/generated.sdata"],
+            [
+                "git", "check-ignore", "--no-index", "scratch/generated.t3dm",
+                "scratch/generated.sdata", "scratch/generated.sprite",
+            ],
             cwd=ROOT,
             text=True,
             stdout=subprocess.PIPE,
@@ -102,7 +113,8 @@ class LfsAttributeTests(unittest.TestCase):
         )
         self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
         self.assertEqual(
-            generated.stdout.splitlines(), ["scratch/generated.t3dm", "scratch/generated.sdata"]
+            generated.stdout.splitlines(),
+            ["scratch/generated.t3dm", "scratch/generated.sdata", "scratch/generated.sprite"],
         )
 
 

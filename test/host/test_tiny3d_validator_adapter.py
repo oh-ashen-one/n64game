@@ -10,10 +10,12 @@ from copy import deepcopy
 from pathlib import Path
 
 from test_tiny3d_package_contract import (
+    BODY_TEXTURE_PATH,
     ANIMATION_HEADER_PATH,
     BINDING_PATH,
     BUILD_ID,
     MODEL_PATHS,
+    RUNTIME_BINDING_PATH,
     STREAM_PATHS,
     fixture,
 )
@@ -25,6 +27,10 @@ MODEL_MANIFEST = "review/echo.quarrune/g5/OUTPUT_MANIFEST.sha256"
 ANIMATION_MANIFEST = "review/anm.echo.quarrune/g5/OUTPUT_MANIFEST.sha256"
 MODEL_MANIFEST_SHA = "a" * 64
 ANIMATION_MANIFEST_SHA = "b" * 64
+RUNTIME_HELPER_PATHS = (
+    "src/quarrune_render_assets.c",
+    "src/quarrune_render_assets.h",
+)
 
 
 class Tiny3DValidatorAdapterTests(unittest.TestCase):
@@ -54,20 +60,26 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
         executable_path: str | None = None,
         omit_lfs_object: str | None = None,
         extra_git_blobs: dict[str, bytes] | None = None,
+        runtime_helper_modes: dict[str, str] | None = None,
     ) -> str:
         env = self.git_env()
         subprocess.run(["git", "init", "-q"], cwd=self.repo, env=env, check=True)
         attributes = (
             "review/**/*.t3dm filter=lfs diff=lfs merge=lfs -text\n"
             "review/**/*.sdata filter=lfs diff=lfs merge=lfs -text\n"
+            "review/**/*.sprite filter=lfs diff=lfs merge=lfs -text\n"
             "review/**/SKELETON_BINDING.tsv text eol=lf\n"
+            "review/**/RUNTIME_BINDING.tsv text eol=lf\n"
         ).encode()
         blobs: dict[str, tuple[bytes, str]] = {".gitattributes": (attributes, "100644")}
+        helper_modes = runtime_helper_modes or {}
+        for path in RUNTIME_HELPER_PATHS:
+            blobs[path] = ((ROOT / path).read_bytes(), helper_modes.get(path, "100644"))
         materialized = values["bytes"]
         assert isinstance(materialized, dict)
         for path, raw in materialized.items():
             assert isinstance(path, str) and isinstance(raw, bytes)
-            if path == BINDING_PATH:
+            if path in (BINDING_PATH, RUNTIME_BINDING_PATH):
                 blob = raw
             elif path == ordinary_binary:
                 blob = raw
@@ -84,7 +96,7 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
                     location.write_bytes(raw)
             blobs[path] = (blob, "100755" if path == executable_path else "100644")
         for path, blob in (extra_git_blobs or {}).items():
-            blobs[path] = (blob, "100644")
+            blobs[path] = (blob, helper_modes.get(path, "100644"))
 
         for path, (blob, mode) in blobs.items():
             oid = subprocess.run(
@@ -137,14 +149,14 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
         split_context: bool = False,
         primary_digest_overrides: dict[str, str] | None = None,
         duplicate_fallback: bool = False,
-        nested_relevant: bool = False,
+        nested_relevant: str | None = None,
     ) -> list[str]:
         primary = self.context(values, include_model=True, include_animation=not split_context)
         if primary_digest_overrides:
             primary["manifest_digests"].update(primary_digest_overrides)
         if nested_relevant:
             direct = primary["manifests"][MODEL_MANIFEST]
-            nested = next(entry for entry in direct if entry["path"] == MODEL_PATHS[1])
+            nested = next(entry for entry in direct if entry["path"] == nested_relevant)
             direct.remove(nested)
             primary["manifests"][MODEL_PATHS[0]] = [nested]
         fallback = None
@@ -230,10 +242,30 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
             )
         return ("\n".join(lines) + "\n").encode()
 
-    def test_real_adapter_materializes_canonical_lfs_pair(self) -> None:
+    def test_real_adapter_materializes_canonical_lfs_pair_and_reviewed_runtime_helpers(self) -> None:
         values = fixture()
         commit = self.commit_materialized_files(values)
         self.assertEqual(self.adapter(values, commit), [])
+
+    def test_adapter_rejects_tampered_or_executable_reviewed_runtime_helper(self) -> None:
+        values = fixture()
+        tampered = (ROOT / RUNTIME_HELPER_PATHS[0]).read_bytes() + b"\n/* unapproved test mutation */\n"
+        commit = self.commit_materialized_files(
+            values, extra_git_blobs={RUNTIME_HELPER_PATHS[0]: tampered}
+        )
+        issues = self.adapter(values, commit)
+        self.assertTrue(
+            any("reviewed runtime-helper bundle SHA-256 differs" in issue for issue in issues),
+            issues,
+        )
+
+        self.tearDown()
+        self.setUp()
+        commit = self.commit_materialized_files(
+            values, runtime_helper_modes={RUNTIME_HELPER_PATHS[1]: "100755"}
+        )
+        issues = self.adapter(values, commit)
+        self.assertTrue(any("ordinary Git mode 100644" in issue for issue in issues), issues)
 
     def test_changed_postapproval_split_context_revalidates_historical_counterpart(self) -> None:
         values = fixture()
@@ -263,8 +295,10 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
         )
         self.assertTrue(any("digest differs from the selected lifecycle row" in issue for issue in issues), issues)
 
-        issues = self.adapter(values, commit, nested_relevant=True)
-        self.assertTrue(any("must be a direct output-manifest member" in issue for issue in issues), issues)
+        for path in (MODEL_PATHS[1], BODY_TEXTURE_PATH, RUNTIME_BINDING_PATH):
+            with self.subTest(nested_path=path):
+                issues = self.adapter(values, commit, nested_relevant=path)
+                self.assertTrue(any("must be a direct output-manifest member" in issue for issue in issues), issues)
 
     def test_real_manifests_populate_context_before_pair_adapter(self) -> None:
         values = fixture()
@@ -322,8 +356,8 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
     def test_adapter_rejects_missing_lfs_object_ordinary_binary_and_executable(self) -> None:
         cases = (
             ("missing_object", {"omit_lfs_object": MODEL_PATHS[1]}, "LFS object is not retrievable/valid"),
-            ("ordinary_binary", {"ordinary_binary": ANIMATION_HEADER_PATH}, "filter=lfs but reviewed blob is not"),
-            ("executable", {"executable_path": STREAM_PATHS[0]}, "mode 100644"),
+            ("ordinary_sprite", {"ordinary_binary": BODY_TEXTURE_PATH}, "filter=lfs but reviewed blob is not"),
+            ("executable_sprite", {"executable_path": BODY_TEXTURE_PATH}, "mode 100644"),
         )
         for name, kwargs, expected in cases:
             with self.subTest(case=name):
@@ -345,11 +379,13 @@ class Tiny3DValidatorAdapterTests(unittest.TestCase):
             self.assertIn(label, validator)
         self.assertEqual(validator.count("validate_quarrune_tiny3d_pair("), 5)  # definition + four calls
         self.assertIn('require ROOT.join("lib/n64game/tiny3d_package_contract").to_s', validator)
+        self.assertIn('require ROOT.join("lib/n64game/libdragon_sprite_contract").to_s', validator)
         self.assertIn("fallback_context: historical_context", validator)
         lock = (ROOT / "lib/n64game/authoring_stack_receipt.rb").read_text(encoding="utf-8")
         self.assertIn("GATE5_EXPORT_IMPLEMENTED = false", lock)
         self.assertIn('APPROVED_GATE5_EXPORTER_SHA256 = "PENDING"', lock)
         self.assertIn('"lib/n64game/tiny3d_package_contract.rb"', lock)
+        self.assertIn('"lib/n64game/libdragon_sprite_contract.rb"', lock)
         self.assertIn('"scripts/validate-asset-contract"', lock)
 
 

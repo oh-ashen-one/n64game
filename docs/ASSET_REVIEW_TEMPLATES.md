@@ -375,13 +375,14 @@ Gate 5 has zero unexplained warnings. Writing “harmless” without a reproduce
 
 This preflight is mandatory for `echo.quarrune` plus `anm.echo.quarrune`, but passing it is not a Gate-5 visual or production pass. The canonical paths, roles, stream order, binding keys, and byte-level checks are defined in `docs/TOOLCHAIN.md` under “Quarrune Tiny3D package prerequisite.”
 
-- [ ] Hero and distance T3DM files, animation-header T3DM, all nine ordered `.sdata` streams, and `SKELETON_BINDING.tsv` are direct members of their exact owner manifests with one substantive shared build ID.
-- [ ] T3DM and stream members are mode-`100644` canonical Git LFS objects retrievable from the reviewed public commit; the binding is mode-`100644` ordinary UTF-8/LF Git text.
-- [ ] The bounds-checked v4 reader reports no header, chunk, padding, vertex-cache, index/strip/sequence, BVH, material, skeleton, animation-mapping, compressed-stream, or cross-file binding defect.
+- [ ] Hero/distance T3DM files, all three canonical `.sprite` files, `RUNTIME_BINDING.tsv`, animation-header T3DM, all nine ordered `.sdata` streams, and `SKELETON_BINDING.tsv` are direct members of their exact owner manifests with one substantive shared build ID.
+- [ ] T3DM, stream, and sprite members are mode-`100644` canonical Git LFS objects retrievable from the reviewed public commit; both bindings are mode-`100644` ordinary UTF-8/LF Git text.
+- [ ] The bounds-checked v4 and raw-sprite-v6 readers report no header, chunk, padding, vertex-cache, packed-UV, index/strip/sequence, BVH, material/slot/combiner, skeleton, animation-mapping, compressed-stream, palette, alpha-mask, TMEM, or cross-file binding defect.
 - [ ] Hero, distance, and animation header decode to the identical exact 20-joint name/order/topology/rest-SRT signature; every exported mesh part binds one real Quarrune joint and no unweighted `0xffff` part is accepted.
-- [ ] The package contains no extra/nested `.t3dm` or `.sdata`, reserved-role alias, cross-owner stream, missing LFS object, executable binary, or digest-correct stale binding.
-- [ ] Separately prove the inventory mesh budgets/ratio, exactly three used materials, 64×64 CI8 plus 32×32 CI4 package, texture/palette correctness, authored blob shadow, silhouette/deformation finish, and native in-engine quality. The package preflight cannot substitute for those checks.
-- [ ] Do not add or claim a review `.sprite` until its canonical filename, owner role, pixel/palette semantics, LFS policy, and pinned bounds-checked decoder are specified and tested.
+- [ ] The package contains no extra/nested `.t3dm`, `.sdata`, or `.sprite`, reserved-role alias, cross-owner stream, missing LFS object, executable binary, or digest-correct stale binding.
+- [ ] Hero/distance triangle bands and ratio, exactly three used TILE0 materials, TEX0×SHADE point-filter state, non-collapsed region-local UVs, exact dynamic body IDs, static accent ROM path, palette floors, and authored connected IA8 shadow all pass.
+- [ ] The reviewed-commit runtime helper C/H files are ordinary mode-`100644` Git bytes whose computed bundle hash matches `RUNTIME_BINDING.tsv`; a pinned MIPS build compiles the exact 64×32 sub-surface route, every dynamic bind disables mipmapping and uploads the shared CI8 TLUT, both dynamic references execute before callback health passes, the full 64×64 CI8 atlas is never whole-uploaded, and recorded-block lifetime retention prevents teardown from freeing replayable texture memory.
+- [ ] Separately prove byte-for-byte sprite regeneration from the canonical source PNGs, silhouette/deformation finish, palette craft, seam treatment, native in-engine quality, seven visual gates, and both H2 polish passes. The package preflight cannot substitute for those checks.
 - [ ] Confirm the canonical clean-staging exporter exists, is hash-pinned, and both implementation locks are deliberately changed in the same reviewed revision. While the exporter is absent, its hash is `PENDING`, or `GATE5_EXPORT_IMPLEMENTED=false`, Gate 5 remains locked regardless of package-parser success.
 
 ## 8. Gate 6 — In-engine review
