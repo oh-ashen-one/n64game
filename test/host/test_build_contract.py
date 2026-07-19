@@ -18,6 +18,12 @@ import n64game_build as build  # noqa: E402
 
 
 class BuildContractTests(unittest.TestCase):
+    def test_canonical_host_runner_is_python_isolated_and_bytecode_free(self) -> None:
+        self.assertEqual(sys.flags.isolated, 1)
+        self.assertEqual(sys.flags.ignore_environment, 1)
+        self.assertEqual(sys.flags.no_user_site, 1)
+        self.assertEqual(sys.flags.dont_write_bytecode, 1)
+
     @staticmethod
     def pinned_rom_fixture() -> bytearray:
         ipl3_source = (ROOT / "vendor" / "libdragon" / "tools" / "ipl3.h").read_text(encoding="utf-8")
@@ -64,7 +70,14 @@ class BuildContractTests(unittest.TestCase):
             target.write_bytes(data)
             link.symlink_to(target)
             result = subprocess.run(
-                [sys.executable, str(ROOT / "tools" / "n64game_build.py"), "validate-rom", str(link)],
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    str(ROOT / "tools" / "n64game_build.py"),
+                    "validate-rom",
+                    str(link),
+                ],
                 cwd=ROOT,
                 text=True,
                 stdout=subprocess.PIPE,

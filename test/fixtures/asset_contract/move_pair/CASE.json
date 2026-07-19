@@ -1,0 +1,46 @@
+{
+  "case": "move_pair",
+  "pair": {
+    "capture": {
+      "aspect": "4:3",
+      "audio": true,
+      "codec": "h264",
+      "fps": 30
+    },
+    "children": [
+      {
+        "asset_id": "sfx.move.quarrune.ridge_ram",
+        "evidence_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+        "gates": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "source_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+        "status": "approved"
+      },
+      {
+        "asset_id": "vfx.move.quarrune.ridge_ram",
+        "evidence_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+        "gates": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "source_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+        "status": "approved"
+      }
+    ],
+    "pair_proof": "review/pairs/quarrune.ridge_ram/PAIR_SYNC_PROOF.tsv",
+    "sync_error_ms": 17
+  },
+  "schema": "n64game-asset-lifecycle-case-v1"
+}

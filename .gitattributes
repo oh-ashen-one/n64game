@@ -5,6 +5,13 @@
 *.psd filter=lfs diff=lfs merge=lfs -text
 *.kra filter=lfs diff=lfs merge=lfs -text
 
+# Gate 4+ source and review media must materialize through LFS without
+# retroactively reclassifying the immutable ordinary-Git Gate 3 captures.
+assets-src/**/*.png filter=lfs diff=lfs merge=lfs -text
+assets-src/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+review/**/*.png filter=lfs diff=lfs merge=lfs -text
+review/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+
 # Keep text artifacts reviewable across platforms.
 *.md text eol=lf
 *.c text eol=lf

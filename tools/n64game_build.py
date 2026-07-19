@@ -30,9 +30,9 @@ LIBDRAGON_IPL3_END = 6444
 LIBDRAGON_IPL3_PAYLOAD_SHA256 = "587926030874012808dc2645a2eae0106b180f24892154eaded270ae3abbfcc9"
 TOC_OFFSET = (LIBDRAGON_IPL3_END + 15) & ~15
 EXPECTED_HOST_TEST_REPORT = (
-    "suite=gate3_build_contract\n"
+    "suite=gate3_build_and_gate4_contracts\n"
     "result=PASS\n"
-    "scope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest; gameplay suites begin at Gate 5\n"
+    "scope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest, Gate 4 lifecycle semantic snapshot and tamper suite (not approval evidence); gameplay suites begin at Gate 5\n"
 )
 
 
@@ -268,7 +268,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
     host_report = reports / "host-tests.txt"
     host_info = required_nonempty_file(host_report, "host test report")
     if host_report.read_text(encoding="utf-8") != EXPECTED_HOST_TEST_REPORT:
-        raise ContractError("host test report is not the exact Gate 3 PASS contract")
+        raise ContractError("host test report is not the exact Gate 3 build plus Gate 4 semantic-contract PASS record")
     host_status = "PASS"
     manifest = {
         "schema_version": 1,

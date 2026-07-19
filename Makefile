@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := rom
 
-.PHONY: clean assets test rom validate report
+.PHONY: clean assets test test-authoring authoring-check rom validate report
 
 clean:
 	scripts/clean-build
@@ -12,6 +12,12 @@ assets:
 
 test:
 	scripts/test-host
+
+test-authoring:
+	scripts/test-authoring-stack
+
+authoring-check:
+	scripts/check-authoring-stack
 
 rom:
 	scripts/build-rom

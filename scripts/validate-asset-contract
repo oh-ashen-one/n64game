@@ -313,12 +313,14 @@ REPORT_ANALYZER_ID = "n64game-evidence-analyzer".freeze
 REPORT_ANALYZER_VERSION = "1.0.0".freeze
 PINNED_MAGICK_VERSION = "Version: ImageMagick 7.1.2-13 ".freeze
 PINNED_ARES_148_BINARY_SHA256 = "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345".freeze
-APPROVED_LIFECYCLE_FIXTURE_SHA256 = "PENDING".freeze
-APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH = "test/fixtures/asset_contract/APPROVED_LIFECYCLE_MANIFEST.sha256".freeze
-APPROVED_LIFECYCLE_FIXTURE_RUNNER_PATH = "scripts/test-asset-contract-lifecycle".freeze
-APPROVED_LIFECYCLE_FIXTURE_CASES = %w[
+SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256 = "e0b0e632f7ebd49f48fd8e8a4cd94c682cf9e6d0d0cd3addbf05fb42c84622b0".freeze
+SEMANTIC_LIFECYCLE_SNAPSHOT_MANIFEST_PATH = "test/fixtures/asset_contract/LIFECYCLE_SNAPSHOT_MANIFEST.sha256".freeze
+SEMANTIC_LIFECYCLE_SNAPSHOT_RUNNER_PATH = "scripts/test-asset-contract-lifecycle".freeze
+SEMANTIC_LIFECYCLE_SNAPSHOT_CASES = %w[
   populated approved repair generated_child move_pair h2 release
 ].freeze
+PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = false
+PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "PENDING".freeze
 PRIOR_BASELINE_FIELDS = [
   "Prior approved attestation ref", "Prior approved attestation tag object ID",
   "Prior approved control Git commit", "Prior approved payload Git commit",
@@ -334,6 +336,13 @@ ROLLUP_SPECS = [
   ["Benchmark-sector Gate 1–7 record path", "Benchmark-sector gate-record SHA-256", "review/benchmark/rollups/sector/GATE_RECORD.tsv", "rollup.sector", "STATIC_MODEL_ENV", "H2"],
   ["Integrated-presentation Gate 1–7 record path", "Integrated-presentation gate-record SHA-256", "review/benchmark/rollups/presentation/GATE_RECORD.tsv", "rollup.presentation", "UI_FONT_IMAGE", "H2"]
 ].freeze
+BENCHMARK_WHITELIST_COUNT = 52
+BENCHMARK_ROLLUP_COUNT = ROLLUP_SPECS.length
+BENCHMARK_GATE_DECISION_COUNT = (BENCHMARK_WHITELIST_COUNT + BENCHMARK_ROLLUP_COUNT) * 7
+BENCHMARK_SUPPORTING_ACTORS = %w[ayselor gyreclast kivarrax].freeze
+BENCHMARK_SUPPORTING_PAIRS = BENCHMARK_SUPPORTING_ACTORS.flat_map do |actor|
+  ["echo.#{actor}", "anm.echo.#{actor}"]
+end.freeze
 AGGREGATE_PAIR_FIELDS = [
   ["Payload manifest path", "Payload manifest SHA-256"],
   ["Whitelist/gate registry path", "Whitelist/gate registry SHA-256"],
@@ -405,6 +414,12 @@ APPROVAL_EVIDENCE_DESCRIPTION = "signed annotated origin tag attesting separate 
 PARTIAL_SUBSET_SELECTOR_POLICY = {
   "chr.player.ari" => %w[ASSET:blob_shadow_socket ASSET:body_texture ASSET:distance_model ASSET:face_texture ASSET:focus_socket ASSET:hero_model ASSET:rig],
   "echo.quarrune" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:hero_model ASSET:rig ASSET:texture CLIP:brace_relay CLIP:entrance CLIP:hit CLIP:horizon_break CLIP:idle_a CLIP:idle_b CLIP:knockout CLIP:reposition CLIP:ridge_ram],
+  "echo.ayselor" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture],
+  "anm.echo.ayselor" => %w[CLIP:hit CLIP:idle_a CLIP:reposition],
+  "echo.gyreclast" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture],
+  "anm.echo.gyreclast" => %w[CLIP:hit CLIP:idle_a CLIP:reposition],
+  "echo.kivarrax" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture],
+  "anm.echo.kivarrax" => %w[CLIP:hit CLIP:idle_a CLIP:reposition],
   "env.annex.atrium_lower" => %w[SECTOR:atrium_lower.sim_threshold_corner],
   "col.annex.atrium_lower" => %w[SECTOR:atrium_lower.sim_threshold_corner],
   "col.common.camera_volumes" => %w[STATE:benchmark_battle_clamps STATE:benchmark_exploration_clamps],
@@ -500,7 +515,7 @@ EVIDENCE_SPECS = {
     metrics: %w[baseline_heap_bytes heap_delta_bytes post_reload_heap_bytes resource_delta_count]
   },
   "ev.benchmark.gates" => {
-    roles: ["evidence_record", "gates.report"] + (1..46).map { |index| format("gate.wb%03d", index) } + %w[rollup.player rollup.quarrune rollup.sector rollup.presentation],
+    roles: ["evidence_record", "gates.report"] + (1..BENCHMARK_WHITELIST_COUNT).map { |index| format("gate.wb%03d", index) } + %w[rollup.player rollup.quarrune rollup.sector rollup.presentation],
     captures: [],
     metrics: %w[gate_decisions_complete integrated_rollups whitelist_vectors]
   },
@@ -554,7 +569,7 @@ EVIDENCE_ROLE_CAPTURES = {
   "ev.benchmark.performance" => { "evidence_record" => "-", "performance.report" => "-" },
   "ev.benchmark.unload_reload" => { "evidence_record" => "-", "unload.report" => "-" },
   "ev.benchmark.gates" => { "evidence_record" => "-", "gates.report" => "-" }.merge(
-    (1..46).to_h { |index| [format("gate.wb%03d", index), "-"] }
+    (1..BENCHMARK_WHITELIST_COUNT).to_h { |index| [format("gate.wb%03d", index), "-"] }
   ).merge(
     "rollup.player" => "-", "rollup.quarrune" => "-", "rollup.sector" => "-", "rollup.presentation" => "-"
   ),
@@ -1811,9 +1826,11 @@ def run_hardening_self_test(data_schemas, verbose: false)
       ARES_RUN_HEADER.include?(field)
     end && ARES_EXECUTION_EVENTS.include?("BOOT_READY")
   end
-  check.call("approval remains fail closed without audited fixture and Ares pins") do
-    !approval_lifecycle_pins_ready?("PENDING", "PENDING") &&
-      approval_lifecycle_pins_ready?("a" * 64, "b" * 64)
+  check.call("semantic lifecycle snapshots cannot satisfy the production approval harness gate") do
+    SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256.match?(HEX64) &&
+      !PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED &&
+      !PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64) &&
+      !approval_lifecycle_pins_ready?
   end
   check.call("generated camera review snapshots stay outside the ignored build tree") do
     GENERATED_CAMERA_CHILDREN.keys.all? do |child_id|
@@ -3547,9 +3564,125 @@ def generated_source_basis_valid?(manifest_role, input_basis)
     %w[generated-provider-terms generated-self-owned].include?(input_basis)
 end
 
-def approval_lifecycle_pins_ready?(fixture_sha256 = APPROVED_LIFECYCLE_FIXTURE_SHA256,
-                                   ares_sha256 = PINNED_ARES_148_BINARY_SHA256)
-  fixture_sha256.match?(HEX64) && ares_sha256.match?(HEX64)
+def approval_lifecycle_pins_ready?
+  PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED &&
+    PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64) &&
+    PRODUCTION_LIFECYCLE_HARNESS_SHA256 != SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256 &&
+    PINNED_ARES_148_BINARY_SHA256.match?(HEX64)
+end
+
+def lifecycle_fixture_env
+  {
+    "PATH" => "/usr/bin:/bin",
+    "LANG" => "C.UTF-8",
+    "LC_ALL" => "C.UTF-8",
+    "PYTHONDONTWRITEBYTECODE" => "1",
+    "PYTHONNOUSERSITE" => "1"
+  }
+end
+
+def verify_local_lifecycle_semantic_snapshot_pin
+  label = "local lifecycle semantic-snapshot suite"
+  initial_error_count = ERRORS.length
+  unless SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256.match?(HEX64)
+    error("#{label} pin is not one lowercase SHA-256")
+    return
+  end
+
+  manifest = ROOT.join(SEMANTIC_LIFECYCLE_SNAPSHOT_MANIFEST_PATH)
+  runner = ROOT.join(SEMANTIC_LIFECYCLE_SNAPSHOT_RUNNER_PATH)
+  unless regular_without_symlink?(SEMANTIC_LIFECYCLE_SNAPSHOT_MANIFEST_PATH)
+    error("#{label} manifest is missing, non-regular, or symlinked")
+    return
+  end
+  observed_digest = Digest::SHA256.file(manifest).hexdigest
+  unless observed_digest == SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256
+    error("#{label} manifest SHA-256 is #{observed_digest}, expected #{SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256}")
+    return
+  end
+  raw = File.binread(manifest)
+  unless raw.end_with?("\n".b) && !raw.end_with?("\n\n".b) && !raw.include?("\r".b) &&
+         raw.dup.force_encoding(Encoding::UTF_8).valid_encoding?
+    error("#{label} manifest encoding/line endings are noncanonical")
+    return
+  end
+  lines = raw.split("\n".b, -1).tap(&:pop)
+  case_paths = SEMANTIC_LIFECYCLE_SNAPSHOT_CASES.to_h do |case_name|
+    [case_name, "test/fixtures/asset_contract/#{case_name}/CASE.json"]
+  end
+  expected_paths = ([SEMANTIC_LIFECYCLE_SNAPSHOT_RUNNER_PATH] + case_paths.values).sort
+  expected_roles = expected_paths.to_h do |path|
+    case_name = case_paths.key(path)
+    [path, case_name ? "role:semantic_snapshot.#{case_name}" : "role:semantic_snapshot.runner"]
+  end
+  observed_paths = []
+  lines.each_with_index do |line, index|
+    fields = line.split("\t".b, -1).map { |field| field.dup.force_encoding(Encoding::UTF_8) }
+    unless fields.length == 6
+      error("#{label} manifest row #{index + 1} must have six TAB fields")
+      next
+    end
+    member_path, byte_count, digest, build, capture, role = fields
+    unless safe_repo_path?(member_path) && byte_count.match?(/\A(?:0|[1-9][0-9]*)\z/) &&
+           digest.match?(HEX64) && build == "build:-" && capture == "capture:-"
+      error("#{label} manifest row #{index + 1} has an unsafe/noncanonical identity")
+      next
+    end
+    observed_paths << member_path
+    error("#{label} manifest role mismatch for #{member_path}") unless role == expected_roles[member_path]
+    unless regular_without_symlink?(member_path)
+      error("#{label} member is missing, non-regular, or symlinked: #{member_path}")
+      next
+    end
+    member = ROOT.join(member_path)
+    error("#{label} member count mismatch: #{member_path}") unless member.size == byte_count.to_i
+    error("#{label} member digest mismatch: #{member_path}") unless Digest::SHA256.file(member).hexdigest == digest
+  end
+  error("#{label} members are not the exact raw-byte path order") unless observed_paths == expected_paths
+
+  fixture_root = ROOT.join("test/fixtures/asset_contract")
+  observed_fixture_files = Dir.glob(fixture_root.join("**", "*").to_s, File::FNM_DOTMATCH).each_with_object([]) do |absolute, paths|
+    next if %w[. ..].include?(File.basename(absolute))
+    next unless File.file?(absolute) || File.symlink?(absolute)
+
+    paths << Pathname.new(absolute).relative_path_from(ROOT).to_s
+  end.sort
+  expected_fixture_files = ([SEMANTIC_LIFECYCLE_SNAPSHOT_MANIFEST_PATH] + case_paths.values).sort
+  error("#{label} fixture root contains missing, extra, or symlinked files") unless
+    observed_fixture_files == expected_fixture_files
+  unless ERRORS.length == initial_error_count && observed_paths == expected_paths &&
+         expected_paths.all? { |path| regular_without_symlink?(path) }
+    return
+  end
+  unless File.executable?(runner)
+    error("#{label} runner is not executable")
+    return
+  end
+
+  output, runner_error, status = Open3.capture3(
+    lifecycle_fixture_env, "/usr/bin/python3", "-I", runner.to_s,
+    "--json", "--fixture-manifest", manifest.to_s,
+    chdir: ROOT.to_s, unsetenv_others: true
+  )
+  unless status.success?
+    error("#{label} runner failed: #{runner_error.lines.first.to_s.strip}")
+    return
+  end
+  receipt = JSON.parse(output)
+  expected_receipt = {
+    "schema" => "n64game-asset-lifecycle-semantic-snapshots-v1",
+    "authority" => "NON_APPROVAL_SEMANTIC_SNAPSHOT",
+    "result" => "PASS",
+    "manifest_sha256" => SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256,
+    "cases" => SEMANTIC_LIFECYCLE_SNAPSHOT_CASES,
+    "topology" => "parallel_nonchronological_scenarios",
+    "cross_bindings" => ["approved->repair", "approved->release"]
+  }
+  error("#{label} receipt is not the exact semantic-snapshot result tuple") unless receipt == expected_receipt
+rescue JSON::ParserError => e
+  error("#{label} runner emitted invalid JSON: #{e.message}")
+rescue SystemCallError => e
+  error("#{label} could not execute: #{e.message}")
 end
 
 def canonical_ledger_owners(cell)
@@ -3850,9 +3983,9 @@ def metric_value_valid?(evidence_id, metric, value, unit)
   when "baseline_heap_bytes", "post_reload_heap_bytes" then unit == "bytes" && integer && integer.positive?
   when "heap_delta_bytes" then unit == "bytes" && integer == 0
   when "resource_delta_count" then unit == "count" && integer == 0
-  when "whitelist_vectors" then unit == "count" && integer == 46
-  when "integrated_rollups" then unit == "count" && integer == 4
-  when "gate_decisions_complete" then unit == "count" && integer == 350
+  when "whitelist_vectors" then unit == "count" && integer == BENCHMARK_WHITELIST_COUNT
+  when "integrated_rollups" then unit == "count" && integer == BENCHMARK_ROLLUP_COUNT
+  when "gate_decisions_complete" then unit == "count" && integer == BENCHMARK_GATE_DECISION_COUNT
   when "rubric_categories" then unit == "count" && integer == 9
   when "reviewer_count" then unit == "count" && integer == 3
   when "protected_frames_committed" then unit == "count" && integer == 0
@@ -3979,59 +4112,17 @@ def validate_analyzer_fields(record, label)
   error("#{label}: analyzed_at is not strict RFC 3339") unless valid_rfc3339?(record["analyzed_at"])
 end
 
-def verify_approval_lifecycle_fixture_suite(commit:, fresh_clone:, payload_context:, owned_paths:)
-  label = "audited approval-lifecycle fixture suite"
-  unless APPROVED_LIFECYCLE_FIXTURE_SHA256.match?(HEX64)
-    error("#{label} remains unpinned")
+def verify_approval_lifecycle_fixture_suite(**_context)
+  label = "production-validator approval-lifecycle harness"
+  unless PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64)
+    error("#{label} remains unpinned; semantic snapshot fixtures are not approval evidence")
     return
   end
-  error("#{label} manifest must be a direct benchmark payload member") unless
-    payload_context[:member_owner][APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH] ==
-      "review/benchmark/PAYLOAD_MANIFEST.sha256"
-  entries = validate_manifest(
-    APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH, APPROVED_LIFECYCLE_FIXTURE_SHA256, label, [],
-    commit, fresh_clone, payload_context
-  )
-  expected_roles = ["fixture.runner"] + APPROVED_LIFECYCLE_FIXTURE_CASES.map { |name| "fixture.#{name}" }
-  error("#{label} must contain one runner plus every required lifecycle case") unless
-    entries.map { |entry| entry[:role] }.sort == expected_roles.sort
-  error("#{label} members must use capture/build '-' only") unless
-    entries.all? { |entry| entry[:capture] == "-" && entry[:build] == "-" }
-  runner_entry = entries.find { |entry| entry[:role] == "fixture.runner" }
-  error("#{label} runner path is noncanonical") unless
-    runner_entry && runner_entry[:path] == APPROVED_LIFECYCLE_FIXTURE_RUNNER_PATH
-  APPROVED_LIFECYCLE_FIXTURE_CASES.each do |case_name|
-    entry = entries.find { |candidate| candidate[:role] == "fixture.#{case_name}" }
-    error("#{label} #{case_name} case path is noncanonical") unless
-      entry && entry[:path].start_with?("test/fixtures/asset_contract/#{case_name}/")
-  end
-  owned_paths << APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH if owned_paths
-  owned_paths&.merge(manifest_owned_paths(payload_context, APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH))
-  return unless runner_entry
 
-  runner = Pathname.new(fresh_clone).join(runner_entry[:path])
-  manifest = Pathname.new(fresh_clone).join(APPROVED_LIFECYCLE_FIXTURE_MANIFEST_PATH)
-  error("#{label} runner must be one reviewed regular executable non-symlink") unless
-    runner.file? && !runner.symlink? && File.executable?(runner)
-  return unless runner.file? && !runner.symlink? && File.executable?(runner)
-
-  output, runner_error, status = Open3.capture3(
-    runner.to_s, "--json", "--fixture-manifest", manifest.to_s,
-    chdir: fresh_clone
-  )
-  unless status.success?
-    error("#{label} runner failed: #{runner_error.lines.first.to_s.strip}")
-    return
-  end
-  receipt = JSON.parse(output)
-  expected_receipt = {
-    "schema" => "n64game-asset-lifecycle-fixtures-v1", "result" => "PASS",
-    "manifest_sha256" => APPROVED_LIFECYCLE_FIXTURE_SHA256,
-    "cases" => APPROVED_LIFECYCLE_FIXTURE_CASES
-  }
-  error("#{label} runner receipt is not the exact audited case/result tuple") unless receipt == expected_receipt
-rescue JSON::ParserError => e
-  error("#{label} runner emitted invalid JSON: #{e.message}")
+  # Keep this branch closed even if somebody types a plausible digest into the
+  # constant. A future implementation must materialize fixtures and drive the
+  # actual production validator paths before it may remove this error.
+  error("#{label} verifier is not implemented; a SHA-256 pin alone cannot unlock approval")
 end
 
 def require_exact_report_fields(record, expected, label)
@@ -5179,7 +5270,7 @@ def verified_prior_approval_baseline(baseline_identity, slug, whitelist_ids, exp
     registry_digest == baseline_identity["Prior approved whitelist/gate-registry SHA-256"]
   prior_registry_rows = parse_tsv(
     "#{registry_path}@#{registry_digest}", "prior approval whitelist registry",
-    WHITELIST_REGISTRY_HEADER, 46, commit: payload_commit, fresh_clone: fresh_clone,
+    WHITELIST_REGISTRY_HEADER, BENCHMARK_WHITELIST_COUNT, commit: payload_commit, fresh_clone: fresh_clone,
     payload_context: payload_context
   )
   prior_ledger_material = materialized_commit_file(
@@ -5195,7 +5286,8 @@ def verified_prior_approval_baseline(baseline_identity, slug, whitelist_ids, exp
   )
   prior_auth_lines = auth_section.lines.grep(/^\| WB-\d{3} \|/)
   prior_auth_rows = prior_auth_lines.map { |line| table_cells(line).map { |cell| strip_code(cell) } }
-  error("prior approval control must contain exactly 46 authorization rows") unless prior_auth_rows.length == 46
+  error("prior approval control must contain exactly #{BENCHMARK_WHITELIST_COUNT} authorization rows") unless
+    prior_auth_rows.length == BENCHMARK_WHITELIST_COUNT
   prior_gate_rows = []
   prior_subset_allowlists = []
   prior_registry_rows.each_with_index do |fields, index|
@@ -5668,6 +5760,12 @@ expected_whitelist = %w[
   vfx.transition.fade_dither
   vfx.transition.loading_relay
   vox.quarrune
+  echo.ayselor
+  anm.echo.ayselor
+  echo.gyreclast
+  anm.echo.gyreclast
+  echo.kivarrax
+  anm.echo.kivarrax
 ]
 expected_subset_hashes = {
   "chr.player.ari" => "3cd3d142dee335d7ac0b3547db4a6ededf414e39a40217cb85fc3b4269cafc0b",
@@ -5715,7 +5813,13 @@ expected_subset_hashes = {
   "sfx.footstep" => "2a255f618551f71550049a656b4d6fa272b001b0e94a94610366766d2ee425a7",
   "sfx.battle_common" => "303186daceec96cbb6d98f161e3f966e2458b2f33a5492344a16da9412779866",
   "sfx.finisher" => "dbe090215e8df15e9cc8a2cba9a1d4fb463ca8941ff277a04ccba116a01a7791",
-  "vox.quarrune" => "f1ff7901e8a1292f4d26c5e774b03fb9dff161ece4949bda876c1cf978d80ac9"
+  "vox.quarrune" => "f1ff7901e8a1292f4d26c5e774b03fb9dff161ece4949bda876c1cf978d80ac9",
+  "echo.ayselor" => "8b84f697dcf97745453045414cc904f3d8796f1c6bd58f41d270d3cbfbb9e0ec",
+  "anm.echo.ayselor" => "f19e4f4cd31309795fe3cd42722959ca63ea6c572585e4a11d78b7f3492c3c1b",
+  "echo.gyreclast" => "8b84f697dcf97745453045414cc904f3d8796f1c6bd58f41d270d3cbfbb9e0ec",
+  "anm.echo.gyreclast" => "f19e4f4cd31309795fe3cd42722959ca63ea6c572585e4a11d78b7f3492c3c1b",
+  "echo.kivarrax" => "8b84f697dcf97745453045414cc904f3d8796f1c6bd58f41d270d3cbfbb9e0ec",
+  "anm.echo.kivarrax" => "f19e4f4cd31309795fe3cd42722959ca63ea6c572585e4a11d78b7f3492c3c1b"
 }
 whitelist_section = between(
   benchmark,
@@ -5726,6 +5830,8 @@ whitelist_rows = whitelist_section.lines.grep(/^\| `[^`]+` \|/).map { |line| tab
 whitelist_ids = whitelist_rows.map { |cells| strip_code(cells[0]) }
 complete_package_ids = COMPLETE_SUBSET_IDS
 exact_set("visual benchmark whitelist", whitelist_ids, expected_whitelist)
+error("visual benchmark whitelist constant/count drifted") unless
+  expected_whitelist.length == BENCHMARK_WHITELIST_COUNT && whitelist_ids.length == BENCHMARK_WHITELIST_COUNT
 error("complete and partial subset-policy IDs overlap") unless (COMPLETE_SUBSET_IDS & PARTIAL_SUBSET_SELECTOR_POLICY.keys.to_set).empty?
 exact_set(
   "visual benchmark complete/partial selector-policy partition",
@@ -5733,6 +5839,24 @@ exact_set(
   whitelist_ids
 )
 error("visual benchmark whitelist order changed") unless whitelist_ids == expected_subset_hashes.keys
+error("supporting battle actor model/animation pairs must remain exact WB-047..WB-052 suffix rows") unless
+  whitelist_ids.last(BENCHMARK_SUPPORTING_PAIRS.length) == BENCHMARK_SUPPORTING_PAIRS
+hero_echo_rows = PARTIAL_SUBSET_SELECTOR_POLICY.select do |production_id, selectors|
+  production_id.start_with?("echo.") && selectors.include?("ASSET:hero_model")
+end.keys
+error("Quarrune must remain the only preapproval hero Echoform model") unless hero_echo_rows == ["echo.quarrune"]
+BENCHMARK_SUPPORTING_ACTORS.each do |actor|
+  model_id = "echo.#{actor}"
+  animation_id = "anm.echo.#{actor}"
+  error("#{model_id}: supporting subset must remain distance-model/texture/rig/blob-shadow only") unless
+    PARTIAL_SUBSET_SELECTOR_POLICY[model_id] == %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture]
+  error("#{animation_id}: supporting subset must remain exact idle_a/reposition/hit only") unless
+    PARTIAL_SUBSET_SELECTOR_POLICY[animation_id] == %w[CLIP:hit CLIP:idle_a CLIP:reposition]
+  error("#{model_id}: supporting model subset must retain RIGGED_MODEL/H2 review depth") unless
+    expected_profile_tier(model_id) == %w[RIGGED_MODEL H2]
+  error("#{animation_id}: supporting animation subset must retain ANIMATION/M7 review depth") unless
+    expected_profile_tier(animation_id) == %w[ANIMATION M7]
+end
 whitelist_rows.each do |cells|
   production_id = strip_code(cells[0])
   actual_subset_digest = Digest::SHA256.hexdigest(cells[1].to_s.strip)
@@ -5770,7 +5894,8 @@ authorization_rows = authorization_raw_lines.each_with_object([]) do |line, rows
   cells = table_cells(line).map { |cell| strip_code(cell) }
   rows << cells if cells.length == 8
 end
-error("benchmark authorization registry must contain exactly 46 rows; got #{authorization_rows.length}") unless authorization_rows.length == 46
+error("benchmark authorization registry must contain exactly #{BENCHMARK_WHITELIST_COUNT} rows; got #{authorization_rows.length}") unless
+  authorization_rows.length == BENCHMARK_WHITELIST_COUNT
 authorization_rows.each_with_index do |cells, index|
   basis, production_id, auth_record, gate_record, provenance_record, source_manifest, output_manifest, state = cells
   expected_basis = format("WB-%03d", index + 1)
@@ -5824,7 +5949,8 @@ when "PENDING"
 when "REVIEW_REQUIRED", "BLOCKED"
   # Unaffected AUTHORIZED rows retain immutable history; exact returned rows alone become REPAIR_ONLY.
 when "APPROVED"
-  error("APPROVED benchmark requires all 46 authorization rows AUTHORIZED") unless authorization_states.all? { |state| state == "AUTHORIZED" }
+  error("APPROVED benchmark requires all #{BENCHMARK_WHITELIST_COUNT} authorization rows AUTHORIZED") unless
+    authorization_states.all? { |state| state == "AUTHORIZED" }
 end
 
 pre_identity_section = between(benchmark, "## 1. Approval identity", "## 2. Exact pre-approval production whitelist")
@@ -6007,7 +6133,7 @@ if decision != "APPROVED"
   end
   advanced_whitelist_ids = advanced_entries.map { |entry| entry[:id] } & whitelist_ids
   if decision == "PENDING" && advanced_whitelist_ids.empty?
-    error("initial PENDING/LOCKED benchmark must have all 46 authorization rows INACTIVE") unless
+    error("initial PENDING/LOCKED benchmark must have all #{BENCHMARK_WHITELIST_COUNT} authorization rows INACTIVE") unless
       authorization_states.all? { |state| state == "INACTIVE" }
   end
   control_by_id = authorization_rows.each_with_object({}) { |cells, index| index[cells[1]] = cells }
@@ -6034,7 +6160,7 @@ current_subset_allowlists = {}
 registry_rows = []
 if decision != "APPROVED" && preapproval_registry_binding && preapproval_commit && preapproval_fresh_clone
   registry_rows = parse_tsv(
-    preapproval_registry_binding, "preapproval whitelist registry", WHITELIST_REGISTRY_HEADER, 46,
+    preapproval_registry_binding, "preapproval whitelist registry", WHITELIST_REGISTRY_HEADER, BENCHMARK_WHITELIST_COUNT,
     commit: preapproval_commit, fresh_clone: preapproval_fresh_clone,
     payload_context: preapproval_payload_context
   )
@@ -6229,7 +6355,8 @@ if %w[REVIEW_REQUIRED BLOCKED].include?(decision) && prior_baseline_ref&.match?(
   )
   if baseline
     enforce_latest_public_approval_baseline(baseline, slug)
-    error("current repair registry must retain all 46 prior baseline rows") unless registry_rows.length == 46
+    error("current repair registry must retain all #{BENCHMARK_WHITELIST_COUNT} prior baseline rows") unless
+      registry_rows.length == BENCHMARK_WHITELIST_COUNT
     authorization_rows.each_with_index do |current_control, index|
       basis = format("WB-%03d", index + 1)
       if returned_bases.include?(basis)
@@ -6666,8 +6793,8 @@ approved_benchmark_owned_paths = Set.new
 approved_payload_context = new_manifest_context
 approved_control_target = nil
 if decision == "APPROVED"
-  error("APPROVED is fail-closed until Gate 3 pins and commits the audited full lifecycle fixture-suite SHA-256") unless
-    APPROVED_LIFECYCLE_FIXTURE_SHA256.match?(HEX64)
+  error("APPROVED is fail-closed until the production-validator lifecycle harness is implemented, committed, and pinned") unless
+    approval_lifecycle_pins_ready?
   error("APPROVED is fail-closed until Gate 3 pins the audited Ares 148 platform-binary SHA-256") unless
     PINNED_ARES_148_BINARY_SHA256.match?(HEX64)
   approval_body = between(benchmark, "## 1. Approval identity", "## 2. Exact pre-approval production whitelist") +
@@ -6798,7 +6925,7 @@ if decision == "APPROVED"
   registry_digest = identity["Whitelist/gate registry SHA-256"]
   error("approved whitelist registry identity malformed") unless registry_path == "review/benchmark/WHITELIST_GATE_REGISTRY.tsv" && registry_digest&.match?(HEX64)
   approved_registry_rows = if fresh_clone && registry_digest&.match?(HEX64)
-                             parse_tsv("#{registry_path}@#{registry_digest}", "approved whitelist registry", WHITELIST_REGISTRY_HEADER, 46,
+                             parse_tsv("#{registry_path}@#{registry_digest}", "approved whitelist registry", WHITELIST_REGISTRY_HEADER, BENCHMARK_WHITELIST_COUNT,
                                        commit: payload_commit, fresh_clone: fresh_clone, payload_context: payload_context)
                            else
                              []
@@ -6896,7 +7023,8 @@ if decision == "APPROVED"
     error("#{basis}: approved rights evidence is not source-manifest-owned") unless
       manifest_owned_paths(payload_context, row["source_manifest_path"]).include?(rights_path)
   end
-  error("approved external registry must contain all 46 valid rows") unless approved_registry_rows.length == 46
+  error("approved external registry must contain all #{BENCHMARK_WHITELIST_COUNT} valid rows") unless
+    approved_registry_rows.length == BENCHMARK_WHITELIST_COUNT
   validate_move_pair_atomicity(
     payload_ledger_entries, move_pairs.map(&:first), commit: payload_commit, fresh_clone: fresh_clone,
     payload_context: payload_context, payload_path: payload_path,
@@ -7209,6 +7337,11 @@ error("ledger omits the ignored-build/review-snapshot separation") unless
 error("Gate-5 template permits a committed build product") unless
   reviews.include?("never a committed build product")
 
+# These local-only semantic snapshots harden schema/type/cross-binding behavior,
+# but they never enter a benchmark payload and are never approval evidence. The
+# separate production-validator lifecycle harness remains fail-closed above.
+verify_local_lifecycle_semantic_snapshot_pin
+
 # This runs on every validation so an unexercised production-unlock branch cannot
 # silently become reachable; --self-test-hardening additionally prints its count.
 run_hardening_self_test(data_schemas, verbose: ARGV.include?("--self-test-hardening"))
@@ -7216,7 +7349,7 @@ run_hardening_self_test(data_schemas, verbose: ARGV.include?("--self-test-harden
 if ERRORS.empty?
   puts "Gate 2 asset-production contract validation passed."
   puts "Inventory locks 37 UI subjects (including the exact 12-icon controller atlas), 32 paired move presentations, 8 exact non-owning alias mappings, and 15 concept-status camera children."
-  puts "Visual benchmark locks #{whitelist_ids.length} exact production exceptions with 46 WB bindings and #{benchmark_evidence_ids.length} evidence records behind #{production_lock}/#{decision}; local manifest/control/signed-origin-tag checks fail closed, while remote-host tag protection remains an external release check."
+  puts "Visual benchmark locks #{whitelist_ids.length} exact production exceptions with #{BENCHMARK_WHITELIST_COUNT} WB bindings and #{benchmark_evidence_ids.length} evidence records behind #{production_lock}/#{decision}; local manifest/control/signed-origin-tag checks fail closed, while remote-host tag protection remains an external release check."
   exit 0
 end
 

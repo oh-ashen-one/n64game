@@ -1,0 +1,38 @@
+{
+  "aggregate_pairs": [
+    "evidence",
+    "payload",
+    "recipe",
+    "rollup.player",
+    "rollup.presentation",
+    "rollup.quarrune",
+    "rollup.sector",
+    "whitelist"
+  ],
+  "case": "populated",
+  "control": {
+    "decision": "PENDING",
+    "lock": "LOCKED",
+    "prior_baseline": "NONE",
+    "public_payload_commit_bound": true,
+    "status": "Gate 4 control record"
+  },
+  "schema": "n64game-asset-lifecycle-case-v1",
+  "whitelist_row": {
+    "basis": "WB-001",
+    "gates": [
+      "PASS",
+      "PENDING",
+      "PENDING",
+      "PENDING",
+      "PENDING",
+      "PENDING",
+      "PENDING"
+    ],
+    "output_manifest": "NONE",
+    "production_id": "chr.player.ari",
+    "source_manifest": "assets-src/chr/chr.player.ari/SOURCE_MANIFEST.sha256@1111111111111111111111111111111111111111111111111111111111111111",
+    "state": "AUTHORIZED",
+    "subset_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  }
+}

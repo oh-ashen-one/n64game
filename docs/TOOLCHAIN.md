@@ -1,4 +1,4 @@
-# Gate 3 Toolchain and Reproducible ROM Build
+# Gate 3 Build Toolchain and Gate 4 Authoring Stack
 
 This document describes the implemented Gate 3 build contract. The current ROM is a small original Tiny3D diagnostic scene used to prove exact dependency compatibility. Its clean public-CI bytes have completed a separate Ares boot review recorded in [GATE3_BOOT_EVIDENCE.md](GATE3_BOOT_EVIDENCE.md); the CI manifest correctly remains `ares_boot=NOT_RUN` because CI itself did not perform that GUI review. This ROM is not the complete game opening, a vertical slice, or a claim that later production gates are finished.
 
@@ -11,6 +11,8 @@ This document describes the implemented Gate 3 build contract. The current ROM i
 - libdragon CLI 12.2.1 with npm integrity locked by `package-lock.json`
 - libdragon OCI index `sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83`
 - Ares v148 executable `7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345`
+- official Blender 4.5.11 LTS macOS ARM64 DMG, 308255028 bytes, SHA-256 `1fad76c7da9451c7d6db99f1a5ed3c0a1a461d0aa07bf2b639e2fb4804ca4f13`
+- Fast64 v2.5.3 release ZIP, commit `8e9630c11824a9c00e9379279d43c64264eda87e`, 1882004 bytes, SHA-256 `2a308e04ee591e328856e8dff5bbe5aa72f284873e874ba5aba5927831889010`
 
 Do not run `libdragon update`, float a submodule branch, substitute `latest`, or replace the OCI digest with a tag. `scripts/verify-toolchain-pins` rejects index/worktree/package/config drift before a build.
 
@@ -25,7 +27,7 @@ npm ci --ignore-scripts
 scripts/bootstrap-check --all
 ```
 
-The bootstrap check is observational: it reports architecture, free disk, LFS, Node/npm/CLI, Docker client and engine, local image state, Ares, and Blender without changing repository files. `--build` requires the local build stack; `--ci` omits GUI tools; `--all` also requires the exact Ares executable.
+The Gate 3 bootstrap check is observational: it reports architecture, free disk, LFS, Node/npm/CLI, Docker client and engine, local image state, Ares, and any Blender found on `PATH` without changing repository files. `--build` requires the local build stack; `--ci` omits GUI tools; `--all` also requires the exact Ares executable. Blender/Fast64 authoring acceptance is a stricter, separate Gate 4 check described below.
 
 ## Stable entry points
 
@@ -33,7 +35,9 @@ The bootstrap check is observational: it reports architecture, free disk, LFS, N
 make validate  # pins, data/contracts, asset lock, public hygiene
 make assets    # asset-production contract plus Gate 3 empty runtime manifest
 make rom       # clean immutable-container build
-make test      # deterministic host build-contract tests
+make test      # Gate 3 build tests plus Gate 4 lifecycle semantic snapshots/tamper tests; not approval evidence
+make authoring-check # exact installed Blender/Fast64 check; macOS authoring host only
+make test-authoring  # portable unit/tamper tests for the authoring checker
 make report    # ROM checksum, header/size, map, dependency and validation reports
 make clean     # remove ignored build/ plus the one transient root ROM staging path
 ```
@@ -98,6 +102,41 @@ scripts/run-ares \
 ```
 
 The wrapper verifies both executable and ROM hashes, forces `General/HomebrewMode=true`, forces `Nintendo64/ExpansionPak=false`, forces `Input/Defocus=Allow`, and uses isolated versioned settings/save/screenshot/debug paths. The first two overrides are mandatory because Ares v148 defaults Homebrew Mode off and Expansion Pak on. The defocus override keeps shell-launched certification runs advancing when macOS places the emulator window on a non-current Space; without it, Ares's default pause-on-defocus policy can leave a valid ROM on a black pre-frame window. `--check-only` verifies the complete tuple without launching the GUI.
+
+## Gate 4 Blender and Fast64 authoring contract
+
+Gate 4 asset work uses one exact native Apple Silicon stack. Blender 5.2, another Blender 4.5 patch, a generic `blender` executable from `PATH`, and a different or disabled Fast64 checkout all fail authoring acceptance.
+
+| Component | Exact authority |
+| --- | --- |
+| Blender | 4.5.11 LTS, build hash `4db51e9d1e1e`, thin ARM64 macOS executable |
+| Official Blender asset | [`blender-4.5.11-macos-arm64.dmg`](https://download.blender.org/release/Blender4.5/blender-4.5.11-macos-arm64.dmg), 308255028 bytes, SHA-256 `1fad76c7da9451c7d6db99f1a5ed3c0a1a461d0aa07bf2b639e2fb4804ca4f13` |
+| Installed Blender executable | `$HOME/Applications/Blender-4.5.11.app/Contents/MacOS/Blender`, 175667888 bytes, SHA-256 `8156431a9b9ec1daf49bccea4bd92f327f6efc1ca330d5103881580f3e7773ef` |
+| Fast64 | v2.5.3 at commit `8e9630c11824a9c00e9379279d43c64264eda87e` |
+| Official Fast64 asset | [`fast64-v2.5.3.zip`](https://github.com/Fast-64/fast64/releases/download/v2.5.3/fast64-v2.5.3.zip), 1882004 bytes, SHA-256 `2a308e04ee591e328856e8dff5bbe5aa72f284873e874ba5aba5927831889010` |
+| Enabled Fast64 root | `$HOME/Library/Application Support/Blender/4.5/scripts/addons/fast64` |
+
+Run the installed-stack check before benchmark authoring or export:
+
+```sh
+scripts/check-authoring-stack
+```
+
+The checker is observational. Its checker and test entrypoints use absolute `/usr/bin/python3 -I -B`, so a `PATH`-selected interpreter, inherited `PYTHON*` import paths/home, user-site packages, and Python bytecode writes cannot alter the run. Before executing Blender, it verifies the locked metadata, exact executable bytes, ARM64 Mach-O identity, app version/build hash, and the complete app seal with absolute `/usr/bin/codesign --verify --deep --strict` plus an explicit Blender Foundation team/identifier requirement. It repeats that seal check after the probe. Fast64 must be the exact 226-file release source tree; any symlink, `__pycache__`, `.pyc`, or mutable updater-status file fails instead of being ignored.
+
+The enabled-state probe never starts from the live Blender profile or imports the live add-on directory. It copies `userpref.blend` and the already byte-verified Fast64 source into a temporary profile, binds config/scripts/data/extensions/cache/home/temp paths there, drops inherited `PYTHONPATH`, `DYLD_*`, and other environment state, starts Blender in factory/background/offline/auto-execution-disabled mode, disables Python bytecode writes before loading the copied preference, and imports only the isolated Fast64 copy. The live app, preference, and Fast64 source are snapshotted before and after. Temporary probe state is removed on exit. The checker does not download, install, enable, update, save preferences, or alter project/global state.
+
+The default paths are versioned rather than discovered from `PATH`. `N64GAME_BLENDER_BINARY` and `N64GAME_FAST64_ROOT` may point the checker at another host installation, but every byte/version/signature/path-to-module check still applies. Supplying a Blender 5.2 executable therefore fails; an override cannot weaken the pin.
+
+Distribution archives do not need to remain on the host after verified installation. If retained, audit them directly without mounting or extracting them:
+
+```sh
+scripts/check-authoring-stack \
+  --blender-dmg /absolute/path/to/blender-4.5.11-macos-arm64.dmg \
+  --fast64-zip /absolute/path/to/fast64-v2.5.3.zip
+```
+
+Without those optional arguments, the report labels each archive `NOT_SUPPLIED_PIN_RECORDED`; this is not a claim that the archive was re-hashed during that run. The installed executable and add-on still must pass. Use `--json` for a machine-readable host observation. That path-bearing observation is not a Gate 2 or Gate 5 per-asset approval receipt and cannot unlock a production row; the asset pipeline must separately bind an exact stack pass to the reviewed source, output manifest, build, and gate evidence. Run `make test-authoring` for portable positive, wrong-version, missing-add-on, symlink, bytecode/updater-state, contaminated-interpreter/environment, deep-signature-command, disabled-add-on, and byte-tamper tests.
 
 ## Public CI
 
