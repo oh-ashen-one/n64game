@@ -451,9 +451,19 @@ PAIR_SYNC_MEASUREMENT_HEADER = %w[
 ].freeze
 FULL_PRODUCTION_SUBSET_SHA256 = Digest::SHA256.hexdigest("FULL_PRODUCTION").freeze
 APPROVAL_EVIDENCE_DESCRIPTION = "signed annotated origin tag attesting separate payload commit/digest and pointing to commit containing this populated control; remote protection confirmed separately".freeze
+QUARRUNE_MODEL_SELECTORS = %w[
+  ASSET:blob_shadow ASSET:distance_model ASSET:hero_model ASSET:rig ASSET:texture
+].freeze
+QUARRUNE_BENCHMARK_ANIMATION_SELECTORS = %w[
+  CLIP:brace_relay CLIP:entrance CLIP:hit CLIP:horizon_break CLIP:idle_a CLIP:idle_b
+  CLIP:knockout CLIP:reposition CLIP:ridge_ram
+].freeze
+QUARRUNE_MODEL_SELECTORS_SHA256 = "4300265ba1e2411f652b67fccd9d2701c82bd68747f3a080b6748e98c7dd050b".freeze
+QUARRUNE_BENCHMARK_ANIMATION_SELECTORS_SHA256 = "19c63aa5fba5046e28ece64820d93fe0aad6e167bf0091fae7b50aea28ad923c".freeze
+QUARRUNE_SELECTOR_PARTITION_SHA256 = "d06ed8980795025d6244de03730b9caf3e110fca5c8116071b843c436c332633".freeze
 PARTIAL_SUBSET_SELECTOR_POLICY = {
   "chr.player.ari" => %w[ASSET:blob_shadow_socket ASSET:body_texture ASSET:distance_model ASSET:face_texture ASSET:focus_socket ASSET:hero_model ASSET:rig],
-  "echo.quarrune" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:hero_model ASSET:rig ASSET:texture CLIP:brace_relay CLIP:entrance CLIP:hit CLIP:horizon_break CLIP:idle_a CLIP:idle_b CLIP:knockout CLIP:reposition CLIP:ridge_ram],
+  "echo.quarrune" => QUARRUNE_MODEL_SELECTORS,
   "echo.ayselor" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture],
   "anm.echo.ayselor" => %w[CLIP:hit CLIP:idle_a CLIP:reposition],
   "echo.gyreclast" => %w[ASSET:blob_shadow ASSET:distance_model ASSET:rig ASSET:texture],
@@ -467,7 +477,7 @@ PARTIAL_SUBSET_SELECTOR_POLICY = {
   "vfx.finisher.horizon_break" => %w[STATE:braid_core STATE:quarrune_contribution],
   "vfx.transition.loading_relay" => %w[STATE:finish STATE:load],
   "anm.player.ari" => %w[CLIP:battle_command CLIP:dialogue_nod],
-  "anm.echo.quarrune" => %w[CLIP:brace_relay CLIP:entrance CLIP:hit CLIP:horizon_break CLIP:idle_a CLIP:idle_b CLIP:knockout CLIP:reposition CLIP:ridge_ram],
+  "anm.echo.quarrune" => QUARRUNE_BENCHMARK_ANIMATION_SELECTORS,
   "anm.ui.loading_relay" => %w[CLIP:finish CLIP:load_progress],
   "sfx.ui" => %w[CUE:cancel CUE:confirm CUE:invalid CUE:move CUE:move_info CUE:res_full CUE:res_gain CUE:target],
   "sfx.footstep" => %w[CUE:echo_heavy_l CUE:echo_heavy_r CUE:human_dust_l CUE:human_dust_r CUE:human_stone_l CUE:human_stone_r],
@@ -6179,6 +6189,9 @@ inventory = read("docs/ASSET_INVENTORY.md")
 ledger = read("docs/ASSET_LEDGER.md")
 reviews = read("docs/ASSET_REVIEW_TEMPLATES.md")
 benchmark = read("docs/VISUAL_BENCHMARK_APPROVAL.md")
+error("Gate 5 must remain locked until the audited exporter and typed Tiny3D package validator land atomically") unless
+  N64Game::AuthoringStackReceipt::GATE5_EXPORT_IMPLEMENTED == false &&
+  N64Game::AuthoringStackReceipt::APPROVED_GATE5_EXPORTER_SHA256 == "PENDING"
 toolchain = read("docs/TOOLCHAIN.md")
 data_schemas = read("docs/DATA_SCHEMAS.md")
 benchmark_header = benchmark_control_header(benchmark, "visual benchmark control")
@@ -6250,6 +6263,43 @@ error("inventory canonical production-ID set differs from the frozen Gate-2 regi
   inventory_id_set_digest == INVENTORY_PRODUCTION_ID_SET_SHA256
 inventory_production_ids.each do |production_id|
   error("inventory production ID has no deterministic profile/tier: #{production_id}") unless expected_profile_tier(production_id)
+end
+
+quarrune_inventory_section = between(
+  inventory,
+  "## 4. Echoforms and battle-slot resolution",
+  "## 5. Authored environment and world-map source packages"
+)
+quarrune_inventory_line = quarrune_inventory_section.lines.find { |line| line.start_with?("| `echo.quarrune` |") }
+expected_quarrune_required_clips_cell = "14 total in paired `anm.echo.quarrune`; this model row owns no animation clips. `S1` requires `idle_a`, `idle_b`, `entrance`, `reposition`, `ridge_ram`, `brace_relay`, `hit`, `knockout`, and `horizon_break` participation preview from that bank; the remaining five bank clips are `S4`."
+if quarrune_inventory_line
+  quarrune_inventory_cells = table_cells(quarrune_inventory_line)
+  error("Quarrune inventory row must retain exactly six cells") unless quarrune_inventory_cells.length == 6
+  error("Quarrune inventory model row must delegate the exact clip set exclusively to anm.echo.quarrune") unless
+    quarrune_inventory_cells[4] == expected_quarrune_required_clips_cell
+else
+  error("inventory lacks the canonical echo.quarrune model row")
+end
+quarrune_animation_inventory_section = between(
+  inventory,
+  "### 12.2 Echoforms",
+  "## 13. Music, ambience, vocals, and SFX"
+)
+quarrune_animation_inventory_line = quarrune_animation_inventory_section.lines.find do |line|
+  line.start_with?("| `anm.echo.quarrune` |")
+end
+expected_quarrune_animation_inventory_cells = [
+  "`anm.echo.quarrune`",
+  "14",
+  "`S1`: idle_a/b, entrance, reposition, ridge_ram, brace_relay, hit, knockout; `S4`: grounding_ring, steady_pulse, victory, story_brace_alert, story_resolve",
+  "`S1` participation preview; final integrated horizon_break remains `S4`",
+  "`S1/S4 P0`"
+]
+if quarrune_animation_inventory_line
+  error("Quarrune animation inventory row must retain the exact 14-clip S1/S4 bank partition") unless
+    table_cells(quarrune_animation_inventory_line) == expected_quarrune_animation_inventory_cells
+else
+  error("inventory lacks the canonical anm.echo.quarrune animation-bank row")
 end
 
 equivalent_section = between(
@@ -6487,7 +6537,7 @@ expected_whitelist = %w[
 ]
 expected_subset_hashes = {
   "chr.player.ari" => "3cd3d142dee335d7ac0b3547db4a6ededf414e39a40217cb85fc3b4269cafc0b",
-  "echo.quarrune" => "f86604a7fd44e0ae38fb07de1e9d56e6f0f11daea49bfa4d16d14888126824fd",
+  "echo.quarrune" => "91f3797ab46a85767b7b97da490b8f3890399b3705955f1daf773a26bf8ddb93",
   "env.annex.atrium_lower" => "c47e1e4c218dfb976cddfe05c082b4f305d5d37cdfa27deeb8deeaef980b863f",
   "col.annex.atrium_lower" => "39ee5ea0a3dbda6fe734bf05b8d9ce1428f4b9e4dabd41fb2a552c9631a37998",
   "col.common.camera_volumes" => "49ba7caa6d0938ef5157bbd3654f23591d2610c319ce6e9e14a69681b0d4aaff",
@@ -6557,12 +6607,51 @@ exact_set(
   whitelist_ids
 )
 error("visual benchmark whitelist order changed") unless whitelist_ids == expected_subset_hashes.keys
+error("WB-002 must remain the exclusive echo.quarrune model owner") unless whitelist_ids[1] == "echo.quarrune"
+error("WB-039 must remain the exclusive anm.echo.quarrune animation owner") unless
+  whitelist_ids[38] == "anm.echo.quarrune"
 error("supporting battle actor model/animation pairs must remain exact WB-047..WB-052 suffix rows") unless
   whitelist_ids.last(BENCHMARK_SUPPORTING_PAIRS.length) == BENCHMARK_SUPPORTING_PAIRS
 hero_echo_rows = PARTIAL_SUBSET_SELECTOR_POLICY.select do |production_id, selectors|
   production_id.start_with?("echo.") && selectors.include?("ASSET:hero_model")
 end.keys
 error("Quarrune must remain the only preapproval hero Echoform model") unless hero_echo_rows == ["echo.quarrune"]
+quarrune_model_selectors = PARTIAL_SUBSET_SELECTOR_POLICY["echo.quarrune"]
+quarrune_animation_selectors = PARTIAL_SUBSET_SELECTOR_POLICY["anm.echo.quarrune"]
+error("Quarrune model subset must remain the exact five model-package selectors") unless
+  quarrune_model_selectors == QUARRUNE_MODEL_SELECTORS
+error("Quarrune animation subset must remain the exact nine benchmark clips") unless
+  quarrune_animation_selectors == QUARRUNE_BENCHMARK_ANIMATION_SELECTORS
+error("Quarrune model selector-set digest changed") unless
+  Digest::SHA256.hexdigest(quarrune_model_selectors.join("\n") + "\n") == QUARRUNE_MODEL_SELECTORS_SHA256
+error("Quarrune animation selector-set digest changed") unless
+  Digest::SHA256.hexdigest(quarrune_animation_selectors.join("\n") + "\n") ==
+    QUARRUNE_BENCHMARK_ANIMATION_SELECTORS_SHA256
+error("Quarrune model and animation selector owners overlap") unless
+  (quarrune_model_selectors & quarrune_animation_selectors).empty?
+error("Quarrune model owner contains a non-ASSET selector") unless
+  quarrune_model_selectors.length == 5 && quarrune_model_selectors.all? { |selector| selector.start_with?("ASSET:") }
+error("Quarrune animation owner contains a non-CLIP selector") unless
+  quarrune_animation_selectors.length == 9 && quarrune_animation_selectors.all? { |selector| selector.start_with?("CLIP:") }
+error("Quarrune model/animation selector union must remain exact 5+9") unless
+  (quarrune_model_selectors + quarrune_animation_selectors).sort ==
+    (QUARRUNE_MODEL_SELECTORS + QUARRUNE_BENCHMARK_ANIMATION_SELECTORS).sort
+error("Quarrune exact 5+9 selector partition digest changed") unless
+  Digest::SHA256.hexdigest((quarrune_model_selectors + quarrune_animation_selectors).sort.join("\n") + "\n") ==
+    QUARRUNE_SELECTOR_PARTITION_SHA256
+echo_model_clip_owners = PARTIAL_SUBSET_SELECTOR_POLICY.select do |production_id, selectors|
+  production_id.start_with?("echo.") && selectors.any? { |selector| selector.start_with?("CLIP:") }
+end.keys.sort
+error("Echoform model rows must own no animation clips: #{echo_model_clip_owners.join(', ')}") unless echo_model_clip_owners.empty?
+echo_animation_non_clip_owners = PARTIAL_SUBSET_SELECTOR_POLICY.select do |production_id, selectors|
+  production_id.start_with?("anm.echo.") && selectors.any? { |selector| !selector.start_with?("CLIP:") }
+end.keys.sort
+error("Echoform animation rows must own only CLIP selectors: #{echo_animation_non_clip_owners.join(', ')}") unless
+  echo_animation_non_clip_owners.empty?
+error("Quarrune model subset must retain RIGGED_MODEL/H2 review depth") unless
+  expected_profile_tier("echo.quarrune") == %w[RIGGED_MODEL H2]
+error("Quarrune animation subset must retain ANIMATION/M7 review depth") unless
+  expected_profile_tier("anm.echo.quarrune") == %w[ANIMATION M7]
 BENCHMARK_SUPPORTING_ACTORS.each do |actor|
   model_id = "echo.#{actor}"
   animation_id = "anm.echo.#{actor}"
