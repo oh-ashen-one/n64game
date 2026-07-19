@@ -16,12 +16,32 @@ RUNNER_RELATIVE = Path("scripts/test-asset-lifecycle-production")
 KERNEL_RELATIVE = Path("lib/n64game/asset_lifecycle_contract.rb")
 FIXTURE_ROOT_RELATIVE = Path("test/fixtures/asset_lifecycle_production")
 MANIFEST_RELATIVE = FIXTURE_ROOT_RELATIVE / "PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256"
-BRANCHES = ["populated", "approved", "repair", "generated_child", "move_pair", "h2", "release"]
+BRANCHES = ["public_concept", "populated", "approved", "repair", "generated_child", "move_pair", "h2", "release"]
 NEGATIVE_CASES = [
+    "public_concept.no_concept",
+    "public_concept.active_row",
+    "public_concept.nonpending_aggregate",
+    "public_concept.false_authority",
+    "public_concept.malformed_authority",
+    "public_concept.malformed_ref",
+    "public_concept.advanced_id",
     "populated.aggregate_count",
+    "populated.split_core",
+    "populated.optional_without_core",
+    "populated.zero_active_rows",
+    "populated.malformed_pending_pair",
+    "populated.rollup_mask_mismatch",
+    "populated.evidence_incomplete",
+    "populated.rollup_digest_crossbind",
+    "populated.rollup_build_crossbind",
+    "populated.rollup_gate_vector",
+    "populated.evidence_build_crossbind",
+    "populated.pending_repair_only",
+    "populated.active_build_pending",
     "approved.inherited_completion",
     "approved.rollup_non_rom_g1",
     "approved.rollup_static_state_g1",
+    "approved.pending_build",
     "repair.out_of_range_basis",
     "repair.non_string_token",
     "generated_child.noncanonical_tuple",
@@ -35,6 +55,8 @@ LIVE_ONLY_ADAPTERS = [
     "github_api",
     "signed_git_tags",
     "git_lfs_materialization",
+    "advertised_ref_fresh_clone",
+    "benchmark_control_transaction",
     "ffprobe_media_decode",
     "ares_execution",
     "rom_rebuild",
@@ -102,7 +124,7 @@ class ProductionLifecycleHarnessTests(unittest.TestCase):
             },
         )
 
-    def test_manifest_byte_binds_only_kernel_runner_and_seven_cases(self) -> None:
+    def test_manifest_byte_binds_only_kernel_runner_and_eight_cases(self) -> None:
         lines = (ROOT / MANIFEST_RELATIVE).read_text(encoding="utf-8").splitlines()
         paths = []
         for line in lines:
@@ -131,7 +153,10 @@ class ProductionLifecycleHarnessTests(unittest.TestCase):
     def test_production_validator_has_exactly_one_callsite_for_every_branch(self) -> None:
         validator = (ROOT / "scripts/validate-asset-contract").read_text(encoding="utf-8")
         callsites = re.findall(r'validate_shared_lifecycle_branch\(\s*"([a-z0-9_]+)"', validator)
-        self.assertEqual(callsites, ["h2", "generated_child", "move_pair", "populated", "repair", "approved", "release"])
+        self.assertEqual(
+            callsites,
+            ["h2", "generated_child", "move_pair", "public_concept", "populated", "repair", "approved", "release"],
+        )
         self.assertEqual(set(callsites), set(BRANCHES))
         self.assertIn("N64Game::AssetLifecycleContract.validate!(branch, payload)", validator)
 
@@ -148,6 +173,7 @@ class ProductionLifecycleHarnessTests(unittest.TestCase):
             "materialized_commit_file",
             'payload_context[:member_owner][manifest_path]',
             'payload_context[:member_owner]["scripts/validate-asset-contract"]',
+            'payload_context[:member_owner]["lib/n64game/public_commit_authority.rb"]',
             "payload_context[:closure].include?(path)",
             "commit_tree_entries(commit, fresh_clone)",
             'Dir.mktmpdir("n64game-reviewed-lifecycle-")',

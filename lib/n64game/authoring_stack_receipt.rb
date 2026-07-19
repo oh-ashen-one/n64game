@@ -29,6 +29,7 @@ module N64Game
     ROOT_REQUIRED_MODES = {
       "scripts/validate-asset-contract" => "100755",
       "lib/n64game/authoring_stack_receipt.rb" => "100644",
+      "lib/n64game/public_commit_authority.rb" => "100644",
       "config/toolchain.lock.json" => "100644",
       "scripts/check-authoring-stack" => "100755",
       "scripts/record-authoring-stack-receipt" => "100755",

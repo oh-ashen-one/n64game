@@ -178,6 +178,7 @@ class AuthoringReceiptAdapterTests(unittest.TestCase):
         required_modes = {
             "scripts/validate-asset-contract": 0o755,
             "lib/n64game/authoring_stack_receipt.rb": 0o644,
+            "lib/n64game/public_commit_authority.rb": 0o644,
             "config/toolchain.lock.json": 0o644,
             "scripts/check-authoring-stack": 0o755,
             "scripts/record-authoring-stack-receipt": 0o755,
@@ -369,6 +370,7 @@ class AuthoringReceiptAdapterTests(unittest.TestCase):
         root_paths = {
             "scripts/validate-asset-contract": "100755",
             "lib/n64game/authoring_stack_receipt.rb": "100644",
+            "lib/n64game/public_commit_authority.rb": "100644",
             "config/toolchain.lock.json": "100644",
             "scripts/check-authoring-stack": "100755",
             "scripts/record-authoring-stack-receipt": "100755",

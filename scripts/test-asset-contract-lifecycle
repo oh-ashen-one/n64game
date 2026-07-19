@@ -94,9 +94,9 @@ def validate_populated(value: dict[str, object]) -> None:
     require(
         exact_json_value(
             value["aggregate_pairs"],
-            ["evidence", "payload", "recipe", "rollup.player", "rollup.presentation", "rollup.quarrune", "rollup.sector", "whitelist"],
+            ["payload", "whitelist", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING"],
         ),
-        "populated aggregate-pair set is incomplete or unsorted",
+        "populated aggregate slots do not express the minimal 11000000 staged core",
     )
     control = value["control"]
     exact_keys(control, {"decision", "lock", "prior_baseline", "public_payload_commit_bound", "status"}, "populated control")

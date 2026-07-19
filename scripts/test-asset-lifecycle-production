@@ -12,7 +12,7 @@ ROOT = Pathname.new(__dir__).join("..").expand_path
 MANIFEST_RELATIVE = "test/fixtures/asset_lifecycle_production/PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256".freeze
 KERNEL_RELATIVE = "lib/n64game/asset_lifecycle_contract.rb".freeze
 RUNNER_RELATIVE = "scripts/test-asset-lifecycle-production".freeze
-CASES = %w[populated approved repair generated_child move_pair h2 release].freeze
+CASES = %w[public_concept populated approved repair generated_child move_pair h2 release].freeze
 FIXTURE_ROOT_RELATIVE = "test/fixtures/asset_lifecycle_production".freeze
 HEX64 = /\A[0-9a-f]{64}\z/.freeze
 SAFE_PATH = /\A[A-Za-z0-9][A-Za-z0-9._\/-]*\z/.freeze
@@ -148,10 +148,141 @@ end
 
 def negative_cases(branch, payload)
   case branch
+  when "public_concept"
+    no_concept = deep_copy(payload)
+    no_concept["concept_ids"] = []
+
+    active_row = deep_copy(payload)
+    active_row.fetch("registry_rows").first["state"] = "AUTHORIZED"
+
+    nonpending_aggregate = deep_copy(payload)
+    nonpending_aggregate.fetch("aggregate_pairs")[0] = {
+      "path" => "review/benchmark/PAYLOAD_MANIFEST.sha256", "sha256" => "a7" * 32
+    }
+
+    false_authority = deep_copy(payload)
+    false_authority.fetch("authority")["clean"] = false
+
+    malformed_authority = deep_copy(payload)
+    malformed_authority.fetch("authority").delete("commit")
+
+    malformed_ref = deep_copy(payload)
+    malformed_ref.fetch("authority")["ref"] = "refs/pull/0/head"
+
+    advanced_id = deep_copy(payload)
+    advanced_id["advanced_ids"] = ["echo.quarrune"]
+
+    [
+      ["public_concept.no_concept", no_concept, "requires at least one ordinary concept ID"],
+      ["public_concept.active_row", active_row, "public-concept control row is active"],
+      ["public_concept.nonpending_aggregate", nonpending_aggregate, "is not literal PENDING"],
+      ["public_concept.false_authority", false_authority, "authority booleans must all be true"],
+      ["public_concept.malformed_authority", malformed_authority, "authority keys differ"],
+      ["public_concept.malformed_ref", malformed_ref, "authority ref is malformed"],
+      ["public_concept.advanced_id", advanced_id, "advanced IDs must be exactly empty"]
+    ]
   when "populated"
-    mutated = deep_copy(payload)
-    mutated.fetch("aggregate_pairs").pop
-    [["populated.aggregate_count", mutated, "exactly eight aggregate"]]
+    aggregate_count = deep_copy(payload)
+    aggregate_count.fetch("aggregate_pairs").pop
+
+    split_core = deep_copy(payload)
+    split_core.fetch("aggregate_pairs")[1] = { "path" => "PENDING", "sha256" => "PENDING" }
+
+    optional_without_core = deep_copy(payload)
+    optional_without_core.fetch("aggregate_pairs")[0] = { "path" => "PENDING", "sha256" => "PENDING" }
+    optional_without_core.fetch("aggregate_pairs")[1] = { "path" => "PENDING", "sha256" => "PENDING" }
+    optional_without_core.fetch("aggregate_pairs")[3] = {
+      "path" => "review/benchmark/ROM_BUILD_RECIPE.tsv", "sha256" => "ab" * 32
+    }
+
+    zero_active_rows = deep_copy(payload)
+    original = zero_active_rows.fetch("registry_rows").first
+    inactive = deep_copy(zero_active_rows.fetch("registry_rows")[1])
+    inactive["basis"] = original.fetch("basis")
+    inactive["production_id"] = original.fetch("production_id")
+    inactive["subset_sha256"] = original.fetch("subset_sha256")
+    zero_active_rows.fetch("registry_rows")[0] = inactive
+
+    malformed_pending_pair = deep_copy(payload)
+    malformed_pending_pair.fetch("aggregate_pairs")[2] = { "path" => "PENDING", "sha256" => "ac" * 32 }
+
+    rollup_mask_mismatch = deep_copy(payload)
+    rollup_mask_mismatch.fetch("aggregate_pairs")[4] = {
+      "path" => "review/benchmark/rollups/player/GATE_RECORD.tsv", "sha256" => "ad" * 32
+    }
+
+    evidence_incomplete = deep_copy(payload)
+    evidence_incomplete.fetch("aggregate_pairs")[2] = {
+      "path" => "review/benchmark/BENCHMARK_EVIDENCE_REGISTRY.tsv", "sha256" => "ae" * 32
+    }
+
+    rollup_digest_crossbind = deep_copy(payload)
+    rollup_digest_crossbind.fetch("aggregate_pairs")[4] = {
+      "path" => "review/benchmark/rollups/player/GATE_RECORD.tsv", "sha256" => "af" * 32
+    }
+    rollup_digest_crossbind.fetch("rollups")[0] = {
+      "scope" => "rollup.player", "build_id" => payload.fetch("build_id"),
+      "gates" => ["pass", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING"],
+      "gate_record_sha256" => "b0" * 32
+    }
+
+    rollup_build_crossbind = deep_copy(rollup_digest_crossbind)
+    rollup_build_crossbind.fetch("rollups")[0]["gate_record_sha256"] = "af" * 32
+    rollup_build_crossbind.fetch("rollups")[0]["build_id"] = "different-clean-build"
+
+    rollup_gate_vector = deep_copy(rollup_digest_crossbind)
+    rollup_gate_vector.fetch("rollups")[0]["gate_record_sha256"] = "af" * 32
+    rollup_gate_vector.fetch("rollups")[0].fetch("gates")[1] = "BOGUS"
+
+    evidence_build_crossbind = deep_copy(payload)
+    evidence_build_crossbind.fetch("registry_rows").each do |row|
+      row["state"] = "AUTHORIZED"
+      row["build_id"] = payload.fetch("build_id")
+      row["gates"] = ["pass"] * 7
+    end
+    evidence_build_crossbind.fetch("aggregate_pairs")[2] = {
+      "path" => "review/benchmark/BENCHMARK_EVIDENCE_REGISTRY.tsv", "sha256" => "b1" * 32
+    }
+    rollup_digests = %w[b2 b3 b4 b5].map { |byte| byte * 32 }
+    rollup_paths = %w[
+      review/benchmark/rollups/player/GATE_RECORD.tsv
+      review/benchmark/rollups/quarrune/GATE_RECORD.tsv
+      review/benchmark/rollups/sector/GATE_RECORD.tsv
+      review/benchmark/rollups/presentation/GATE_RECORD.tsv
+    ]
+    rollup_scopes = %w[rollup.player rollup.quarrune rollup.sector rollup.presentation]
+    4.times do |index|
+      evidence_build_crossbind.fetch("aggregate_pairs")[index + 4] = {
+        "path" => rollup_paths[index], "sha256" => rollup_digests[index]
+      }
+      evidence_build_crossbind.fetch("rollups")[index] = {
+        "scope" => rollup_scopes[index], "build_id" => payload.fetch("build_id"),
+        "gates" => ["pass"] * 7, "gate_record_sha256" => rollup_digests[index]
+      }
+    end
+    evidence_build_crossbind.fetch("registry_rows").first["build_id"] = "different-evidence-build"
+
+    pending_repair_only = deep_copy(payload)
+    pending_repair_only.fetch("registry_rows").first["state"] = "REPAIR_ONLY"
+
+    active_build_pending = deep_copy(payload)
+    active_build_pending.fetch("registry_rows").first["build_id"] = "PENDING"
+
+    [
+      ["populated.aggregate_count", aggregate_count, "exactly eight aggregate"],
+      ["populated.split_core", split_core, "payload/registry core must transition together"],
+      ["populated.optional_without_core", optional_without_core, "optional aggregate requires the populated payload/registry core pair"],
+      ["populated.zero_active_rows", zero_active_rows, "requires at least one AUTHORIZED/REPAIR_ONLY registry row"],
+      ["populated.malformed_pending_pair", malformed_pending_pair, "must be literal PENDING or its positional canonical path/digest"],
+      ["populated.rollup_mask_mismatch", rollup_mask_mismatch, "rollup presence does not match aggregate mask bits 5-8"],
+      ["populated.evidence_incomplete", evidence_incomplete, "evidence aggregate requires 52 active registry rows and four complete rollups"],
+      ["populated.rollup_digest_crossbind", rollup_digest_crossbind, "gate-record digest differs from its aggregate pair"],
+      ["populated.rollup_build_crossbind", rollup_build_crossbind, "build ID differs from the shared clean-build ID"],
+      ["populated.rollup_gate_vector", rollup_gate_vector, "gate vector is malformed"],
+      ["populated.evidence_build_crossbind", evidence_build_crossbind, "evidence aggregate requires 52 active registry rows and four complete rollups"],
+      ["populated.pending_repair_only", pending_repair_only, "PENDING populated lifecycle cannot contain REPAIR_ONLY"],
+      ["populated.active_build_pending", active_build_pending, "active registry build ID is malformed"]
+    ]
   when "approved"
     inherited = deep_copy(payload)
     inherited.fetch("registry_rows").first["gates"][0] = "INHERITED_CHILD_EQ"
@@ -160,10 +291,15 @@ def negative_cases(branch, payload)
     non_rom_rollup.fetch("rollups").first.fetch("gates")[0] = "NON_ROM_DELIVERY_EQ"
     static_state_rollup = deep_copy(payload)
     static_state_rollup.fetch("rollups").first.fetch("gates")[0] = "STATIC_STATE_EQ"
+    pending_build = deep_copy(payload)
+    pending_build["build_id"] = "PENDING"
+    pending_build.fetch("registry_rows").each { |row| row["build_id"] = "PENDING" }
+    pending_build.fetch("rollups").each { |row| row["build_id"] = "PENDING" }
     [
       ["approved.inherited_completion", inherited, "seven completed gates"],
       ["approved.rollup_non_rom_g1", non_rom_rollup, "rollup.player does not have seven completed gates"],
-      ["approved.rollup_static_state_g1", static_state_rollup, "rollup.player does not have seven completed gates"]
+      ["approved.rollup_static_state_g1", static_state_rollup, "rollup.player does not have seven completed gates"],
+      ["approved.pending_build", pending_build, "approved build ID is malformed"]
     ]
   when "repair"
     outside_basis = deep_copy(payload)
@@ -249,7 +385,8 @@ def main
     "negative_case_ids" => negative_case_ids,
     "live_adapter_coverage" => "EXCLUDED_BY_DESIGN",
     "live_only_adapters" => %w[
-      github_api signed_git_tags git_lfs_materialization ffprobe_media_decode ares_execution rom_rebuild
+      github_api signed_git_tags git_lfs_materialization advertised_ref_fresh_clone
+      benchmark_control_transaction ffprobe_media_decode ares_execution rom_rebuild
     ]
   }
   STDOUT.write(JSON.generate(receipt) + "\n")

@@ -1,9 +1,10 @@
-lib/n64game/asset_lifecycle_contract.rb	31539	b2dab80b17e598f03d589f5d1ef0250a056376b4e822891b1734d48f3df01b40	build:-	capture:-	role:production_harness.kernel
-scripts/test-asset-lifecycle-production	12981	62c762798213721f2f591bce0c7aa06a751bfaca067ec8e341bfe4eb781cce76	build:-	capture:-	role:production_harness.runner
+lib/n64game/asset_lifecycle_contract.rb	42687	7e5f8d18d9bc249543096f08a21805c82b1b8905e9ad02b3e5e4e0a2595579d9	build:-	capture:-	role:production_harness.kernel
+scripts/test-asset-lifecycle-production	20281	30188359256d4053b3a0b0020b8e0d8b948813d6307ba4b22c91e87c951d5139	build:-	capture:-	role:production_harness.runner
 test/fixtures/asset_lifecycle_production/approved/CASE.json	81845	b8761c83fe5cf2aa56d601f42b576551c6798afe0256f13cb36ce42faf0f29c5	build:-	capture:-	role:production_harness.case.approved
 test/fixtures/asset_lifecycle_production/generated_child/CASE.json	19109	dcc8f20d90f1b0243be8e68fa2dfc37ad148faa771877c8f657c695ee1343d3b	build:-	capture:-	role:production_harness.case.generated_child
 test/fixtures/asset_lifecycle_production/h2/CASE.json	1905	928810da5ad0462d35d869a1a5ee4ccf185eb302fdeeaddc1148bca1cc140950	build:-	capture:-	role:production_harness.case.h2
 test/fixtures/asset_lifecycle_production/move_pair/CASE.json	1794	edd8863b26d3f64a0d1daed588562827a1f70837c86f18ee31b7ab14538e7c0c	build:-	capture:-	role:production_harness.case.move_pair
-test/fixtures/asset_lifecycle_production/populated/CASE.json	57767	62620e3179ce09ef03ba2c5ca90db337e6babbb56642155f2caf47b8d5ed45f0	build:-	capture:-	role:production_harness.case.populated
+test/fixtures/asset_lifecycle_production/populated/CASE.json	56934	18958dab35204714177766885c7f504b10accac062f410a50b9d1a5f33ebdceb	build:-	capture:-	role:production_harness.case.populated
+test/fixtures/asset_lifecycle_production/public_concept/CASE.json	16552	da0a8320d88f4a0b6e32f9a1d961c5dd400659ef80f73c3da935778390d29e91	build:-	capture:-	role:production_harness.case.public_concept
 test/fixtures/asset_lifecycle_production/release/CASE.json	1869	8074c0ee7f2853ecace984530bece613a28512d3aae64ad6ada8b3b959c422cd	build:-	capture:-	role:production_harness.case.release
 test/fixtures/asset_lifecycle_production/repair/CASE.json	158535	5ff8f454012a88abb5ee754f377e3cf9646028c9eda6692e888daa9a8b85f9da	build:-	capture:-	role:production_harness.case.repair
