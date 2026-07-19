@@ -84,6 +84,33 @@
       "source_tree_manifest_sha256": "14bb6c7b527ba364fa5e2a5011779ddd24c61f998c79c120f28d895d92e62e6b",
       "source_tree_manifest_algorithm": "sha256-size-path-v1",
       "source_tree_exclusions": []
+    },
+    "gate5_host_tools_macos_arm64": {
+      "platform": "Darwin-arm64",
+      "compiler": {
+        "cc": "/usr/bin/clang",
+        "cxx": "/usr/bin/clang++",
+        "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "executable_sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818"
+      },
+      "gltf_to_t3d": {
+        "source_repository": "https://github.com/HailToDodongo/tiny3d.git",
+        "source_commit": "e84172f29f719680ac3213a7f408c2f721ef7b24",
+        "source_directory": "tools/gltf_importer",
+        "build_command": "/usr/bin/make CXX=/usr/bin/clang++ -j2",
+        "clean_builds_compared": 2,
+        "executable_size": 844392,
+        "executable_sha256": "4e67ee4013feef62609aca9e70301e8d0f2496e1b95dd025ddcaf7cc580fff99"
+      },
+      "mksprite": {
+        "source_repository": "https://github.com/DragonMinded/libdragon.git",
+        "source_commit": "f13b48985edbf4310f07779c76d9a68c7605037b",
+        "source_directory": "tools",
+        "build_command": "/usr/bin/make CC=/usr/bin/clang CXX=/usr/bin/clang++ mksprite -j2",
+        "clean_builds_compared": 2,
+        "executable_size": 1033256,
+        "executable_sha256": "b2e6cd1771256580e66630ba27ca66c264c4c7f20302868ba0fc15acb2875624"
+      }
     }
   },
   "github_actions": {

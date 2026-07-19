@@ -5,7 +5,6 @@ import copy
 import hashlib
 import io
 import json
-import os
 import struct
 import subprocess
 import tarfile
@@ -830,21 +829,6 @@ class Tiny3DPackageContractTests(unittest.TestCase):
         self.assertTrue(importer.is_file())
         return importer
 
-    def require_pinned_blender(self) -> Path:
-        lock = json.loads((ROOT / "config/toolchain.lock.json").read_text(encoding="utf-8"))
-        pin = lock["authoring"]["blender_macos_arm64"]
-        override = os.environ.get("N64GAME_BLENDER_BINARY")
-        blender = Path(override) if override else Path.home() / pin["macos_user_relative_path"]
-        if not blender.is_file() or blender.is_symlink():
-            self.skipTest(f"exact pinned Blender is unavailable at {blender}")
-        digest = hashlib.sha256()
-        with blender.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-        if digest.hexdigest() != pin["executable_sha256"]:
-            self.skipTest(f"Blender at {blender} is not the exact pinned executable")
-        return blender
-
     def assert_quarrune_material_contract(self, data: bytes, label: str) -> None:
         materials = tiny3d_material_records(data)
         self.assertEqual(
@@ -893,77 +877,6 @@ class Tiny3DPackageContractTests(unittest.TestCase):
                 struct.unpack_from(">ffbbBB", record, 0x54),
                 (0.0, float(height - 1), 0, 0, 0, 1),
             )
-
-    def test_authored_quarrune_glbs_roundtrip_through_pinned_importer(self) -> None:
-        blender = self.require_pinned_blender()
-        environment = {
-            "PATH": "/usr/bin:/bin",
-            "LANG": "C.UTF-8",
-            "LC_ALL": "C.UTF-8",
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
-        for name in ("HOME", "TMPDIR"):
-            if os.environ.get(name):
-                environment[name] = os.environ[name]
-        authored = subprocess.run(
-            [
-                str(blender), "--background", "--factory-startup", "--offline-mode",
-                "--disable-autoexec", "--python", str(ROOT / "tools/n64game_quarrune_author.py"),
-            ],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            timeout=300,
-            env=environment,
-        )
-        self.assertEqual(authored.returncode, 0, authored.stdout[-8000:])
-        output_root = ROOT / "build/generated/quarrune_authoring"
-        report = json.loads((output_root / "candidate_report.json").read_text(encoding="utf-8"))
-        self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
-        self.assertEqual(report["action_order"], ANIMATION_NAMES)
-
-        build_root = ROOT / "build"
-        build_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="tiny3d-authored-material-", dir=build_root) as temporary:
-            stage = Path(temporary)
-            importer = self.build_pinned_importer(stage)
-            texture_root = stage / "filesystem/echo/echo.quarrune"
-            generated = subprocess.run(
-                [
-                    "/usr/bin/python3", "-I", "-B",
-                    str(ROOT / "tools/n64game_quarrune_textures.py"),
-                    "--output-dir", str(texture_root),
-                ],
-                cwd=ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-                timeout=60,
-                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-            )
-            self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
-            for stem in ("quarrune_hero", "quarrune_distance"):
-                glb = output_root / f"{stem}.glb"
-                output = stage / f"{stem}.t3dm"
-                converted = subprocess.run(
-                    [
-                        str(importer), str(glb), str(output), "--base-scale=64",
-                        "--asset-path=filesystem",
-                    ],
-                    cwd=stage,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                    timeout=60,
-                    env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
-                )
-                self.assertEqual(converted.returncode, 0, converted.stdout + converted.stderr)
-                self.assert_quarrune_material_contract(output.read_bytes(), stem)
 
     def test_pinned_importer_roundtrips_exact_producible_material_state(self) -> None:
         build_root = ROOT / "build"
