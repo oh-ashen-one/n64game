@@ -50,53 +50,67 @@ These values come directly from the master specification and must agree across e
 
 ### Story and pacing
 
-- [ ] The full chapter can be followed from cold boot without inventing a missing transition, objective, conversation, or destination.
-- [ ] Every segment includes expected time, active-control time, critical path, optional content, and anti-padding intent.
-- [ ] The exact slate insertion point and one idempotent watched/skipped handoff are defined.
-- [ ] Name entry handles default/custom input, length bounds, backspace, confirmation, and cancel protection.
-- [ ] Both 2v2 battles identify participants, encounter intent, tutorial or AI behavior, win/loss state, retry behavior, and reward idempotency.
-- [ ] The Annex and Estate have critical-path and optional interactions with readable objective guidance.
-- [ ] World-map travel preserves and saves the correct state in both directions.
-- [ ] Tavi's discovery, follower recovery, transitions, return, and objective resolution are state-complete.
-- [ ] Dialogue skipping, rapid input, controller loss, invalid save, revisit, and repeated-objective cases have explicit outcomes.
-- [ ] Three eventual timing captures can be compared against named segment markers without manual interpretation.
+- [x] The full chapter can be followed from cold boot without inventing a missing transition, objective, conversation, or destination.
+- [x] Every segment includes expected time, active-control time, critical path, optional content, and anti-padding intent.
+- [x] The exact slate insertion point and one idempotent watched/skipped handoff are defined.
+- [x] Name entry handles default/custom input, length bounds, backspace, confirmation, and cancel protection.
+- [x] Both 2v2 battles identify participants, encounter intent, tutorial or AI behavior, win/loss state, retry behavior, and reward idempotency.
+- [x] The Annex and Estate have critical-path and optional interactions with readable objective guidance.
+- [x] World-map travel preserves and saves the correct state in both directions.
+- [x] Tavi's discovery, follower recovery, transitions, return, and objective resolution are state-complete.
+- [x] Dialogue skipping, rapid input, controller loss, invalid save, revisit, and repeated-objective cases have explicit outcomes.
+- [x] Three eventual timing captures can be compared against named segment markers without manual interpretation.
 
 ### Technical and data design
 
-- [ ] Scene ownership includes synchronized exit, arena/registry accounting, partial-load rollback, and transition safety.
-- [ ] Update, fixed simulation, rendering, UI, audio, loading, and final display submission have an explicit frame order.
-- [ ] Exploration, dialogue, battle, world map, cutscene slate, save, and post-chapter systems have defined interfaces and ownership.
-- [ ] Future FMV playback can replace the slate without changing the completion callback or story flags.
-- [ ] Immutable content definitions are separate from runtime actor/state objects and asset paths are not scattered through gameplay logic.
-- [ ] Save serialization uses exact byte offsets and endianness rather than native C struct layout, and every serialized ID/bit domain is bound to the immutable reviewed-commit registry with append/tombstone-only history checks.
-- [ ] Power interruption, invalid checksum, incompatible version, and interrupted transition behavior are specified.
-- [ ] The memory plan accounts for triple framebuffers, scene assets, battle assets, audio, UI, stacks/heap, and a measured 512 KiB margin.
-- [ ] Host-side deterministic tests and on-emulator instrumentation are designed before implementation.
-- [ ] Build and asset conversion inputs are pinned and public CI outputs are named.
+- [x] Scene ownership includes synchronized exit, arena/registry accounting, partial-load rollback, and transition safety.
+- [x] Update, fixed simulation, rendering, UI, audio, loading, and final display submission have an explicit frame order.
+- [x] Exploration, dialogue, battle, world map, cutscene slate, save, and post-chapter systems have defined interfaces and ownership.
+- [x] Future FMV playback can replace the slate without changing the completion callback or story flags.
+- [x] Immutable content definitions are separate from runtime actor/state objects and asset paths are not scattered through gameplay logic.
+- [x] Save serialization uses exact byte offsets and endianness rather than native C struct layout, and every serialized ID/bit domain is bound to the immutable reviewed-commit registry with append/tombstone-only history checks.
+- [x] Power interruption, invalid checksum, incompatible version, and interrupted transition behavior are specified.
+- [x] The memory plan accounts for triple framebuffers, scene assets, battle assets, audio, UI, stacks/heap, and a measured 512 KiB margin.
+- [x] Host-side deterministic tests and on-emulator instrumentation are designed before implementation.
+- [x] Build and asset conversion inputs are pinned and public CI outputs are named.
 
 ### Art and asset production
 
-- [ ] Every major faction, humanoid, Echoform class, location, UI family, VFX family, and prop family has an original, coherent shape language.
-- [ ] Palette values, texture formats/sizes, vertex-color behavior, material counts, geometry/rig limits, scale, naming, and export conventions are numeric where practical.
-- [ ] The art bible rejects generic generated shapes, primitives as final art, default materials, empty rooms, flat lighting, baked-light mistakes, stiff animation, malformed anatomy, and identity drift.
-- [ ] Gameplay-camera and native 320×240 readability drive silhouettes, poses, contrast, and interface sizing.
-- [ ] The asset inventory contains all eight Echoforms, all required humanoids, both complete destinations, world map, at least 25 purposeful props, every collision/export unit, all UI, all implemented move VFX/audio, all required animations, the loading/slate presentation, and every storyboard/review deliverable.
-- [ ] Each inventory item has a unique stable ID, scope/budget, dependency, production priority, and required evidence.
-- [ ] Every major asset must pass the seven review gates and receive two deliberate polish passes after its first in-engine appearance.
-- [ ] The visual benchmark is a representative integrated scene, not isolated attractive renders.
-- [ ] Review templates record reviewer, date, version/commit, evidence paths, failures, revisions, and explicit approve/rebuild decisions.
+- [x] Every major faction, humanoid, Echoform class, location, UI family, VFX family, and prop family has an original, coherent shape language.
+- [x] Palette values, texture formats/sizes, vertex-color behavior, material counts, geometry/rig limits, scale, naming, and export conventions are numeric where practical.
+- [x] The art bible rejects generic generated shapes, primitives as final art, default materials, empty rooms, flat lighting, baked-light mistakes, stiff animation, malformed anatomy, and identity drift.
+- [x] Gameplay-camera and native 320×240 readability drive silhouettes, poses, contrast, and interface sizing.
+- [x] The asset inventory contains all eight Echoforms, all required humanoids, both complete destinations, world map, at least 25 purposeful props, every collision/export unit, all UI, all implemented move VFX/audio, all required animations, the loading/slate presentation, and every storyboard/review deliverable.
+- [x] Each inventory item has a unique stable ID, scope/budget, dependency, production priority, and required evidence.
+- [x] Every major asset must pass the seven review gates and receive two deliberate polish passes after its first in-engine appearance.
+- [x] The visual benchmark is a representative integrated scene, not isolated attractive renders.
+- [x] Review templates record reviewer, date, version/commit, evidence paths, failures, revisions, and explicit approve/rebuild decisions.
 
 ### Cross-document consistency and public hygiene
 
-- [ ] All named characters, Echoforms, moves, locations, scene IDs, story flags, encounter IDs, and asset IDs agree across the document set.
-- [ ] Roster and asset counts reconcile exactly; reuse is explicit and does not disguise a missing distinct Echoform.
-- [ ] The three total durations have an 18–25 minute median, and every qualifying run independently contains at least 15 minutes of active control.
-- [ ] Art budgets fit the architecture's memory/render assumptions and are marked for Gate 4 measurement rather than presented as already proven.
-- [ ] Save flags and transition states cover every story precondition/postcondition named in the script.
-- [ ] No production content uses a Pokémon or Pandemonium name, asset, protected design, dialogue, layout, UI expression, or closely paraphrased code; clean-room audit mentions are explicitly non-production constraints.
-- [ ] Every reachable Git blob plus the index and worktree has been scanned by content; no credential, reference download, ROM/archive extension or magic, unlicensed font, or ambiguous third-party media is present.
-- [ ] Markdown links resolve, files pass `git diff --check`, and public files contain no placeholder/TODO language presented as accepted production content.
+- [x] All named characters, Echoforms, moves, locations, scene IDs, story flags, encounter IDs, and asset IDs agree across the document set.
+- [x] Roster and asset counts reconcile exactly; reuse is explicit and does not disguise a missing distinct Echoform.
+- [x] The three total durations have an 18–25 minute median, and every qualifying run independently contains at least 15 minutes of active control.
+- [x] Art budgets fit the architecture's memory/render assumptions and are marked for Gate 4 measurement rather than presented as already proven.
+- [x] Save flags and transition states cover every story precondition/postcondition named in the script.
+- [x] No production content uses a Pokémon or Pandemonium name, asset, protected design, dialogue, layout, UI expression, or closely paraphrased code; clean-room audit mentions are explicitly non-production constraints.
+- [x] Every reachable Git blob plus the index and worktree has been scanned by content; no credential, reference download, ROM/archive extension or magic, unlicensed font, or ambiguous third-party media is present.
+- [x] Markdown links resolve, files pass `git diff --check`, and public files contain no placeholder/TODO language presented as accepted production content.
 
 ## Gate 2 approval record
 
-Gate 2 remains **in progress** until the audit above is completed against the actual files. The approval record must contain the full reviewed-content commit, exactly one `Independent reviewer 1` and one `Independent reviewer 2`, canonical distinct identities using the `github:<handle>` or `agent:/<canonical-task-path>` form, and an ISO review date no earlier than the reviewed commit and no later than the approval commit. It must contain one exact validation-evidence row per required command; the value syntax is `reviewed=<40-hex SHA>; command=<exact command>; result=PASS`. The required ordered commands are `scripts/validate-data-c`, `scripts/validate-dialogue-graph`, `scripts/validate-condition-registry`, `scripts/validate-id-locks`, `scripts/validate-asset-contract`, `scripts/validate-public-hygiene`, and `scripts/validate-preproduction --reviewed-content`. The last mode succeeds only when every substantive check passes and the error set is exactly the seven approval-only placeholders, making the evidence reproducible on the reviewed-content commit; normal `scripts/validate-preproduction` must still fail there and may pass only after the direct approval child. It must also contain one explicit deferred-measurement-risk row covering Gate 3 and Gate 4, followed by a final `APPROVED` or `REBUILD` decision. The approval transition remains a direct, single-parent child of the reviewed-content commit and changes only the three controlled approval artifacts.
+| Field | Value |
+|---|---|
+| Reviewed content commit | `aae0e39f3f8e46de0b292912a55a8a1f35a25444` |
+| Independent reviewer 1 | `agent:/root/gate2_eta_exact_aae0e39` |
+| Independent reviewer 2 | `agent:/root/gate2_theta_exact_aae0e39` |
+| Review date | `2026-07-19` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-data-c; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-dialogue-graph; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-condition-registry; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-id-locks; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-asset-contract; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-public-hygiene; result=PASS` |
+| Validation evidence | `reviewed=aae0e39f3f8e46de0b292912a55a8a1f35a25444; command=scripts/validate-preproduction --reviewed-content; result=PASS` |
+| Deferred measurement risks | `Gate 3 toolchain proof and Gate 4 native-resolution benchmark proof remain required` |
+| Decision | `APPROVED` |

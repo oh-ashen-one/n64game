@@ -4,7 +4,7 @@
 
 ## Current status
 
-**Preproduction — Gate 2: specification and production-contract reconciliation in progress.**
+**Preproduction — Gate 2: complete.**
 
 The repository does not contain a playable ROM yet. Gate 2 is the specification and production-contract stage for the clean-room boundary, art direction, technical architecture, production inventory, licensing, and evidence gates. Gate 3 will establish the pinned reproducible toolchain and first verified clean ROM. Status claims are updated only after the corresponding output has been verified.
 
