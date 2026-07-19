@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -160,8 +161,66 @@ class BuildContractTests(unittest.TestCase):
     def test_audited_ares_hash_is_consistent(self) -> None:
         lock = json.loads((ROOT / "config" / "toolchain.lock.json").read_text(encoding="utf-8"))
         digest = lock["ares"]["macos_executable_sha256"]
-        self.assertIn(digest, (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8"))
+        wrapper = (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8")
+        self.assertIn(digest, wrapper)
+        self.assertIn("--setting General/HomebrewMode=true", wrapper)
+        self.assertIn("--setting Nintendo64/ExpansionPak=false", wrapper)
+        self.assertIn("--setting Input/Defocus=Allow", wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
+
+    def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:
+        capture_root = ROOT / "captures" / "gate3"
+        evidence = json.loads((capture_root / "evidence.json").read_text(encoding="utf-8"))
+        lines = (capture_root / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+        expected = {
+            "ares-v148-ci-29674638989-frame-a.png": (
+                "b5fde7458a6e606f76139732894dfa4784dd6fae2eb57f351fea5424ebe1d75a",
+                (836, 672),
+            ),
+            "ares-v148-ci-29674638989-frame-b.png": (
+                "0db4dc319016fbaddd01671748927c9560fb6e2af173948b18b9358ee98e94a5",
+                (836, 672),
+            ),
+        }
+        self.assertEqual(evidence["schema_version"], 1)
+        self.assertEqual(evidence["ci"]["workflow_run"], 29674638989)
+        self.assertEqual(evidence["ci"]["workflow_job"], 88159621235)
+        self.assertEqual(evidence["ci"]["artifact_id"], 8438442749)
+        self.assertEqual(
+            evidence["rom"]["sha256"],
+            "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
+        )
+        self.assertEqual(evidence["rom"]["size_bytes"], 212992)
+        self.assertEqual(evidence["ares"]["version"], "v148")
+        self.assertEqual(
+            evidence["ares"]["executable_sha256"],
+            "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345",
+        )
+        self.assertIs(evidence["ares"]["homebrew_mode"], True)
+        self.assertIs(evidence["ares"]["expansion_pak"], False)
+        self.assertEqual(evidence["ares"]["defocus"], "Allow")
+        self.assertEqual(evidence["local_build"]["status"], "BLOCKED")
+        self.assertEqual(evidence["local_build"]["docker_engine"], "UNAVAILABLE")
+        manifest_captures = {row["path"]: row for row in evidence["captures"]}
+        self.assertEqual(set(manifest_captures), set(expected))
+        self.assertEqual(len(lines), len(expected))
+        seen: set[str] = set()
+        for line in lines:
+            digest, filename = line.split("  ", 1)
+            self.assertIn(filename, expected)
+            self.assertNotIn(filename, seen)
+            seen.add(filename)
+            data = (capture_root / filename).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
+            self.assertEqual(digest, expected[filename][0])
+            self.assertEqual(data[:16], b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+            self.assertEqual(struct.unpack(">II", data[16:24]), expected[filename][1])
+            capture = manifest_captures[filename]
+            self.assertEqual(capture["sha256"], digest)
+            self.assertEqual(capture["size_bytes"], len(data))
+            self.assertEqual((capture["width"], capture["height"]), expected[filename][1])
+        self.assertEqual(seen, set(expected))
+        self.assertEqual(len({row["sha256"] for row in manifest_captures.values()}), len(expected))
 
     def test_build_uses_audited_container_entrypoint(self) -> None:
         script = (ROOT / "scripts" / "build-rom").read_text(encoding="utf-8")

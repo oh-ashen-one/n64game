@@ -1,6 +1,6 @@
 # Gate 3 Toolchain and Reproducible ROM Build
 
-This document describes the implemented Gate 3 build contract. The current ROM is a small original Tiny3D diagnostic scene used to prove exact dependency compatibility and to produce the candidate for a separate Ares boot review. It is not the complete game opening, a vertical slice, or a claim that later production gates are finished.
+This document describes the implemented Gate 3 build contract. The current ROM is a small original Tiny3D diagnostic scene used to prove exact dependency compatibility. Its clean public-CI bytes have completed a separate Ares boot review recorded in [GATE3_BOOT_EVIDENCE.md](GATE3_BOOT_EVIDENCE.md); the CI manifest correctly remains `ares_boot=NOT_RUN` because CI itself did not perform that GUI review. This ROM is not the complete game opening, a vertical slice, or a claim that later production gates are finished.
 
 ## Exact dependency authority
 
@@ -76,7 +76,7 @@ scripts/run-ares \
   build/game/n64game-gate3.z64
 ```
 
-The wrapper verifies both executable and ROM hashes, forces `General/HomebrewMode=true`, forces `Nintendo64/ExpansionPak=false`, and uses isolated versioned settings/save/screenshot/debug paths. Those overrides are mandatory because Ares v148 defaults Homebrew Mode off and Expansion Pak on. `--check-only` verifies the complete tuple without launching the GUI.
+The wrapper verifies both executable and ROM hashes, forces `General/HomebrewMode=true`, forces `Nintendo64/ExpansionPak=false`, forces `Input/Defocus=Allow`, and uses isolated versioned settings/save/screenshot/debug paths. The first two overrides are mandatory because Ares v148 defaults Homebrew Mode off and Expansion Pak on. The defocus override keeps shell-launched certification runs advancing when macOS places the emulator window on a non-current Space; without it, Ares's default pause-on-defocus policy can leave a valid ROM on a black pre-frame window. `--check-only` verifies the complete tuple without launching the GUI.
 
 ## Public CI
 

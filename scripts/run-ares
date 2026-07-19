@@ -47,7 +47,7 @@ if [[ "$VERSION" != *"v148"* ]]; then
     exit 1
 fi
 
-printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\n' \
+printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
     "$VERSION" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
@@ -58,6 +58,7 @@ exec "$ARES" \
     --settings-file "$STATE_ROOT/settings.bml" \
     --setting General/HomebrewMode=true \
     --setting Nintendo64/ExpansionPak=false \
+    --setting Input/Defocus=Allow \
     --setting "Paths/Home=$STATE_ROOT/Systems/" \
     --setting "Paths/Saves=$STATE_ROOT/Saves/" \
     --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/" \

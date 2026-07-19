@@ -4,11 +4,15 @@
 
 ## Current status
 
-**Toolchain — Gate 3: in progress. Gate 2 is complete.**
+**Toolchain — Gate 3: verification in progress. Gate 2 is complete.**
 
-The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are now locked, with public gitlinks and stable build entry points under `scripts/`. The current ROM target is deliberately a Gate 3 toolchain/boot diagnostic, not the playable opening and not a full-game claim. Gate 3 remains open until a clean public-CI ROM artifact and a visually inspected Ares 148 boot are both recorded. Status claims are updated only after the corresponding output has been verified.
+The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are locked, with public gitlinks and stable build entry points under `scripts/`. A clean public-CI ROM artifact has built successfully and its exact bytes have rendered advancing frames in the pinned Ares 148 target; the audit is recorded in [docs/GATE3_BOOT_EVIDENCE.md](docs/GATE3_BOOT_EVIDENCE.md). The current ROM remains deliberately a Gate 3 diagnostic, not the playable opening and not a full-game claim. Gate 3 stays in verification until the evidence-bearing revision passes its final public checks.
 
 The authoritative production contract is [docs/N64GAME_MASTER_SPEC.md](docs/N64GAME_MASTER_SPEC.md). The reusable goal prompt is [docs/N64GAME_GOAL_PROMPT.md](docs/N64GAME_GOAL_PROMPT.md).
+
+![Gate 3 diagnostic running in Ares v148](captures/gate3/ares-v148-ci-29674638989-frame-a.png)
+
+This screenshot is the small Gate 3 diagnostic—not gameplay or representative production art. Its rotating Tiny3D solid proves the pinned render stack is alive; the `A` button toggles the diagnostic pulse state.
 
 ## Creative direction
 
@@ -33,6 +37,22 @@ Pokémon XD: Gale of Darkness informs only the high-level pacing and functional 
 - Public CI-generated `.z64` and SHA-256 artifacts
 
 The reproducible build contract and exact commands are documented in [docs/TOOLCHAIN.md](docs/TOOLCHAIN.md). Generated ROMs and reports stay under ignored `build/`; ROM binaries never enter normal Git history.
+
+## Build and run the Gate 3 diagnostic
+
+```sh
+git clone --recurse-submodules https://github.com/oh-ashen-one/n64game.git
+cd n64game
+git lfs install && git lfs pull
+npm ci --ignore-scripts
+make validate
+make rom && make test && make report
+scripts/run-ares --homebrew-mode \
+  --expected-rom-sha256="$(shasum -a 256 build/game/n64game-gate3.z64 | awk '{print $1}')" \
+  build/game/n64game-gate3.z64
+```
+
+The build requires a working Docker engine; Ares v148 Homebrew Mode is the certification target. See [the toolchain guide](docs/TOOLCHAIN.md) for exact versions, host checks, outputs, and the current local-engine blocker.
 
 ## Licensing
 

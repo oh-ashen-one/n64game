@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "ci": {
+    "workflow_run": 29674638989,
+    "workflow_job": 88159621235,
+    "artifact_id": 8438442749,
+    "pr_head": "4265329248375578e1bbe1c416e9ba004f7fa36b",
+    "actions_merge_revision": "657d3500e157bd10e09618a178a12c792c9977b5"
+  },
+  "rom": {
+    "sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
+    "size_bytes": 212992
+  },
+  "ares": {
+    "version": "v148",
+    "executable_sha256": "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345",
+    "homebrew_mode": true,
+    "expansion_pak": false,
+    "defocus": "Allow"
+  },
+  "local_build": {
+    "status": "BLOCKED",
+    "docker_desktop_version": "4.82.0",
+    "docker_desktop_build": "233772",
+    "docker_engine": "UNAVAILABLE",
+    "host_policy_error": "failed to call driver: 0x3"
+  },
+  "captures": [
+    {
+      "path": "ares-v148-ci-29674638989-frame-a.png",
+      "captured_at": "2026-07-19T01:25:09-04:00",
+      "width": 836,
+      "height": 672,
+      "size_bytes": 75210,
+      "sha256": "b5fde7458a6e606f76139732894dfa4784dd6fae2eb57f351fea5424ebe1d75a"
+    },
+    {
+      "path": "ares-v148-ci-29674638989-frame-b.png",
+      "captured_at": "2026-07-19T01:26:18-04:00",
+      "width": 836,
+      "height": 672,
+      "size_bytes": 73695,
+      "sha256": "0db4dc319016fbaddd01671748927c9560fb6e2af173948b18b9358ee98e94a5"
+    }
+  ]
+}

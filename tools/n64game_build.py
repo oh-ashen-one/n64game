@@ -32,7 +32,7 @@ TOC_OFFSET = (LIBDRAGON_IPL3_END + 15) & ~15
 EXPECTED_HOST_TEST_REPORT = (
     "suite=gate3_build_contract\n"
     "result=PASS\n"
-    "scope=dependency pins, runtime manifest, ROM header parser, report contract; gameplay suites begin at Gate 5\n"
+    "scope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest; gameplay suites begin at Gate 5\n"
 )
 
 
