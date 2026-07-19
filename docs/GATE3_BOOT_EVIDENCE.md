@@ -4,6 +4,8 @@
 
 **PASS for Gate 3 boot and live-frame advancement.** The exact ROM downloaded from the public GitHub Actions artifact opened in the pinned Ares v148 binary, rendered the original Tiny3D diagnostic scene, and advanced between two direct window captures. This is deliberately narrow evidence: it does not claim controller certification, performance certification, production-art approval, the playable opening, or the complete game.
 
+**PASS for the complete Gate 3 toolchain exit.** A later byte-identical ROM was built from a clean checkout through Docker Desktop itself, all required local checks passed, and the same source tree passed a fresh public GitHub Actions build. Gate 4 may begin; every later gameplay, visual, performance, and release claim remains gated separately.
+
 ## Public build identity
 
 | Field | Verified value |
@@ -22,6 +24,8 @@
 The downloaded artifact had exactly the eight workflow-declared files and no symlinks. Its checksum file passed from the artifact's `game/` directory. The ROM, map, ELF-size, and host-test hashes recomputed to the values in `dependency-build-manifest.json`; the manifest reported a clean source tree and `PASS` for pins, ROM structure, embedded big-endian MIPS ELF, ROM budget, and host tests. The live `refs/pull/3/merge` value matched the recorded Actions merge revision at audit time.
 
 After the local-runtime portability fix, public confirmation run `29675864028` / job `88163077829` passed on PR head `85e91c793eccaeff70327ea6fd67e8f7e775faad` and Actions merge revision `75499d5784967852cab2c4ca071cf7aeb05e2e70`. Artifact `8438863000` contained the same exact eight-file inventory; its uploaded ZIP digest is `f7bc2ba02d37ed1535f300702fa721f40da9b7fe0787dac76b6653d026c3ca83`. Its 212992-byte ROM retained SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e`, so the later source revision is byte-identical to the ROM used for both Ares captures.
+
+Public closure run `29676805197` / job `88165566728` then passed at PR head `dd038488d7100c30fa3699e15ffa0613ec6d6468`. GitHub Actions checked out synthetic merge revision `1fbdeb4338975176ef500689ab5a178a0c97ade6`; its tree `1a4f52637cbc4f0e0efbe535c17114b4d7d4b5cb` is byte-for-byte identical to the PR-head tree. Artifact `8439167230`, named `n64game-gate3-1fbdeb4338975176ef500689ab5a178a0c97ade6`, had eight required files, a 248296-byte ZIP with SHA-256 `b69b70038137d5c09bda0808149bab1118b674d30162ada1d11588c50e0d79d0`, and the same 212992-byte ROM with SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e`. The downloaded checksum passed independently. CI correctly continues to label Ares boot as not run; the matching-ROM captures above supply that separate proof.
 
 The machine-readable identity record is [`captures/gate3/evidence.json`](../captures/gate3/evidence.json). Host tests recompute both PNG hashes, byte sizes, PNG signatures, dimensions, and the distinct-frame requirement, then lock the recorded ROM, Ares, and CI identifiers to audited values against it and `SHA256SUMS`.
 
@@ -65,11 +69,11 @@ Ares emitted `[unusual]` RSP cache-coherence diagnostics while the scene continu
 
 ## Local-build status
 
-**PASS through an audited Docker-compatible fallback; the master specification's literal Docker Desktop requirement remains blocked, so Gate 3 remains open.** On clean source commit `85e91c793eccaeff70327ea6fd67e8f7e775faad` (tree `292a0c867bd71b1f1c7d5cf7d935f9b0953a0016`), `make validate`, `make rom`, all 17 host tests, `make report`, and `scripts/bootstrap-check --all` passed. The local ROM was 212992 bytes with SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e`, identical to the public CI and Ares evidence ROM.
+**PASS through Docker Desktop itself.** On clean source commit `dd038488d7100c30fa3699e15ffa0613ec6d6468` (tree `1a4f52637cbc4f0e0efbe535c17114b4d7d4b5cb`), Docker Desktop completed `make rom`; `make validate`, all 17 host tests, `make report`, and `scripts/bootstrap-check --all` then passed. The ROM was 212992 bytes with SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e`, identical to the public-CI and Ares-evidence ROM.
 
-The successful local build used Colima 0.10.3 and Lima 2.1.4 with macOS Virtualization.framework, an ARM64 VM, virtiofs, Rosetta enabled, Docker client 29.6.2, and Docker Engine 29.5.2. The engine executed the exact locked `linux/amd64` image ID `sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83`. The wrapper now derives the positive `SOURCE_DATE_EPOCH` from the trusted host checkout and passes it into the container, avoiding a Git `safe.directory` exception when a Docker-compatible runtime presents bind-mount ownership differently.
+The verified runtime was Docker Desktop 4.82.0 build 233772, context `desktop-linux`, Docker client 29.6.2, Docker Engine 29.6.1, engine name `docker-desktop`, and an ARM64 LinuxKit VM. It ran the exact locked `linux/amd64` image ID `sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83`, with the repository mounted read/write only at `/libdragon`. The dependency manifest records the clean source commit and tree, and the public closure run above independently rebuilt the identical source tree and ROM bytes.
 
-This fallback does not get relabeled as Docker Desktop. Docker Desktop 4.82.0 build 233772 remains installed from the exact Homebrew ARM64 archive SHA-256 `2da717ef1ca2ae0240a68458e0aaee32be9bd9fe574fd916dd43dae40f17c12c`; its deep Developer ID signature for Docker Inc team `9BNSXJN65R` passes and the official DMG notarization ticket validates. The host policy service still reports `failed to call driver: 0x3`, kills or stalls the backend before `dyld` startup, and never creates its Docker socket. Because `docs/N64GAME_MASTER_SPEC.md` explicitly says to use Docker Desktop, Gate 3 cannot be called complete unless Docker Desktop itself passes after a host reboot or the user explicitly authorizes a contract amendment.
+No host reboot occurred. A fresh Docker app launch recovered the backend despite the earlier macOS policy diagnostic `failed to call driver: 0x3`; that earlier diagnostic is retained rather than rewritten as though it never happened. The prior Colima 0.10.3 / Lima 2.1.4 build remains useful portability evidence, but it is superseded for Gate 3 closure by this literal Docker Desktop pass.
 
 ## Explicit boundaries
 

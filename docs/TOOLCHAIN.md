@@ -44,9 +44,13 @@ Project code enables `-Wshadow` and `-Wconversion` as errors in addition to the 
 
 The selected OCI image currently publishes Linux AMD64 plus provenance, not an ARM64 runtime. The wrapper sets `DOCKER_DEFAULT_PLATFORM=linux/amd64`; Apple Silicon therefore requires Docker's x86 emulation. CI runs the same image natively on an AMD64 runner.
 
-### Audited Apple Silicon fallback
+### Verified Apple Silicon runtime
 
-The master specification names Docker Desktop as the required local runtime. On the audited host, Docker Desktop 4.82.0 is still blocked before engine startup by macOS policy error `failed to call driver: 0x3`. To separate that host-service failure from project reproducibility, Gate 3 also verified the same Docker API and immutable image through Colima 0.10.3 / Lima 2.1.4 using Virtualization.framework, virtiofs, and Rosetta:
+Gate 3 passed on Docker Desktop 4.82.0 build 233772 using context `desktop-linux`, Docker client 29.6.2, and Docker Engine 29.6.1. On clean commit `dd038488d7100c30fa3699e15ffa0613ec6d6468`, Docker Desktop ran the exact pinned `linux/amd64` image and produced the CI/Ares ROM SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e`. `make validate`, `make rom`, 17/17 host tests, `make report`, and `scripts/bootstrap-check --all` all passed. Apple Silicon uses Docker Desktop's x86 emulation because the pinned image has an AMD64 runtime.
+
+The Docker backend recovered after a fresh app launch without a host reboot. The earlier macOS diagnostic `failed to call driver: 0x3` remains disclosed in the evidence record; it did not prevent the verified run.
+
+Before Docker Desktop recovered, the same immutable build was also verified through Colima 0.10.3 / Lima 2.1.4 using Virtualization.framework, virtiofs, and Rosetta. That historical fallback can help diagnose Docker Desktop host-service failures, but it is not the Gate 3 closure proof:
 
 ```sh
 brew install colima
@@ -59,7 +63,7 @@ scripts/bootstrap-check --all
 make validate && make rom && make test && make report
 ```
 
-This fallback produced the exact CI/Ares ROM SHA-256 `230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e` from clean commit `85e91c793eccaeff70327ea6fd67e8f7e775faad`. It proves the pinned build is portable through a local Docker-compatible engine, but it is not described as a Docker Desktop pass and does not silently amend the master specification.
+This fallback produced the exact same ROM from clean commit `85e91c793eccaeff70327ea6fd67e8f7e775faad`. Keep it separate from the verified Docker Desktop record so provider identity remains auditable.
 
 ## Outputs
 

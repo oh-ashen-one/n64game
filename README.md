@@ -4,9 +4,9 @@
 
 ## Current status
 
-**Toolchain — Gate 3: verification in progress. Gate 2 is complete.**
+**Next: Visual benchmark — Gate 4. Gates 1–3 are complete.**
 
-The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are locked, with public gitlinks and stable build entry points under `scripts/`. Clean public CI and an audited local Docker-compatible engine now produce the same ROM bytes, and those exact bytes rendered advancing frames in pinned Ares 148; the audit is recorded in [docs/GATE3_BOOT_EVIDENCE.md](docs/GATE3_BOOT_EVIDENCE.md). The current ROM remains deliberately a Gate 3 diagnostic, not the playable opening and not a full-game claim. Gate 3 stays in verification because macOS still blocks Docker Desktop itself, which the master specification names literally; the Colima fallback is recorded without pretending it satisfied that final runtime requirement.
+The exact libdragon, Tiny3D, CLI, container, Ares, and CI dependencies are locked, with public gitlinks and stable build entry points under `scripts/`. A clean Docker Desktop build and fresh public CI build produced the same ROM bytes, and those exact bytes rendered advancing frames in pinned Ares 148; the audit is recorded in [docs/GATE3_BOOT_EVIDENCE.md](docs/GATE3_BOOT_EVIDENCE.md). The current ROM remains deliberately a Gate 3 diagnostic, not the playable opening and not a full-game claim. Gate 4 is the next ordered gate and will establish the representative in-engine visual bar before any mass asset production.
 
 The authoritative production contract is [docs/N64GAME_MASTER_SPEC.md](docs/N64GAME_MASTER_SPEC.md). The reusable goal prompt is [docs/N64GAME_GOAL_PROMPT.md](docs/N64GAME_GOAL_PROMPT.md).
 
@@ -52,7 +52,7 @@ scripts/run-ares --homebrew-mode \
   build/game/n64game-gate3.z64
 ```
 
-The build requires a working Docker-compatible engine; the production contract still names Docker Desktop, and Ares v148 Homebrew Mode is the certification target. See [the toolchain guide](docs/TOOLCHAIN.md) for exact versions, host checks, outputs, the successful audited fallback, and the remaining Docker Desktop blocker.
+The verified build runtime is Docker Desktop, and Ares v148 Homebrew Mode is the first certification target. See [the toolchain guide](docs/TOOLCHAIN.md) for exact versions, host checks, outputs, the Docker Desktop proof, and the separately documented historical fallback.
 
 ## Licensing
 

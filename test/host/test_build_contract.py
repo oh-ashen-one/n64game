@@ -182,7 +182,7 @@ class BuildContractTests(unittest.TestCase):
                 (836, 672),
             ),
         }
-        self.assertEqual(evidence["schema_version"], 2)
+        self.assertEqual(evidence["schema_version"], 3)
         self.assertEqual(evidence["ci"]["workflow_run"], 29674638989)
         self.assertEqual(evidence["ci"]["workflow_job"], 88159621235)
         self.assertEqual(evidence["ci"]["artifact_id"], 8438442749)
@@ -223,13 +223,40 @@ class BuildContractTests(unittest.TestCase):
             "292a0c867bd71b1f1c7d5cf7d935f9b0953a0016",
         )
         self.assertIs(evidence["confirmation_ci"]["rom_matches_boot_evidence"], True)
+        closure_ci = evidence["closure_ci"]
+        self.assertEqual(closure_ci["workflow_run"], 29676805197)
+        self.assertEqual(closure_ci["workflow_job"], 88165566728)
+        self.assertEqual(closure_ci["artifact_id"], 8439167230)
+        self.assertEqual(
+            closure_ci["artifact_name"],
+            "n64game-gate3-1fbdeb4338975176ef500689ab5a178a0c97ade6",
+        )
+        self.assertEqual(
+            closure_ci["artifact_sha256"],
+            "b69b70038137d5c09bda0808149bab1118b674d30162ada1d11588c50e0d79d0",
+        )
+        self.assertEqual(closure_ci["artifact_size_bytes"], 248296)
+        self.assertEqual(
+            closure_ci["pr_head"],
+            "dd038488d7100c30fa3699e15ffa0613ec6d6468",
+        )
+        self.assertEqual(
+            closure_ci["actions_merge_revision"],
+            "1fbdeb4338975176ef500689ab5a178a0c97ade6",
+        )
+        self.assertEqual(
+            closure_ci["actions_merge_tree"],
+            "1a4f52637cbc4f0e0efbe535c17114b4d7d4b5cb",
+        )
+        self.assertIs(closure_ci["source_tree_matches_pr_head"], True)
+        self.assertIs(closure_ci["rom_matches_boot_evidence"], True)
         local_build = evidence["local_build"]
-        self.assertEqual(local_build["status"], "PASS_WITH_AUDITED_DOCKER_COMPATIBLE_FALLBACK")
-        self.assertEqual(local_build["gate3_closure"], "BLOCKED_DOCKER_DESKTOP_REQUIRED_BY_MASTER_SPEC")
-        self.assertEqual(local_build["rom_built_at"], "2026-07-19T02:06:35-04:00")
-        self.assertEqual(local_build["completed_at"], "2026-07-19T02:07:41-04:00")
-        self.assertEqual(local_build["source_commit"], evidence["confirmation_ci"]["pr_head"])
-        self.assertEqual(local_build["source_tree"], evidence["confirmation_ci"]["actions_merge_tree"])
+        self.assertEqual(local_build["status"], "PASS_DOCKER_DESKTOP")
+        self.assertEqual(local_build["gate3_closure"], "PASS")
+        self.assertEqual(local_build["rom_built_at"], "2026-07-19T02:40:31-04:00")
+        self.assertEqual(local_build["completed_at"], "2026-07-19T02:43:27-04:00")
+        self.assertEqual(local_build["source_commit"], closure_ci["pr_head"])
+        self.assertEqual(local_build["source_tree"], closure_ci["actions_merge_tree"])
         self.assertIs(local_build["source_dirty"], False)
         self.assertEqual(
             local_build["commands"],
@@ -243,24 +270,42 @@ class BuildContractTests(unittest.TestCase):
         )
         self.assertEqual(local_build["rom_sha256"], evidence["rom"]["sha256"])
         self.assertEqual(local_build["rom_size_bytes"], evidence["rom"]["size_bytes"])
-        self.assertEqual(local_build["runtime"]["colima_version"], "0.10.3")
-        self.assertEqual(local_build["runtime"]["lima_version"], "2.1.4")
-        self.assertEqual(local_build["runtime"]["vm_driver"], "macOS Virtualization.Framework")
-        self.assertEqual(local_build["runtime"]["vm_arch"], "aarch64")
-        self.assertEqual(local_build["runtime"]["mount_type"], "virtiofs")
-        self.assertIs(local_build["runtime"]["rosetta"], True)
+        self.assertEqual(local_build["runtime"]["provider"], "Docker Desktop")
+        self.assertEqual(local_build["runtime"]["context"], "desktop-linux")
+        self.assertEqual(local_build["runtime"]["engine_name"], "docker-desktop")
+        self.assertEqual(local_build["runtime"]["engine_operating_system"], "Docker Desktop")
+        self.assertEqual(local_build["runtime"]["engine_arch"], "aarch64")
         self.assertEqual(local_build["runtime"]["docker_client"], "29.6.2")
-        self.assertEqual(local_build["runtime"]["docker_engine"], "29.5.2")
+        self.assertEqual(local_build["runtime"]["docker_engine"], "29.6.1")
         self.assertEqual(local_build["runtime"]["container_platform"], "linux/amd64")
         self.assertEqual(
             local_build["runtime"]["container_image_id"],
             "sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83",
         )
-        self.assertEqual(local_build["docker_desktop"]["status"], "BLOCKED")
+        self.assertEqual(local_build["runtime"]["container_name"], "magical_aryabhata")
+        self.assertEqual(
+            local_build["runtime"]["project_mount_destination"],
+            "/libdragon",
+        )
+        self.assertIs(local_build["runtime"]["project_mount_read_write"], True)
+        self.assertEqual(local_build["docker_desktop"]["status"], "PASS")
         self.assertEqual(local_build["docker_desktop"]["version"], "4.82.0")
         self.assertEqual(local_build["docker_desktop"]["build"], "233772")
-        self.assertEqual(local_build["docker_desktop"]["engine"], "UNAVAILABLE")
-        self.assertEqual(local_build["docker_desktop"]["host_policy_error"], "failed to call driver: 0x3")
+        self.assertEqual(local_build["docker_desktop"]["engine"], "29.6.1")
+        self.assertEqual(local_build["docker_desktop"]["context"], "desktop-linux")
+        self.assertEqual(
+            local_build["docker_desktop"]["recovery"],
+            "fresh_app_launch_succeeded_without_host_reboot",
+        )
+        self.assertEqual(
+            local_build["docker_desktop"]["previous_host_policy_error"],
+            "failed to call driver: 0x3",
+        )
+        self.assertEqual(
+            local_build["prior_fallback"]["status"],
+            "PASS_SUPERSEDED_BY_DOCKER_DESKTOP_PROOF",
+        )
+        self.assertEqual(local_build["prior_fallback"]["colima_version"], "0.10.3")
         manifest_captures = {row["path"]: row for row in evidence["captures"]}
         self.assertEqual(set(manifest_captures), set(expected))
         self.assertEqual(len(lines), len(expected))

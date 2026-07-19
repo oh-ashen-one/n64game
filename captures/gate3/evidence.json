@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "ci": {
     "workflow_run": 29674638989,
     "workflow_job": 88159621235,
@@ -18,6 +18,19 @@
     "actions_merge_tree": "292a0c867bd71b1f1c7d5cf7d935f9b0953a0016",
     "rom_matches_boot_evidence": true
   },
+  "closure_ci": {
+    "workflow_run": 29676805197,
+    "workflow_job": 88165566728,
+    "artifact_id": 8439167230,
+    "artifact_name": "n64game-gate3-1fbdeb4338975176ef500689ab5a178a0c97ade6",
+    "artifact_sha256": "b69b70038137d5c09bda0808149bab1118b674d30162ada1d11588c50e0d79d0",
+    "artifact_size_bytes": 248296,
+    "pr_head": "dd038488d7100c30fa3699e15ffa0613ec6d6468",
+    "actions_merge_revision": "1fbdeb4338975176ef500689ab5a178a0c97ade6",
+    "actions_merge_tree": "1a4f52637cbc4f0e0efbe535c17114b4d7d4b5cb",
+    "source_tree_matches_pr_head": true,
+    "rom_matches_boot_evidence": true
+  },
   "rom": {
     "sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
     "size_bytes": 212992
@@ -30,12 +43,12 @@
     "defocus": "Allow"
   },
   "local_build": {
-    "status": "PASS_WITH_AUDITED_DOCKER_COMPATIBLE_FALLBACK",
-    "gate3_closure": "BLOCKED_DOCKER_DESKTOP_REQUIRED_BY_MASTER_SPEC",
-    "rom_built_at": "2026-07-19T02:06:35-04:00",
-    "completed_at": "2026-07-19T02:07:41-04:00",
-    "source_commit": "85e91c793eccaeff70327ea6fd67e8f7e775faad",
-    "source_tree": "292a0c867bd71b1f1c7d5cf7d935f9b0953a0016",
+    "status": "PASS_DOCKER_DESKTOP",
+    "gate3_closure": "PASS",
+    "rom_built_at": "2026-07-19T02:40:31-04:00",
+    "completed_at": "2026-07-19T02:43:27-04:00",
+    "source_commit": "dd038488d7100c30fa3699e15ffa0613ec6d6468",
+    "source_tree": "1a4f52637cbc4f0e0efbe535c17114b4d7d4b5cb",
     "source_dirty": false,
     "commands": {
       "make_validate": "PASS",
@@ -47,23 +60,37 @@
     "rom_sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e",
     "rom_size_bytes": 212992,
     "runtime": {
-      "colima_version": "0.10.3",
-      "lima_version": "2.1.4",
-      "vm_driver": "macOS Virtualization.Framework",
-      "vm_arch": "aarch64",
-      "mount_type": "virtiofs",
-      "rosetta": true,
+      "provider": "Docker Desktop",
+      "context": "desktop-linux",
+      "engine_name": "docker-desktop",
+      "engine_operating_system": "Docker Desktop",
+      "engine_arch": "aarch64",
       "docker_client": "29.6.2",
-      "docker_engine": "29.5.2",
+      "docker_engine": "29.6.1",
       "container_platform": "linux/amd64",
-      "container_image_id": "sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83"
+      "container_image_id": "sha256:36a295cbe43168e8adbfa5c86d956df3dc762a1ab6fda1b50dcb33bd78dc2d83",
+      "container_name": "magical_aryabhata",
+      "container_started_at": "2026-07-19T06:27:06.715530131Z",
+      "project_mount_source": "/Users/midir/Documents/New project 8",
+      "project_mount_destination": "/libdragon",
+      "project_mount_read_write": true
     },
     "docker_desktop": {
-      "status": "BLOCKED",
+      "status": "PASS",
       "version": "4.82.0",
       "build": "233772",
-      "engine": "UNAVAILABLE",
-      "host_policy_error": "failed to call driver: 0x3"
+      "engine": "29.6.1",
+      "context": "desktop-linux",
+      "recovery": "fresh_app_launch_succeeded_without_host_reboot",
+      "previous_host_policy_error": "failed to call driver: 0x3"
+    },
+    "prior_fallback": {
+      "status": "PASS_SUPERSEDED_BY_DOCKER_DESKTOP_PROOF",
+      "source_commit": "85e91c793eccaeff70327ea6fd67e8f7e775faad",
+      "colima_version": "0.10.3",
+      "lima_version": "2.1.4",
+      "docker_engine": "29.5.2",
+      "rom_sha256": "230896d0d8a39dae3dd6ee5e1e471377be51fdbb2b45b78a5c8439f865394d7e"
     }
   },
   "captures": [
