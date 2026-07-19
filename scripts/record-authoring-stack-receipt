@@ -2,9 +2,9 @@
 set -eu
 
 if [ -L "$0" ]; then
-  /bin/echo "authoring stack entrypoint must not be invoked through a symlink" >&2
+  /bin/echo "authoring receipt entrypoint must not be invoked through a symlink" >&2
   exit 1
 fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && /bin/pwd -P)"
 ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && /bin/pwd -P)"
-exec /usr/bin/python3 -I -B "$ROOT/tools/n64game_authoring.py" "$@"
+exec /usr/bin/python3 -I -B "$ROOT/tools/n64game_authoring_receipt.py" "$@"

@@ -1,0 +1,271 @@
+#!/usr/bin/ruby --disable-gems
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "json"
+require "open3"
+require "pathname"
+require "tmpdir"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+MANIFEST_RELATIVE = "test/fixtures/asset_lifecycle_production/PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256".freeze
+KERNEL_RELATIVE = "lib/n64game/asset_lifecycle_contract.rb".freeze
+RUNNER_RELATIVE = "scripts/test-asset-lifecycle-production".freeze
+CASES = %w[populated approved repair generated_child move_pair h2 release].freeze
+FIXTURE_ROOT_RELATIVE = "test/fixtures/asset_lifecycle_production".freeze
+HEX64 = /\A[0-9a-f]{64}\z/.freeze
+SAFE_PATH = /\A[A-Za-z0-9][A-Za-z0-9._\/-]*\z/.freeze
+
+class HarnessFailure < StandardError; end
+
+def require_condition(condition, message)
+  raise HarnessFailure, message unless condition
+end
+
+def canonical_json(path)
+  require_condition(path.file? && !path.symlink?, "fixture is missing, non-regular, or symlinked: #{path}")
+  bytes = path.binread
+  require_condition(bytes.end_with?("\n") && !bytes.end_with?("\n\n") && !bytes.include?("\r"),
+                    "fixture line endings are noncanonical: #{path}")
+  value = JSON.parse(bytes)
+  canonical = JSON.pretty_generate(value, sort_keys: true) + "\n"
+  require_condition(bytes == canonical, "fixture JSON is not byte-canonical: #{path}")
+  require_condition(value.is_a?(Hash), "fixture root must be an object: #{path}")
+  value
+rescue JSON::ParserError => error
+  raise HarnessFailure, "fixture JSON is invalid: #{path}: #{error.message}"
+end
+
+def validate_manifest(manifest)
+  expected_manifest = ROOT.join(MANIFEST_RELATIVE)
+  require_condition(manifest.file? && !manifest.symlink?, "harness manifest is missing, non-regular, or symlinked")
+  require_condition(manifest.realpath == expected_manifest.realpath, "harness manifest path is noncanonical")
+  raw = manifest.binread
+  require_condition(raw.end_with?("\n") && !raw.end_with?("\n\n") && !raw.include?("\r"),
+                    "harness manifest line endings are noncanonical")
+  expected_case_paths = CASES.to_h do |name|
+    [name, "#{FIXTURE_ROOT_RELATIVE}/#{name}/CASE.json"]
+  end
+  expected_paths = [KERNEL_RELATIVE, RUNNER_RELATIVE, *expected_case_paths.values].sort
+  expected_roles = expected_paths.to_h do |path|
+    case_name = expected_case_paths.key(path)
+    role = if path == KERNEL_RELATIVE
+             "role:production_harness.kernel"
+           elsif path == RUNNER_RELATIVE
+             "role:production_harness.runner"
+           else
+             "role:production_harness.case.#{case_name}"
+           end
+    [path, role]
+  end
+  lines = raw.split("\n", -1).tap(&:pop)
+  require_condition(lines.length == expected_paths.length, "harness manifest member count mismatch")
+  observed_paths = []
+  lines.each_with_index do |line, index|
+    fields = line.split("\t", -1)
+    require_condition(fields.length == 6, "harness manifest row #{index + 1} must have six TAB fields")
+    path, count, digest, build, capture, role = fields
+    require_condition(SAFE_PATH.match?(path) && !path.split("/").include?(".."), "unsafe harness member path: #{path}")
+    require_condition(count.match?(/\A(?:0|[1-9][0-9]*)\z/) && HEX64.match?(digest),
+                      "malformed harness member identity: #{path}")
+    require_condition(build == "build:-" && capture == "capture:-", "harness member carries mutable build/capture identity")
+    require_condition(role == expected_roles[path], "harness role mismatch for #{path}")
+    member = ROOT.join(path)
+    require_condition(member.file? && !member.symlink?, "harness member is missing, non-regular, or symlinked: #{path}")
+    bytes = member.binread
+    require_condition(bytes.bytesize == count.to_i && Digest::SHA256.hexdigest(bytes) == digest,
+                      "harness member digest/count mismatch: #{path}")
+    observed_paths << path
+  end
+  require_condition(observed_paths == expected_paths, "harness manifest path order/set mismatch")
+  expected_fixture_files = [MANIFEST_RELATIVE, *expected_case_paths.values].sort
+  fixture_root = ROOT.join(FIXTURE_ROOT_RELATIVE)
+  observed_fixture_files = fixture_root.find.select { |path| path.file? || path.symlink? }
+                                       .map { |path| path.relative_path_from(ROOT).to_s }.sort
+  require_condition(observed_fixture_files == expected_fixture_files, "harness fixture root contains missing, extra, or symlinked files")
+  {
+    "manifest_sha256" => Digest::SHA256.hexdigest(raw),
+    "kernel_sha256" => Digest::SHA256.file(ROOT.join(KERNEL_RELATIVE)).hexdigest,
+    "case_paths" => expected_case_paths
+  }
+end
+
+def run_command(env, *command, chdir:)
+  output, error, status = Open3.capture3(env, *command, chdir: chdir, unsetenv_others: true)
+  raise HarnessFailure, "command failed: #{command.join(' ')}: #{error.lines.first.to_s.strip}" unless status.success?
+  output
+end
+
+def materialize_h2(payload)
+  logical = Marshal.load(Marshal.dump(payload))
+  Dir.mktmpdir("n64game-lifecycle-git-") do |directory|
+    env = {
+      "PATH" => "/usr/bin:/bin", "LANG" => "C.UTF-8", "LC_ALL" => "C.UTF-8",
+      "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_CONFIG_NOSYSTEM" => "1",
+      "GIT_AUTHOR_NAME" => "N64GAME Harness", "GIT_AUTHOR_EMAIL" => "harness@n64game.invalid",
+      "GIT_COMMITTER_NAME" => "N64GAME Harness", "GIT_COMMITTER_EMAIL" => "harness@n64game.invalid",
+      "GIT_AUTHOR_DATE" => "2026-07-19T12:00:00Z", "GIT_COMMITTER_DATE" => "2026-07-19T12:00:00Z"
+    }
+    run_command(env, "/usr/bin/git", "init", "-q", "--initial-branch=main", chdir: directory)
+    labels = %w[first_in_engine polish_1 polish_2 payload]
+    commits = {}
+    labels.each_with_index do |label, index|
+      File.binwrite(File.join(directory, "phase.txt"), "#{label}\n")
+      run_command(env, "/usr/bin/git", "add", "phase.txt", chdir: directory)
+      commit_env = env.merge(
+        "GIT_AUTHOR_DATE" => format("2026-07-19T12:%02d:00Z", index),
+        "GIT_COMMITTER_DATE" => format("2026-07-19T12:%02d:00Z", index)
+      )
+      run_command(commit_env, "/usr/bin/git", "commit", "-q", "-m", label, chdir: directory)
+      commits[label] = run_command(env, "/usr/bin/git", "rev-parse", "HEAD", chdir: directory).strip
+    end
+    baseline = logical.fetch("first_in_engine")
+    baseline["commit"] = commits.fetch(baseline.delete("commit_label"))
+    logical.fetch("passes").each do |pass|
+      pass["before_commit"] = commits.fetch(pass.delete("before_commit_label"))
+      pass["after_commit"] = commits.fetch(pass.delete("after_commit_label"))
+      _output, _error, status = Open3.capture3(
+        env, "/usr/bin/git", "merge-base", "--is-ancestor", pass["before_commit"], pass["after_commit"],
+        chdir: directory, unsetenv_others: true
+      )
+      pass["ancestry_valid"] = status.success?
+    end
+    payload_commit = commits.fetch(logical.delete("final_payload_commit_label"))
+    _output, _error, status = Open3.capture3(
+      env, "/usr/bin/git", "merge-base", "--is-ancestor",
+      logical.fetch("passes").last.fetch("after_commit"), payload_commit,
+      chdir: directory, unsetenv_others: true
+    )
+    logical["final_payload_ancestry_valid"] = status.success?
+  end
+  logical
+end
+
+def deep_copy(value)
+  Marshal.load(Marshal.dump(value))
+end
+
+def negative_cases(branch, payload)
+  case branch
+  when "populated"
+    mutated = deep_copy(payload)
+    mutated.fetch("aggregate_pairs").pop
+    [["populated.aggregate_count", mutated, "exactly eight aggregate"]]
+  when "approved"
+    inherited = deep_copy(payload)
+    inherited.fetch("registry_rows").first["gates"][0] = "INHERITED_CHILD_EQ"
+    inherited.fetch("registry_rows").first["g1"] = "INHERITED_CHILD_EQ"
+    non_rom_rollup = deep_copy(payload)
+    non_rom_rollup.fetch("rollups").first.fetch("gates")[0] = "NON_ROM_DELIVERY_EQ"
+    static_state_rollup = deep_copy(payload)
+    static_state_rollup.fetch("rollups").first.fetch("gates")[0] = "STATIC_STATE_EQ"
+    [
+      ["approved.inherited_completion", inherited, "seven completed gates"],
+      ["approved.rollup_non_rom_g1", non_rom_rollup, "rollup.player does not have seven completed gates"],
+      ["approved.rollup_static_state_g1", static_state_rollup, "rollup.player does not have seven completed gates"]
+    ]
+  when "repair"
+    outside_basis = deep_copy(payload)
+    outside_basis["return_tokens"] = ["WB-999:G1:DEFECT_X"]
+    outside_basis.fetch("current_registry_rows").each { |row| row["state"] = "AUTHORIZED" }
+    non_string_token = deep_copy(payload)
+    non_string_token["return_tokens"] = ["WB-001:G1:DEFECT_X", nil]
+    [
+      ["repair.out_of_range_basis", outside_basis, "outside WB-001..WB-052"],
+      ["repair.non_string_token", non_string_token, "repair return tokens must all be strings"]
+    ]
+  when "generated_child"
+    mutated = deep_copy(payload)
+    arbitrary_bytes = "\x00".b * 36
+    mutated.fetch("rows").first["output_bytes_hex"] = arbitrary_bytes.unpack1("H*")
+    mutated.fetch("rows").first["output_sha256"] = Digest::SHA256.hexdigest(arbitrary_bytes)
+    extra_row = deep_copy(payload)
+    extra_row.fetch("rows") << deep_copy(extra_row.fetch("rows").first)
+    [
+      ["generated_child.noncanonical_tuple", mutated, "canonical DATA_SCHEMAS tuple"],
+      ["generated_child.extra_row", extra_row, "generated-child registry must contain exactly 15 rows"]
+    ]
+  when "move_pair"
+    non_hash_child = deep_copy(payload)
+    non_hash_child["children"] = [nil, non_hash_child.fetch("children").last]
+    missing_asset_id = deep_copy(payload)
+    missing_asset_id.fetch("children").first.delete("asset_id")
+    [
+      ["move_pair.non_hash_child", non_hash_child, "children are not canonical"],
+      ["move_pair.missing_asset_id", missing_asset_id, "children are not canonical"]
+    ]
+  when "h2"
+    mutated = deep_copy(payload)
+    mutated["passes"][0] = nil
+    [["h2.non_hash_pass", mutated, "polish pass 1 must be a Hash"]]
+  when "release"
+    mutated = deep_copy(payload)
+    mutated.fetch("workflow_json")["conclusion"] = "failure"
+    [["release.failed_workflow", mutated, "successful payload build"]]
+  else
+    raise HarnessFailure, "missing negative mutation for #{branch}"
+  end
+end
+
+def main
+  require_condition(ARGV.length == 2 && ARGV[0] == "--manifest", "usage: test-asset-lifecycle-production --manifest PATH")
+  manifest_info = validate_manifest(Pathname.new(ARGV[1]))
+  require ROOT.join(KERNEL_RELATIVE).to_s
+  require_condition(N64Game::AssetLifecycleContract::BRANCHES == CASES, "kernel branch set/order differs from harness")
+  executed = []
+  negative_case_ids = []
+  manifest_info.fetch("case_paths").each do |case_name, path|
+    fixture = canonical_json(ROOT.join(path))
+    require_condition(fixture.keys.sort == %w[branch payload schema], "#{case_name} fixture keys differ")
+    require_condition(fixture["schema"] == "n64game-production-lifecycle-fixture-v1", "#{case_name} fixture schema mismatch")
+    require_condition(fixture["branch"] == case_name, "#{case_name} fixture branch mismatch")
+    payload = case_name == "h2" ? materialize_h2(fixture.fetch("payload")) : fixture.fetch("payload")
+    result = N64Game::AssetLifecycleContract.validate!(case_name, payload)
+    require_condition(result == {
+      "schema" => N64Game::AssetLifecycleContract::SCHEMA,
+      "branch" => case_name,
+      "result" => "PASS"
+    }, "#{case_name} kernel receipt mismatch")
+    executed << case_name
+    negative_cases(case_name, payload).each do |negative_case_id, mutated, expected_error|
+      begin
+        N64Game::AssetLifecycleContract.validate!(case_name, mutated)
+        raise HarnessFailure, "#{negative_case_id} negative mutation was accepted"
+      rescue N64Game::AssetLifecycleContract::Violation => error
+        require_condition(error.issues.any? { |issue| issue.include?(expected_error) },
+                          "#{negative_case_id} negative mutation failed for the wrong reason: #{error.message}")
+      end
+      negative_case_ids << negative_case_id
+    end
+  end
+  receipt = {
+    "schema" => "n64game-production-lifecycle-harness-v1",
+    "authority" => "PRODUCTION_SHARED_KERNEL_BRANCH_COVERAGE",
+    "result" => "PASS",
+    "manifest_sha256" => manifest_info.fetch("manifest_sha256"),
+    "kernel_sha256" => manifest_info.fetch("kernel_sha256"),
+    "branch_ids" => executed,
+    "negative_case_ids" => negative_case_ids,
+    "live_adapter_coverage" => "EXCLUDED_BY_DESIGN",
+    "live_only_adapters" => %w[
+      github_api signed_git_tags git_lfs_materialization ffprobe_media_decode ares_execution rom_rebuild
+    ]
+  }
+  STDOUT.write(JSON.generate(receipt) + "\n")
+  0
+end
+
+begin
+  exit(main)
+rescue HarnessFailure => error
+  warn "production lifecycle harness failure: #{error.message}"
+  exit 1
+rescue StandardError => error
+  if defined?(N64Game::AssetLifecycleContract::Violation) &&
+     error.is_a?(N64Game::AssetLifecycleContract::Violation)
+    warn "production lifecycle harness failure: #{error.message}"
+    exit 1
+  end
+  raise
+end

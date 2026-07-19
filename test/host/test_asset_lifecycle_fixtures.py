@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "test-asset-contract-lifecycle"
 FIXTURE_ROOT = ROOT / "test" / "fixtures" / "asset_contract"
 MANIFEST_RELATIVE = Path("test/fixtures/asset_contract/LIFECYCLE_SNAPSHOT_MANIFEST.sha256")
+PRODUCTION_MANIFEST_RELATIVE = Path(
+    "test/fixtures/asset_lifecycle_production/PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256"
+)
 CASES = ["populated", "approved", "repair", "generated_child", "move_pair", "h2", "release"]
 
 
@@ -96,15 +99,24 @@ class AssetLifecycleSemanticSnapshotTests(unittest.TestCase):
             hashlib.sha256((ROOT / MANIFEST_RELATIVE).read_bytes()).hexdigest(),
         )
 
-    def test_semantic_snapshot_cannot_unlock_production_approval(self) -> None:
+    def test_semantic_snapshot_cannot_substitute_for_pinned_production_harness(self) -> None:
         validator = (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8")
-        self.assertRegex(
+        production_pin = re.search(
+            r'(?m)^PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "([0-9a-f]{64})"\.freeze$',
             validator,
-            r'(?m)^PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "PENDING"\.freeze$',
+        )
+        self.assertIsNotNone(production_pin)
+        self.assertEqual(
+            production_pin.group(1),
+            hashlib.sha256((ROOT / PRODUCTION_MANIFEST_RELATIVE).read_bytes()).hexdigest(),
+        )
+        self.assertNotEqual(
+            production_pin.group(1),
+            hashlib.sha256((ROOT / MANIFEST_RELATIVE).read_bytes()).hexdigest(),
         )
         self.assertRegex(
             validator,
-            r'(?m)^PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = false$',
+            r'(?m)^PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = true$',
         )
         readiness = re.search(
             r'def approval_lifecycle_pins_ready\?\n(.*?)\nend',
@@ -122,9 +134,12 @@ class AssetLifecycleSemanticSnapshotTests(unittest.TestCase):
         )
         self.assertIsNotNone(verifier)
         self.assertIn(
-            "verifier is not implemented; a SHA-256 pin alone cannot unlock approval",
+            "remains unimplemented/unpinned; semantic snapshot fixtures are not approval evidence",
             verifier.group(0),
         )
+        self.assertIn("fresh public clone", verifier.group(0))
+        self.assertIn("PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH", verifier.group(0))
+        self.assertNotIn("SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256", verifier.group(0))
 
     def test_unmanifested_case_tamper_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

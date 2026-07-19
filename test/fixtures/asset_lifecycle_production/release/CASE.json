@@ -1,0 +1,39 @@
+{
+  "branch": "release",
+  "payload": {
+    "identity": {
+      "approval_ref": "refs/tags/n64game-visual-benchmark/aaaaaaaaaaaa",
+      "artifact_name": "n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+      "payload_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payload_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "registry_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "release_asset_url": "https://github.com/oh-ashen-one/n64game/releases/download/n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+      "release_tag": "n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "oh-ashen-one/n64game",
+      "rom_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rom_size_bytes": 8388608,
+      "workflow_path": ".github/workflows/build-rom.yml"
+    },
+    "release_json": {
+      "assets": [
+        {
+          "browser_download_url": "https://github.com/oh-ashen-one/n64game/releases/download/n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "name": "n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+          "size": 8388608
+        }
+      ],
+      "draft": false,
+      "prerelease": false,
+      "tag_name": "n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "workflow_json": {
+      "conclusion": "success",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": 12345,
+      "path": ".github/workflows/build-rom.yml",
+      "status": "completed"
+    }
+  },
+  "schema": "n64game-production-lifecycle-fixture-v1"
+}

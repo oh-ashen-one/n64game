@@ -14,10 +14,20 @@ require "time"
 require "date"
 
 ROOT = Pathname.new(__dir__).join("..").expand_path
+require ROOT.join("lib/n64game/asset_lifecycle_contract").to_s
+require ROOT.join("lib/n64game/authoring_stack_receipt").to_s
 ERRORS = []
 
 def error(message)
   ERRORS << message
+end
+
+def validate_shared_lifecycle_branch(branch, payload, label)
+  N64Game::AssetLifecycleContract.validate!(branch, payload)
+  true
+rescue N64Game::AssetLifecycleContract::Violation => violation
+  violation.issues.each { |issue| error("#{label}: #{issue}") }
+  false
 end
 
 def read(relative)
@@ -319,8 +329,21 @@ SEMANTIC_LIFECYCLE_SNAPSHOT_RUNNER_PATH = "scripts/test-asset-contract-lifecycle
 SEMANTIC_LIFECYCLE_SNAPSHOT_CASES = %w[
   populated approved repair generated_child move_pair h2 release
 ].freeze
-PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = false
-PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "PENDING".freeze
+PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = true
+PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "af9b403081b175e9977ad0b6748d19f9c3220f1a58b8d12d5242b27a8ab750d6".freeze
+PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH =
+  "test/fixtures/asset_lifecycle_production/PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256".freeze
+PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH = "scripts/test-asset-lifecycle-production".freeze
+PRODUCTION_LIFECYCLE_KERNEL_PATH = "lib/n64game/asset_lifecycle_contract.rb".freeze
+PRODUCTION_LIFECYCLE_BRANCHES = %w[
+  populated approved repair generated_child move_pair h2 release
+].freeze
+AUTHORING_RECEIPT_EXPECTED_BY_REVISION = Hash.new { |hash, key| hash[key] = Set.new }
+AUTHORING_ROOT_PAYLOAD_PATHS = %w[
+  review/benchmark/PAYLOAD_MANIFEST.sha256
+  review/production/PAYLOAD_MANIFEST.sha256
+].freeze
+AUTHORING_ROOT_REQUIRED_MODES = N64Game::AuthoringStackReceipt::ROOT_REQUIRED_MODES
 PRIOR_BASELINE_FIELDS = [
   "Prior approved attestation ref", "Prior approved attestation tag object ID",
   "Prior approved control Git commit", "Prior approved payload Git commit",
@@ -763,7 +786,10 @@ def materialized_commit_file(relative, commit, label, fresh_clone: nil, allow_lf
       return nil
     end
     local_bytes = File.binread(ROOT.join(relative))
-    return { bytes: local_bytes, kind: :working, digest: Digest::SHA256.hexdigest(local_bytes), size: local_bytes.bytesize }
+    return {
+      bytes: local_bytes, kind: :working, mode: nil,
+      digest: Digest::SHA256.hexdigest(local_bytes), size: local_bytes.bytesize
+    }
   end
 
   commit_root = fresh_clone || ROOT
@@ -784,7 +810,10 @@ def materialized_commit_file(relative, commit, label, fresh_clone: nil, allow_lf
   )
   lfs_attribute = attr_status.success? && attr_out.to_s.split(":", 3).last.to_s.strip == "lfs"
   if pointer
-    error("#{label} uses Git LFS where ordinary Git text is required: #{relative}") unless allow_lfs
+    unless allow_lfs
+      error("#{label} uses Git LFS where ordinary Git text is required: #{relative}")
+      return nil
+    end
     error("#{label} canonical LFS pointer lacks filter=lfs at reviewed commit: #{relative}") unless lfs_attribute
     object_bytes = nil
     if fresh_clone
@@ -806,11 +835,20 @@ def materialized_commit_file(relative, commit, label, fresh_clone: nil, allow_lf
       error("#{label} commit-bound LFS verification requires a fresh public clone: #{relative}")
     end
     object_bytes ||= "".b
-    return { bytes: object_bytes, kind: :lfs, digest: Digest::SHA256.hexdigest(object_bytes), size: object_bytes.bytesize, oid: pointer[:oid] }
+    return {
+      bytes: object_bytes, kind: :lfs, mode: tree_mode,
+      digest: Digest::SHA256.hexdigest(object_bytes), size: object_bytes.bytesize, oid: pointer[:oid]
+    }
   end
 
-  error("#{label} has filter=lfs but reviewed blob is not a canonical LFS pointer: #{relative}") if lfs_attribute
-  { bytes: blob.b, kind: :git, digest: Digest::SHA256.hexdigest(blob.b), size: blob.bytesize }
+  if lfs_attribute
+    error("#{label} has filter=lfs but reviewed blob is not a canonical LFS pointer: #{relative}")
+    return nil
+  end
+  {
+    bytes: blob.b, kind: :git, mode: tree_mode,
+    digest: Digest::SHA256.hexdigest(blob.b), size: blob.bytesize
+  }
 end
 
 def validate_path_hash(value, label, commit: nil, fresh_clone: nil, allow_lfs: true)
@@ -930,7 +968,8 @@ def validate_manifest(relative, expected_digest, label, stack = [], commit = nil
     end
     entry = {
       path: path, count: count.to_i, digest: digest, build: build.sub(/\Abuild:/, ""),
-      capture: capture_id, role: role.sub(/\Arole:/, ""), kind: member_material[:kind]
+      capture: capture_id, role: role.sub(/\Arole:/, ""), kind: member_material[:kind],
+      mode: member_material[:mode]
     }
     entries << entry
     context[:closure] << path
@@ -1826,11 +1865,15 @@ def run_hardening_self_test(data_schemas, verbose: false)
       ARES_RUN_HEADER.include?(field)
     end && ARES_EXECUTION_EVENTS.include?("BOOT_READY")
   end
-  check.call("semantic lifecycle snapshots cannot satisfy the production approval harness gate") do
+  check.call("production lifecycle harness is independently pinned from semantic snapshots") do
     SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256.match?(HEX64) &&
-      !PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED &&
-      !PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64) &&
-      !approval_lifecycle_pins_ready?
+      PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED &&
+      PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64) &&
+      PRODUCTION_LIFECYCLE_HARNESS_SHA256 != SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256 &&
+      regular_without_symlink?(PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH) &&
+      Digest::SHA256.file(ROOT.join(PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH)).hexdigest ==
+        PRODUCTION_LIFECYCLE_HARNESS_SHA256 &&
+      approval_lifecycle_pins_ready?
   end
   check.call("generated camera review snapshots stay outside the ignored build tree") do
     GENERATED_CAMERA_CHILDREN.keys.all? do |child_id|
@@ -1909,25 +1952,8 @@ def completion_decision_allowed?(decision, profile, gate)
 end
 
 def validate_ledger_gate_lifecycle(entry, gates, has_output, label)
-  complete = ->(decision) { COMPLETE_GATE_DECISIONS.include?(decision) }
-  case entry[:status]
-  when "source"
-    error("#{label}: source status requires Gate 1 completion") unless complete.call(gates[0])
-    error("#{label}: source status cannot complete Gate 5 or later") if gates[4..].any? { |gate| complete.call(gate) }
-    error("#{label}: source status cannot own converted output") if has_output
-  when "converted"
-    error("#{label}: converted status requires Gates 1-5 complete") unless gates.first(5).all? { |gate| complete.call(gate) }
-    error("#{label}: converted status requires Gates 6-7 PENDING") unless gates[5..] == %w[PENDING PENDING]
-    error("#{label}: converted status requires output manifest") unless has_output
-  when "review"
-    error("#{label}: review status requires Gates 1-5 complete") unless gates.first(5).all? { |gate| complete.call(gate) }
-    error("#{label}: review status cannot retain seven completed gates") if gates.all? { |gate| complete.call(gate) }
-    error("#{label}: review status requires output manifest") unless has_output
-  when "approved"
-    error("#{label}: approved status requires seven legal completion decisions") unless gates.all? { |gate| complete.call(gate) }
-    error("#{label}: approved status requires output manifest") unless has_output
-  else
-    error("#{label}: active registry binding uses illegal ledger status #{entry[:status].inspect}")
+  N64Game::AssetLifecycleContract.ledger_lifecycle_issues(entry[:status], gates, has_output).each do |issue|
+    error("#{label}: #{issue}")
   end
 end
 
@@ -2454,14 +2480,15 @@ def validate_h2_polish_passes(scope, gate7_manifest_path, source_path, output_pa
       error("#{label}: first-in-engine source/output hashes are not committed manifest bytes") unless
         source_material && output_material && source_material[:digest] == first_in_engine["source_manifest_sha256"] &&
         output_material[:digest] == first_in_engine["output_manifest_sha256"]
+      historical_asset_context = new_manifest_context
       validate_manifest(
         source_path, first_in_engine["source_manifest_sha256"], "#{label} first-in-engine source closure",
-        [], first_in_engine["commit"], fresh_clone, new_manifest_context
-      ) if first_in_engine["source_manifest_sha256"]&.match?(HEX64)
+        [], first_in_engine["commit"], fresh_clone, historical_asset_context
+      ) if !rollup_slug && first_in_engine["source_manifest_sha256"]&.match?(HEX64)
       validate_manifest(
         output_path, first_in_engine["output_manifest_sha256"], "#{label} first-in-engine output closure",
-        [], first_in_engine["commit"], fresh_clone, new_manifest_context
-      ) if first_in_engine["output_manifest_sha256"]&.match?(HEX64)
+        [], first_in_engine["commit"], fresh_clone, historical_asset_context
+      ) if !rollup_slug && first_in_engine["output_manifest_sha256"]&.match?(HEX64)
       expected_historical_gate_path = rollup_slug ?
         "review/benchmark/rollups/#{rollup_slug}/GATE_RECORD.tsv" : "review/#{scope}/g1/GATE_RECORD.tsv"
       error("#{label}: first-in-engine historical gate-record path/hash is noncanonical") unless
@@ -2489,7 +2516,7 @@ def validate_h2_polish_passes(scope, gate7_manifest_path, source_path, output_pa
         source_digest: first_in_engine["source_manifest_sha256"],
         output_digest: first_in_engine["output_manifest_sha256"], build_id: first_in_engine["build_id"],
         expected_vector: historical_vector, commit: first_in_engine["commit"], fresh_clone: fresh_clone,
-        owner_ids: owner_ids
+        source_context: historical_asset_context, owner_ids: owner_ids
       ) if historical_vector.length == 7
     end
   end
@@ -2605,13 +2632,181 @@ def validate_h2_polish_passes(scope, gate7_manifest_path, source_path, output_pa
   rescue ArgumentError, TypeError
     error("#{label}: H2 polish/Gate-6 timestamps must be RFC 3339")
   end
+  kernel_passes = records.map do |record|
+    ancestry_valid = false
+    if record["before_commit"]&.match?(HEX40) && record["after_commit"]&.match?(HEX40)
+      _out, _err, ancestry_status = git_capture(
+        "merge-base", "--is-ancestor", record["before_commit"], record["after_commit"],
+        root: fresh_clone || ROOT
+      )
+      ancestry_valid = ancestry_status.success?
+    end
+    {
+      "pass_number" => record["pass_number"],
+      "before_commit" => record["before_commit"], "after_commit" => record["after_commit"],
+      "before_source_sha256" => record["before_source_sha256"],
+      "after_source_sha256" => record["after_source_sha256"],
+      "before_output_sha256" => record["before_output_sha256"],
+      "after_output_sha256" => record["after_output_sha256"],
+      "decided_at" => record["decided_at"], "ancestry_valid" => ancestry_valid
+    }
+  end
+  final_payload_ancestry_valid = false
+  if commit&.match?(HEX40) && records[1]["after_commit"]&.match?(HEX40)
+    _out, _err, ancestry_status = git_capture(
+      "merge-base", "--is-ancestor", records[1]["after_commit"], commit,
+      root: fresh_clone || ROOT
+    )
+    final_payload_ancestry_valid = ancestry_status.success? && records[1]["after_commit"] != commit
+  end
+  validate_shared_lifecycle_branch(
+    "h2",
+    {
+      "first_in_engine" => {
+        "commit" => first_in_engine["commit"],
+        "source_sha256" => first_in_engine["source_manifest_sha256"],
+        "output_sha256" => first_in_engine["output_manifest_sha256"],
+        "decided_at" => first_in_engine["decided_at"]
+      },
+      "passes" => kernel_passes, "final_source_sha256" => source_digest,
+      "final_output_sha256" => output_digest,
+      "final_g6_decided_at" => gate6_row["decided_at"],
+      "final_g7_decided_at" => gate7_row["decided_at"],
+      "final_payload_ancestry_valid" => final_payload_ancestry_valid
+    },
+    "#{label} shared production H2 lifecycle"
+  )
+end
+
+def authoring_receipt_revision_key(commit, fresh_clone)
+  return nil unless commit&.match?(HEX40) && fresh_clone
+
+  [commit, Pathname.new(fresh_clone).expand_path.to_s]
+end
+
+def validate_authoring_root_payload_binding(payload_context, commit, fresh_clone, label)
+  return unless payload_context
+
+  roots = AUTHORING_ROOT_PAYLOAD_PATHS.select { |path| payload_context[:manifests].key?(path) }
+  error("#{label}: multiple authoring root payload manifests are active") if roots.length > 1
+  return if roots.empty?
+
+  root_path = roots.first
+  unless commit&.match?(HEX40) && fresh_clone
+    error("#{label}: authoring root payload binding requires one reviewed commit and fresh public clone")
+    return
+  end
+  AUTHORING_ROOT_REQUIRED_MODES.each do |path, expected_mode|
+    error("#{label}: #{path} must be a direct #{root_path} member") unless
+      payload_context[:member_owner][path] == root_path
+    material = materialized_commit_file(
+      path, commit, "#{label} root-bound #{path}", fresh_clone: fresh_clone, allow_lfs: false
+    )
+    error("#{label}: #{path} must be an ordinary Git #{expected_mode} blob at the reviewed commit") unless
+      material && material[:kind] == :git && material[:mode] == expected_mode
+  end
+end
+
+def validate_authoring_gate_receipt(scope:, gate:, applicable:, evidence_path:, row:, source_digest:,
+                                    output_digest:, commit:, fresh_clone:, local_context:, source_context:, label:)
+  evidence_owned_paths = manifest_owned_paths(local_context, evidence_path)
+  # macOS ships a Ruby version where Set does not implement Enumerable#filter_map.
+  # Keep this production path compatible with that exact /usr/bin/ruby runtime.
+  evidence_entries = evidence_owned_paths.map { |path| local_context[:entries][path] }.compact
+  source_manifest_path = "assets-src/#{scope.split('.', 2).first}/#{scope}/SOURCE_MANIFEST.sha256"
+  output_manifest_path = "review/#{scope}/g5/OUTPUT_MANIFEST.sha256"
+  source_owned_paths = source_context ? manifest_owned_paths(source_context, source_manifest_path) : Set.new
+  output_owned_paths = manifest_owned_paths(local_context, output_manifest_path)
+  receipt_path = %w[G2 G5].include?(gate) ? N64Game::AuthoringStackReceipt.receipt_path(scope, gate) : nil
+  placement_issues = N64Game::AuthoringStackReceipt.placement_issues(
+    scope_id: scope, gate: gate, applicable: applicable,
+    evidence_manifest_path: evidence_path, evidence_entries: evidence_entries,
+    direct_owner: receipt_path && local_context[:member_owner][receipt_path],
+    source_owned_paths: source_owned_paths, output_owned_paths: output_owned_paths,
+    build_id: row["build_id"]
+  )
+  placement_issues.each { |issue| error("#{label} #{gate}: #{issue}") }
+  return unless applicable && %w[G2 G5].include?(gate)
+
+  revision_key = authoring_receipt_revision_key(commit, fresh_clone)
+  unless revision_key
+    error("#{label} #{gate}: authoring receipt requires one reviewed commit and fresh public clone")
+    return
+  end
+  AUTHORING_RECEIPT_EXPECTED_BY_REVISION[revision_key] << receipt_path
+  receipt_material = materialized_commit_file(
+    receipt_path, commit, "#{label} #{gate} authoring receipt",
+    fresh_clone: fresh_clone, allow_lfs: false
+  )
+  error("#{label} #{gate}: authoring receipt must be an ordinary 100644 Git blob") unless
+    receipt_material && receipt_material[:kind] == :git && receipt_material[:mode] == "100644"
+
+  required_materials = AUTHORING_ROOT_REQUIRED_MODES.each_with_object({}) do |(path, expected_mode), materials|
+    next if path == "scripts/validate-asset-contract" || path == "lib/n64game/authoring_stack_receipt.rb"
+
+    material = materialized_commit_file(
+      path, commit, "#{label} #{gate} authoring dependency #{path}",
+      fresh_clone: fresh_clone, allow_lfs: false
+    )
+    error("#{label} #{gate}: authoring dependency #{path} must be an ordinary Git #{expected_mode} blob") unless
+      material && material[:kind] == :git && material[:mode] == expected_mode
+    materials[path] = material if material && material[:kind] == :git && material[:mode] == expected_mode
+  end
+  lock_material = required_materials["config/toolchain.lock.json"]
+  checker_members = N64Game::AuthoringStackReceipt::CHECKER_BUNDLE_PATHS.to_h do |path|
+    [path, required_materials.dig(path, :bytes)]
+  end
+  return unless receipt_material && lock_material && checker_members.values.none?(&:nil?)
+
+  expected_output = gate == "G2" ? "NONE" : output_digest
+  expected_build = gate == "G2" ? "-" : row["build_id"]
+  N64Game::AuthoringStackReceipt.validate(
+    bytes: receipt_material[:bytes], scope_id: scope, gate: gate,
+    source_manifest_sha256: source_digest, output_manifest_sha256: expected_output,
+    build_id: expected_build, decided_at: row["decided_at"],
+    toolchain_lock_bytes: lock_material[:bytes], checker_members: checker_members
+  ).each { |issue| error("#{label} #{gate}: #{issue}") }
+rescue StandardError => exception
+  error("#{label} #{gate}: controlled authoring receipt validation failure: #{exception.class}: #{exception.message}")
+end
+
+def validate_authoring_receipt_universe(commit:, fresh_clone:, payload_context:, tree_entries:, label:,
+                                         inherited_contexts: [])
+  return unless commit&.match?(HEX40) && fresh_clone && payload_context
+
+  validate_authoring_root_payload_binding(payload_context, commit, fresh_clone, label)
+  revision_key = authoring_receipt_revision_key(commit, fresh_clone)
+  expected_paths = AUTHORING_RECEIPT_EXPECTED_BY_REVISION.fetch(revision_key, Set.new).dup
+  Array(inherited_contexts).each do |context|
+    context[:entries].each_value do |entry|
+      expected_paths << entry[:path] if entry[:role] == "authoring.stack_receipt"
+    end
+  end
+  contexts = [payload_context, *Array(inherited_contexts)].compact
+  manifest_entries = contexts.flat_map { |context| context[:entries].values }.uniq do |entry|
+    [entry[:path], entry[:role], entry[:build], entry[:capture], entry[:kind]]
+  end
+  N64Game::AuthoringStackReceipt.universe_issues(
+    expected_paths: expected_paths.to_a, tree_entries: tree_entries,
+    manifest_entries: manifest_entries
+  ).each { |issue| error("#{label}: #{issue}") }
+  expected_paths.each do |path|
+    material = materialized_commit_file(
+      path, commit, "#{label} receipt universe member", fresh_clone: fresh_clone, allow_lfs: false
+    )
+    error("#{label}: receipt universe member must be ordinary Git mode 100644: #{path}") unless
+      material && material[:kind] == :git && material[:mode] == "100644"
+  end
 end
 
 def validate_gate_record(path_hash, label, scope:, profile:, tier:, source_digest:, output_digest:, build_id:,
-                         expected_vector:, commit: nil, fresh_clone: nil, payload_context: nil, require_complete: false,
-                         owned_paths: nil, owner_ids: [])
+                         expected_vector:, commit: nil, fresh_clone: nil, payload_context: nil, source_context: nil,
+                         require_complete: false, owned_paths: nil, owner_ids: [])
   gate_record_path = path_hash.to_s.split("@", 2).first
-  canonical_asset_scope = !expected_profile_tier(scope).nil?
+  canonical_profile_tier = expected_profile_tier(scope)
+  canonical_asset_scope = !canonical_profile_tier.nil?
+  error("#{label}: caller profile/tier differs from the canonical scope mapping") if
+    canonical_asset_scope && [profile, tier] != canonical_profile_tier
   generated_child_scope = GENERATED_CAMERA_CHILDREN.key?(scope)
   rollup_slug = {
     "rollup.player" => "player", "rollup.quarrune" => "quarrune",
@@ -2633,7 +2828,23 @@ def validate_gate_record(path_hash, label, scope:, profile:, tier:, source_diges
   return [] unless rows.length == 7
   owned_paths << gate_record_path if owned_paths
 
-  local_context = payload_context || new_manifest_context
+  source_context ||= payload_context
+  local_context = payload_context || source_context || new_manifest_context
+  canonical_profile = canonical_profile_tier&.first
+  canonical_source_path = canonical_asset_scope ?
+    "assets-src/#{scope.split('.', 2).first}/#{scope}/SOURCE_MANIFEST.sha256" : nil
+  source_graph_ready = canonical_source_path && source_context &&
+    source_context[:manifest_digests][canonical_source_path] == source_digest
+  source_owned_paths = source_graph_ready ? manifest_owned_paths(source_context, canonical_source_path).to_a : []
+  receipt_relevant = [rows[1], rows[4]].any? { |fields| fields && fields[4] != "PENDING" }
+  if canonical_asset_scope && receipt_relevant && !source_graph_ready
+    error("#{label}: G2/G5 authoring applicability requires the exact transitive SOURCE manifest context")
+  end
+  authoring_applicable = N64Game::AuthoringStackReceipt.applicable?(
+    canonical_asset_scope: canonical_asset_scope, profile: canonical_profile,
+    source_paths: source_owned_paths
+  )
+  authoring_applicable = true if canonical_asset_scope && receipt_relevant && !source_graph_ready
   decisions = []
   previous_decided_at = nil
   rows.each_with_index do |fields, index|
@@ -2709,6 +2920,12 @@ def validate_gate_record(path_hash, label, scope:, profile:, tier:, source_diges
                         "review/benchmark/rollups/#{rollup_slug}/g#{index + 1}/"
                       end
       validate_manifest_member_roots(local_context, evidence_path, [evidence_root], "#{label} #{gate} evidence")
+      validate_authoring_gate_receipt(
+        scope: scope, gate: gate, applicable: authoring_applicable, evidence_path: evidence_path,
+        row: row, source_digest: source_digest, output_digest: output_digest,
+        commit: commit, fresh_clone: fresh_clone, local_context: local_context,
+        source_context: source_context, label: label
+      )
       if canonical_asset_scope && index.zero?
         validate_gate1_attempt_history(
           scope, evidence_path, owner_ids, commit: commit, fresh_clone: fresh_clone,
@@ -2881,6 +3098,7 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
     commit: transition_commit, fresh_clone: clone
   )
   advanced_count = 0
+  kernel_rows = []
   rows.each_with_index do |fields, index|
     row = GENERATED_CHILD_TRANSITION_HEADER.zip(fields).to_h
     child_id, parent_id = GENERATED_CAMERA_CHILDREN.to_a[index]
@@ -2897,6 +3115,10 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
     if row["state"] == "concept"
       error("#{label}: untouched transition row must retain literal PENDING fields/gates") unless
         fields[4..].all? { |value| value == "PENDING" }
+      kernel_rows << {
+        "child_id" => child_id, "parent_id" => parent_id, "state" => row["state"],
+        "lifecycle_fields_pending" => fields[4..].all? { |value| value == "PENDING" }
+      }
       next
     end
     advanced_count += 1
@@ -2948,11 +3170,14 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
                      end
       parent_owners = canonical_ledger_owners(parent_entry[:creator])
       error("#{label}: current parent creator/rightsholder is malformed") unless parent_owners
+      parent_asset_context = new_manifest_context
       validate_manifest(
-        parent_source_path, parent_source_digest, "#{label} parent source", [], transition_commit, clone
+        parent_source_path, parent_source_digest, "#{label} parent source", [], transition_commit, clone,
+        parent_asset_context
       ) if parent_source_digest&.match?(HEX64)
       validate_manifest(
-        parent_output_path, parent_output_digest, "#{label} parent output", [], transition_commit, clone
+        parent_output_path, parent_output_digest, "#{label} parent output", [], transition_commit, clone,
+        parent_asset_context
       ) if parent_has_output && parent_output_digest&.match?(HEX64)
       validate_gate_record(
         parent_gate_binding, "#{label} fully validated parent gate record",
@@ -2960,7 +3185,7 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
         source_digest: parent_source_digest, output_digest: parent_output_digest,
         build_id: parent_build, expected_vector: parent_gates,
         commit: transition_commit, fresh_clone: clone, require_complete: false,
-        owner_ids: parent_owners || []
+        source_context: parent_asset_context, owner_ids: parent_owners || []
       ) if row["parent_gate_record_sha256"]&.match?(HEX64) && parent_source_digest&.match?(HEX64)
       validate_ledger_gate_lifecycle(parent_entry, parent_gates, parent_has_output, "#{label} parent")
     end
@@ -2977,6 +3202,7 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
     has_output = %w[converted review approved].include?(row["state"])
     expected_output_path = generated_camera_review_snapshot_path(child_id)
     output_digest = "NONE"
+    output_material = nil
     if has_output
       error("#{label}: generated output path/hash is noncanonical") unless
         row["output_path"] == expected_output_path && row["output_sha256"]&.match?(HEX64)
@@ -3077,8 +3303,24 @@ def validate_generated_child_transition_registry(ledger_body, decision, camera_l
     ) if row["gate_record_sha256"]&.match?(HEX64)
     result[:child_owned_paths][child_id].merge(child_gate_owned_paths)
     result[:control_paths].merge(child_gate_owned_paths.select { |path| path.start_with?("review/generated/") })
+    kernel_rows << {
+      "child_id" => child_id, "parent_id" => parent_id, "state" => row["state"],
+      "initial_tuple_sha256" => row["initial_tuple_sha256"],
+      "parent_active" => parent_entry && %w[source converted review approved].include?(parent_entry[:status]),
+      "source_revision_path" => row["source_revision_path"],
+      "source_revision_sha256" => row["source_revision_sha256"],
+      "output_path" => row["output_path"], "output_sha256" => row["output_sha256"],
+      "output_bytesize" => output_material && output_material[:bytes].bytesize,
+      "output_bytes_hex" => output_material && output_material[:bytes].unpack1("H*"),
+      "gates" => gates, "lifecycle_fields_pending" => false
+    }
   end
   error("generated-child populated transition registry must advance at least one child") if advanced_count.zero?
+  validate_shared_lifecycle_branch(
+    "generated_child",
+    { "transition_commit_matches_public_head" => remote_status.success? && !transition_commit.nil?, "rows" => kernel_rows },
+    "shared production generated-child lifecycle"
+  )
   result
 end
 
@@ -3165,6 +3407,9 @@ def validate_move_pair_atomicity(entries, pair_keys, commit:, fresh_clone:, payl
     evidence_path = "review/pairs/#{pair_key}/EVIDENCE_MANIFEST.sha256"
     error("#{label}: pair evidence path/hash is noncanonical") unless
       proof["evidence_manifest_path"] == evidence_path && proof["evidence_manifest_sha256"]&.match?(HEX64)
+    capture_has_audio = false
+    capture_digest = nil
+    measurement = {}
     if proof["evidence_manifest_sha256"]&.match?(HEX64)
       pair_entries = validate_manifest(
         evidence_path, proof["evidence_manifest_sha256"], "#{label} evidence", [], commit, fresh_clone, payload_context
@@ -3188,10 +3433,12 @@ def validate_move_pair_atomicity(entries, pair_keys, commit:, fresh_clone:, payl
         report_entry && report_entry[:path] == report_path && report_entry[:capture] == "-" &&
         report_entry[:build] == proof["build_id"]
       if capture_entry
+        capture_digest = capture_entry[:digest]
         capture_material = materialized_commit_file(
           capture_path, commit, "#{label} synchronized MP4", fresh_clone: fresh_clone
         )
         probe = capture_material && probe_mp4(capture_material[:bytes], "#{label} synchronized MP4")
+        capture_has_audio = !!(probe && probe[:audio])
         error("#{label}: synchronized MP4 must contain decodable audio") unless probe && probe[:audio]
       end
       if report_entry
@@ -3220,6 +3467,33 @@ def validate_move_pair_atomicity(entries, pair_keys, commit:, fresh_clone:, payl
         error("#{label}: pair/measurement/Gate-7 timestamps must be RFC 3339")
       end
     end
+    validate_shared_lifecycle_branch(
+      "move_pair",
+      {
+        "pair_key" => pair_key, "capture_has_audio" => capture_has_audio,
+        "children" => [
+          {
+            "asset_id" => sfx_id, "status" => sfx_entry[:status],
+            "gates" => sfx_gate_rows.map { |gate_row| gate_row[4] },
+            "gate_record_sha256" => sfx_gate_digest, "output_sha256" => sfx_output_digest,
+            "build_id" => sfx_g5["build_id"]
+          },
+          {
+            "asset_id" => vfx_id, "status" => vfx_entry[:status],
+            "gates" => vfx_gate_rows.map { |gate_row| gate_row[4] },
+            "gate_record_sha256" => vfx_gate_digest, "output_sha256" => vfx_output_digest,
+            "build_id" => vfx_g5["build_id"]
+          }
+        ],
+        "proof" => {
+          "pair_key" => proof["pair_key"], "build_id" => proof["build_id"],
+          "sync_error_ms" => proof["sync_error_ms"], "capture_sha256" => capture_digest,
+          "decided_at" => proof["decided_at"]
+        },
+        "measurement" => measurement
+      },
+      "shared production move-pair lifecycle"
+    )
   end
 end
 
@@ -3328,6 +3602,12 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
     error("current post-approval ledger contains active rows not present in signed history") unless
       active_local.all? { |entry| historical_exact_ids.include?(entry[:id]) }
     validate_gate1_attempt_history_universe(local_head, clone, historical_owned_paths)
+    validate_authoring_receipt_universe(
+      commit: local_head, fresh_clone: clone, payload_context: historical_context,
+      tree_entries: commit_tree_entries(local_head, clone),
+      label: "current unchanged post-approval authoring receipts",
+      inherited_contexts: [historical_context]
+    )
     return
   end
 
@@ -3493,6 +3773,10 @@ def validate_current_postapproval_production(local_ledger_body, local_inventory_
   control_owned.merge(generated_transition[:control_paths]) if generated_transition[:populated]
   validate_gate1_attempt_history_universe(local_head, clone, owned_paths)
   tree_entries = commit_tree_entries(local_head, clone)
+  validate_authoring_receipt_universe(
+    commit: local_head, fresh_clone: clone, payload_context: context, tree_entries: tree_entries,
+    label: "current post-approval authoring receipts", inherited_contexts: [historical_context]
+  )
   scan_payload_production_tree(tree_entries, payload_by_id, owned_paths, control_owned)
   scan_production_roots(
     payload_by_id, owned_paths, {}, "APPROVED", benchmark_owned_paths: control_owned
@@ -3579,6 +3863,152 @@ def lifecycle_fixture_env
     "PYTHONDONTWRITEBYTECODE" => "1",
     "PYTHONNOUSERSITE" => "1"
   }
+end
+
+def lifecycle_ruby_env
+  lifecycle_fixture_env.merge(
+    "RUBYOPT" => nil, "RUBYLIB" => nil, "GEM_HOME" => nil, "GEM_PATH" => nil,
+    "BUNDLE_GEMFILE" => nil, "BUNDLE_PATH" => nil
+  )
+end
+
+def production_lifecycle_harness_layout
+  case_paths = PRODUCTION_LIFECYCLE_BRANCHES.to_h do |branch|
+    [branch, "test/fixtures/asset_lifecycle_production/#{branch}/CASE.json"]
+  end
+  paths = ([PRODUCTION_LIFECYCLE_KERNEL_PATH, PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH] + case_paths.values).sort
+  roles = paths.to_h do |path|
+    branch = case_paths.key(path)
+    role = if path == PRODUCTION_LIFECYCLE_KERNEL_PATH
+             "role:production_harness.kernel"
+           elsif path == PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH
+             "role:production_harness.runner"
+           else
+             "role:production_harness.case.#{branch}"
+           end
+    [path, role]
+  end
+  [case_paths, paths, roles]
+end
+
+def parse_production_lifecycle_harness_manifest(raw, label)
+  unless raw.end_with?("\n".b) && !raw.end_with?("\n\n".b) && !raw.include?("\r".b) &&
+         raw.dup.force_encoding(Encoding::UTF_8).valid_encoding?
+    error("#{label} manifest encoding/line endings are noncanonical")
+    return []
+  end
+  _case_paths, expected_paths, expected_roles = production_lifecycle_harness_layout
+  lines = raw.split("\n".b, -1).tap(&:pop)
+  error("#{label} manifest member count mismatch") unless lines.length == expected_paths.length
+  rows = lines.each_with_index.map do |line, index|
+    fields = line.split("\t".b, -1).map { |field| field.dup.force_encoding(Encoding::UTF_8) }
+    unless fields.length == 6
+      error("#{label} manifest row #{index + 1} must have six TAB fields")
+      next
+    end
+    path, byte_count, digest, build, capture, role = fields
+    unless safe_repo_path?(path) && byte_count.match?(/\A(?:0|[1-9][0-9]*)\z/) && digest.match?(HEX64) &&
+           build == "build:-" && capture == "capture:-"
+      error("#{label} manifest row #{index + 1} has an unsafe/noncanonical identity")
+      next
+    end
+    error("#{label} manifest role mismatch for #{path}") unless role == expected_roles[path]
+    { path: path, byte_count: byte_count.to_i, digest: digest, role: role }
+  end.compact
+  error("#{label} manifest path order/set mismatch") unless rows.map { |row| row[:path] } == expected_paths
+  rows
+end
+
+def exact_production_harness_receipt(manifest_digest, kernel_digest)
+  {
+    "schema" => "n64game-production-lifecycle-harness-v1",
+    "authority" => "PRODUCTION_SHARED_KERNEL_BRANCH_COVERAGE",
+    "result" => "PASS",
+    "manifest_sha256" => manifest_digest,
+    "kernel_sha256" => kernel_digest,
+    "branch_ids" => PRODUCTION_LIFECYCLE_BRANCHES,
+    "negative_case_ids" => %w[
+      populated.aggregate_count
+      approved.inherited_completion approved.rollup_non_rom_g1 approved.rollup_static_state_g1
+      repair.out_of_range_basis repair.non_string_token
+      generated_child.noncanonical_tuple generated_child.extra_row
+      move_pair.non_hash_child move_pair.missing_asset_id
+      h2.non_hash_pass release.failed_workflow
+    ],
+    "live_adapter_coverage" => "EXCLUDED_BY_DESIGN",
+    "live_only_adapters" => %w[
+      github_api signed_git_tags git_lfs_materialization ffprobe_media_decode ares_execution rom_rebuild
+    ]
+  }
+end
+
+def run_production_lifecycle_harness(root, manifest_path, manifest_digest, kernel_digest, label)
+  runner = Pathname.new(root).join(PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH)
+  manifest = Pathname.new(root).join(manifest_path)
+  unless runner.file? && !runner.symlink? && File.executable?(runner)
+    error("#{label} runner is missing, symlinked, or non-executable")
+    return
+  end
+  output, runner_error, status = Open3.capture3(
+    lifecycle_ruby_env, "/usr/bin/ruby", "--disable-gems", runner.to_s,
+    "--manifest", manifest.to_s, chdir: root.to_s, unsetenv_others: true
+  )
+  unless status.success?
+    error("#{label} runner failed: #{runner_error.lines.first.to_s.strip}")
+    return
+  end
+  receipt = JSON.parse(output)
+  error("#{label} receipt is not the exact shared-kernel branch/death result") unless
+    receipt == exact_production_harness_receipt(manifest_digest, kernel_digest)
+rescue JSON::ParserError => exception
+  error("#{label} runner emitted invalid JSON: #{exception.message}")
+rescue SystemCallError => exception
+  error("#{label} runner could not execute: #{exception.message}")
+end
+
+def verify_local_production_lifecycle_harness_pin
+  label = "local production lifecycle harness"
+  unless PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED && PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64)
+    error("#{label} remains unimplemented/unpinned")
+    return
+  end
+  manifest_path = PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH
+  unless regular_without_symlink?(manifest_path)
+    error("#{label} manifest is missing, non-regular, or symlinked")
+    return
+  end
+  raw = File.binread(ROOT.join(manifest_path))
+  manifest_digest = Digest::SHA256.hexdigest(raw)
+  unless manifest_digest == PRODUCTION_LIFECYCLE_HARNESS_SHA256
+    error("#{label} manifest digest differs from the production pin")
+    return
+  end
+  rows = parse_production_lifecycle_harness_manifest(raw, label)
+  rows.each do |row|
+    unless regular_without_symlink?(row[:path])
+      error("#{label} member is missing, non-regular, or symlinked: #{row[:path]}")
+      next
+    end
+    bytes = File.binread(ROOT.join(row[:path]))
+    error("#{label} member byte count/digest mismatch: #{row[:path]}") unless
+      bytes.bytesize == row[:byte_count] && Digest::SHA256.hexdigest(bytes) == row[:digest]
+  end
+  case_paths, _expected_paths, _roles = production_lifecycle_harness_layout
+  fixture_root = ROOT.join("test/fixtures/asset_lifecycle_production")
+  expected_fixture_files = ([manifest_path] + case_paths.values).sort
+  observed_fixture_files = Dir.glob(fixture_root.join("**", "*").to_s, File::FNM_DOTMATCH).each_with_object([]) do |path, files|
+    pathname = Pathname.new(path)
+    files << pathname.relative_path_from(ROOT).to_s if File.file?(pathname) || File.symlink?(pathname)
+  end.sort
+  error("#{label} fixture root contains missing, extra, or symlinked files") unless
+    observed_fixture_files == expected_fixture_files
+  return unless rows.length == production_lifecycle_harness_layout[1].length &&
+                rows.all? { |row| regular_without_symlink?(row[:path]) }
+
+  kernel_row = rows.find { |row| row[:path] == PRODUCTION_LIFECYCLE_KERNEL_PATH }
+  run_production_lifecycle_harness(
+    ROOT, manifest_path, manifest_digest, kernel_row && kernel_row[:digest], label
+  ) if kernel_row
 end
 
 def verify_local_lifecycle_semantic_snapshot_pin
@@ -4112,17 +4542,90 @@ def validate_analyzer_fields(record, label)
   error("#{label}: analyzed_at is not strict RFC 3339") unless valid_rfc3339?(record["analyzed_at"])
 end
 
-def verify_approval_lifecycle_fixture_suite(**_context)
+def verify_approval_lifecycle_fixture_suite(commit:, fresh_clone:, payload_context:, owned_paths: nil)
   label = "production-validator approval-lifecycle harness"
-  unless PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64)
-    error("#{label} remains unpinned; semantic snapshot fixtures are not approval evidence")
+  unless PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED && PRODUCTION_LIFECYCLE_HARNESS_SHA256.match?(HEX64)
+    error("#{label} remains unimplemented/unpinned; semantic snapshot fixtures are not approval evidence")
     return
   end
+  unless commit&.match?(HEX40) && fresh_clone && payload_context
+    error("#{label} requires a reviewed commit, fresh public clone, and payload ownership context")
+    return
+  end
+  manifest_path = PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH
+  manifest_material = materialized_commit_file(
+    manifest_path, commit, "#{label} manifest", fresh_clone: fresh_clone, allow_lfs: false
+  )
+  return unless manifest_material
+  unless manifest_material[:kind] == :git && manifest_material[:mode] == "100644"
+    error("#{label} manifest must be an ordinary Git 100644 blob")
+    return
+  end
+  unless manifest_material[:digest] == PRODUCTION_LIFECYCLE_HARNESS_SHA256
+    error("#{label} manifest digest differs from the production pin")
+    return
+  end
+  rows = parse_production_lifecycle_harness_manifest(manifest_material[:bytes], label)
+  expected_payload_root = "review/benchmark/PAYLOAD_MANIFEST.sha256"
+  error("#{label} manifest must be a direct root payload member") unless
+    payload_context[:member_owner][manifest_path] == expected_payload_root
+  error("#{label} production validator must be a direct root payload member") unless
+    payload_context[:member_owner]["scripts/validate-asset-contract"] == expected_payload_root
+  required_paths = [manifest_path, "scripts/validate-asset-contract", *rows.map { |row| row[:path] }]
+  required_paths.each do |path|
+    error("#{label} path is outside the reviewed payload closure: #{path}") unless
+      payload_context[:closure].include?(path)
+  end
+  reviewed_harness_bytes = { manifest_path => manifest_material[:bytes] }
+  rows.each do |row|
+    material = materialized_commit_file(
+      row[:path], commit, "#{label} member #{row[:path]}", fresh_clone: fresh_clone, allow_lfs: false
+    )
+    error("#{label} member must be ordinary Git with matching byte count/digest: #{row[:path]}") unless
+      material && material[:kind] == :git && material[:bytes].bytesize == row[:byte_count] &&
+      material[:digest] == row[:digest]
+    reviewed_harness_bytes[row[:path]] = material[:bytes] if
+      material && material[:kind] == :git && material[:bytes].bytesize == row[:byte_count] &&
+      material[:digest] == row[:digest]
+  end
+  reviewed_modes = ([manifest_path] + rows.map { |row| row[:path] }).to_h do |path|
+    mode_output, _mode_error, mode_status = git_capture("ls-tree", commit, "--", path, root: fresh_clone)
+    mode = mode_output[/\A(\d{6})\s+blob\s+[0-9a-f]+\t/, 1] if mode_status.success?
+    [path, mode]
+  end
+  expected_modes = reviewed_modes.keys.to_h do |path|
+    [path, path == PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH ? "100755" : "100644"]
+  end
+  error("#{label} reviewed harness file modes differ from the exact ordinary-Git contract") unless
+    reviewed_modes == expected_modes
+  case_paths, _expected_paths, _roles = production_lifecycle_harness_layout
+  expected_fixture_files = ([manifest_path] + case_paths.values).sort
+  observed_fixture_files = commit_tree_entries(commit, fresh_clone).map { |entry| entry[:path] }.select do |path|
+    path.start_with?("test/fixtures/asset_lifecycle_production/")
+  end.sort
+  error("#{label} reviewed fixture root contains missing or extra files") unless
+    observed_fixture_files == expected_fixture_files
+  owned_paths << manifest_path if owned_paths
+  owned_paths&.merge(rows.map { |row| row[:path] })
+  kernel_row = rows.find { |row| row[:path] == PRODUCTION_LIFECYCLE_KERNEL_PATH }
+  return unless kernel_row && rows.length == production_lifecycle_harness_layout[1].length
+  return unless reviewed_harness_bytes.keys.sort == ([manifest_path] + rows.map { |row| row[:path] }).sort &&
+                reviewed_modes == expected_modes
 
-  # Keep this branch closed even if somebody types a plausible digest into the
-  # constant. A future implementation must materialize fixtures and drive the
-  # actual production validator paths before it may remove this error.
-  error("#{label} verifier is not implemented; a SHA-256 pin alone cannot unlock approval")
+  # The credential-free clone deliberately uses --no-checkout. Materialize only
+  # the exact ordinary-Git bytes already retrieved and hash-checked above into a
+  # new empty root; never execute a working-tree file or synthesize live adapters.
+  Dir.mktmpdir("n64game-reviewed-lifecycle-") do |harness_root|
+    reviewed_harness_bytes.each do |relative, bytes|
+      target = Pathname.new(harness_root).join(relative)
+      FileUtils.mkdir_p(target.dirname)
+      File.binwrite(target, bytes)
+      File.chmod(relative == PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH ? 0o755 : 0o644, target)
+    end
+    run_production_lifecycle_harness(
+      harness_root, manifest_path, manifest_material[:digest], kernel_row[:digest], label
+    )
+  end
 end
 
 def require_exact_report_fields(record, expected, label)
@@ -6308,6 +6811,7 @@ registry_rows.each_with_index do |fields, index|
   end
 end
 
+preapproval_kernel_rollups = []
 preapproval_rollup_bindings.each do |binding, _path_field, scope, profile, tier|
   next unless binding && preapproval_commit && preapproval_fresh_clone
   preview_rows = parse_tsv(
@@ -6316,6 +6820,10 @@ preapproval_rollup_bindings.each do |binding, _path_field, scope, profile, tier|
     payload_context: preapproval_payload_context
   )
   vector = preview_rows.map { |row| row[4] }
+  preapproval_kernel_rollups << {
+    "scope" => scope, "build_id" => pre_identity["Clean-build ID"], "gates" => vector,
+    "gate_record_sha256" => binding.split("@", 2)[1]
+  }
   validate_gate_record(
     binding, "preapproval #{scope} gate record", scope: scope, profile: profile, tier: tier,
     source_digest: pre_identity["Whitelist/gate registry SHA-256"], output_digest: pre_identity["Whitelist/gate registry SHA-256"],
@@ -6324,6 +6832,26 @@ preapproval_rollup_bindings.each do |binding, _path_field, scope, profile, tier|
     payload_context: preapproval_payload_context, owned_paths: preapproval_benchmark_owned_paths,
     owner_ids: preapproval_asset_owner_ids.to_a
   ) if vector.length == 7
+end
+
+if preapproval_aggregate_populated
+  kernel_registry_rows = registry_rows.map do |fields|
+    row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
+    row.merge("gates" => (1..7).map { |gate| row["g#{gate}"] })
+  end
+  kernel_aggregate_pairs = AGGREGATE_PAIR_FIELDS.map do |path_field, digest_field|
+    { "path" => pre_identity[path_field], "sha256" => pre_identity[digest_field] }
+  end
+  validate_shared_lifecycle_branch(
+    "populated",
+    {
+      "decision" => decision, "lock" => benchmark_header && benchmark_header[:production_lock],
+      "status" => benchmark_header && benchmark_header[:status],
+      "aggregate_pairs" => kernel_aggregate_pairs, "registry_rows" => kernel_registry_rows,
+      "rollups" => preapproval_kernel_rollups
+    },
+    "shared production populated lifecycle"
+  )
 end
 
 if preapproval_aggregate_populated
@@ -6355,6 +6883,24 @@ if %w[REVIEW_REQUIRED BLOCKED].include?(decision) && prior_baseline_ref&.match?(
   )
   if baseline
     enforce_latest_public_approval_baseline(baseline, slug)
+    kernel_prior_rows = baseline[:registry_rows].map do |fields|
+      row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
+      row.merge("gates" => (1..7).map { |gate| row["g#{gate}"] })
+    end
+    kernel_current_rows = registry_rows.map do |fields|
+      row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
+      row.merge("gates" => (1..7).map { |gate| row["g#{gate}"] })
+    end
+    validate_shared_lifecycle_branch(
+      "repair",
+      {
+        "decision" => decision, "lock" => benchmark_header && benchmark_header[:production_lock],
+        "status" => benchmark_header && benchmark_header[:status],
+        "prior_registry_rows" => kernel_prior_rows, "current_registry_rows" => kernel_current_rows,
+        "return_tokens" => return_tokens
+      },
+      "shared production repair lifecycle"
+    )
     error("current repair registry must retain all #{BENCHMARK_WHITELIST_COUNT} prior baseline rows") unless
       registry_rows.length == BENCHMARK_WHITELIST_COUNT
     authorization_rows.each_with_index do |current_control, index|
@@ -6505,6 +7051,11 @@ end
 if decision != "APPROVED" && preapproval_commit && preapproval_fresh_clone
   validate_gate1_attempt_history_universe(
     preapproval_commit, preapproval_fresh_clone, owned_paths_by_id
+  )
+  validate_authoring_receipt_universe(
+    commit: preapproval_commit, fresh_clone: preapproval_fresh_clone,
+    payload_context: preapproval_payload_context, tree_entries: preapproval_tree_entries,
+    label: "preapproval authoring receipts"
   )
   scan_payload_production_tree(
     preapproval_tree_entries, preapproval_ledger_by_id, owned_paths_by_id,
@@ -7033,19 +7584,59 @@ if decision == "APPROVED"
 
   rollup_specs = ROLLUP_SPECS
   rollup_paths = []
+  approved_kernel_rollups = []
   rollup_specs.each do |path_field, digest_field, expected_path, scope, profile, tier|
     path = identity[path_field]
     digest = identity[digest_field]
     rollup_paths << path
     error("#{scope} gate-record path must equal canonical benchmark owner path") unless path == expected_path
-    validate_gate_record(
-      "#{path}@#{digest}", "#{scope} gate record", scope: scope, profile: profile, tier: tier,
-      source_digest: registry_digest, output_digest: registry_digest, build_id: build_id,
-      expected_vector: nil, commit: payload_commit, fresh_clone: fresh_clone,
-      payload_context: payload_context, require_complete: true, owned_paths: approved_benchmark_owned_paths,
-      owner_ids: asset_owner_ids.to_a
-    ) if path && digest
+    decisions = if path && digest
+                  validate_gate_record(
+                    "#{path}@#{digest}", "#{scope} gate record", scope: scope, profile: profile, tier: tier,
+                    source_digest: registry_digest, output_digest: registry_digest, build_id: build_id,
+                    expected_vector: nil, commit: payload_commit, fresh_clone: fresh_clone,
+                    payload_context: payload_context, require_complete: true, owned_paths: approved_benchmark_owned_paths,
+                    owner_ids: asset_owner_ids.to_a
+                  )
+                else
+                  []
+                end
+    approved_kernel_rollups << {
+      "scope" => scope, "build_id" => build_id, "gates" => Array(decisions),
+      "gate_record_sha256" => digest
+    }
   end
+
+  approved_kernel_registry = approved_registry_rows.map do |fields|
+    row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
+    row.merge("gates" => (1..7).map { |gate| row["g#{gate}"] })
+  end
+  approved_defect_counts = identity["Open critical/high/medium defects"].to_s.split(" / ").map do |value|
+    canonical_integer(value)
+  end
+  approved_artifact_name = payload_commit&.match?(HEX40) ? "n64game-#{payload_commit}.z64" : nil
+  validate_shared_lifecycle_branch(
+    "approved",
+    {
+      "decision" => decision, "lock" => production_lock, "status" => control_status,
+      "defects" => {
+        "critical" => approved_defect_counts[0], "high" => approved_defect_counts[1],
+        "medium" => approved_defect_counts[2]
+      },
+      "build_id" => build_id, "registry_rows" => approved_kernel_registry,
+      "rollups" => approved_kernel_rollups,
+      "identity" => {
+        "payload_commit" => payload_commit, "repository" => slug,
+        "payload_manifest_sha256" => payload_digest, "registry_sha256" => registry_digest,
+        "rom_sha256" => rom_digest, "rom_size_bytes" => rom_size,
+        "approval_ref" => tag_ref, "release_tag" => identity["Public ROM release tag"],
+        "artifact_name" => approved_artifact_name,
+        "release_asset_url" => identity["Public ROM release asset URL"],
+        "workflow_path" => identity["Public build workflow file"]
+      }
+    },
+    "shared production approved lifecycle"
+  )
 
   evidence_registry_path = identity["Benchmark evidence registry path"]
   evidence_registry_digest = identity["Benchmark evidence registry SHA-256"]
@@ -7077,6 +7668,10 @@ if decision == "APPROVED"
   ) if evidence_registry_rows.length == 14 && fresh_clone
   valid_evidence_refs ||= Set.new
   validate_gate1_attempt_history_universe(payload_commit, fresh_clone, approved_owned_paths) if fresh_clone
+  validate_authoring_receipt_universe(
+    commit: payload_commit, fresh_clone: fresh_clone, payload_context: payload_context,
+    tree_entries: payload_tree_entries, label: "approved authoring receipts"
+  ) if fresh_clone
   scan_payload_production_tree(
     payload_tree_entries, payload_ledger_by_id, approved_owned_paths,
     approved_benchmark_owned_paths
@@ -7247,6 +7842,8 @@ if decision == "APPROVED"
         release_target_status.success? && release_target_out.strip == payload_commit
     end
   end
+  workflow_json = nil
+  release_json = nil
   if slug && canonical_integer(workflow_run_id)&.positive?
     workflow_json = http_json("https://api.github.com/repos/#{slug}/actions/runs/#{workflow_run_id}", "public workflow run")
     if workflow_json
@@ -7265,6 +7862,21 @@ if decision == "APPROVED"
       end
     end
   end
+  validate_shared_lifecycle_branch(
+    "release",
+    {
+      "identity" => {
+        "payload_commit" => payload_commit, "repository" => slug,
+        "payload_manifest_sha256" => payload_digest, "registry_sha256" => registry_digest,
+        "rom_sha256" => rom_digest, "rom_size_bytes" => rom_size,
+        "approval_ref" => tag_ref, "release_tag" => release_tag,
+        "artifact_name" => asset_name, "release_asset_url" => release_url,
+        "workflow_path" => workflow_path
+      },
+      "workflow_json" => workflow_json, "release_json" => release_json
+    },
+    "shared production release lifecycle"
+  )
   remote_rom_identity = download_identity(release_url, "public ROM release asset") if release_url == expected_release_url
   error("public ROM bytes differ from local identity") if remote_rom_identity && remote_rom_identity != local_rom_identity
 
@@ -7338,9 +7950,11 @@ error("Gate-5 template permits a committed build product") unless
   reviews.include?("never a committed build product")
 
 # These local-only semantic snapshots harden schema/type/cross-binding behavior,
-# but they never enter a benchmark payload and are never approval evidence. The
-# separate production-validator lifecycle harness remains fail-closed above.
+# but they never enter a benchmark payload and are never approval evidence.
+# The separately pinned production-validator lifecycle harness exercises the
+# shared live kernel; it still excludes and cannot replace the live adapters.
 verify_local_lifecycle_semantic_snapshot_pin
+verify_local_production_lifecycle_harness_pin if PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED
 
 # This runs on every validation so an unexercised production-unlock branch cannot
 # silently become reachable; --self-test-hardening additionally prints its count.
