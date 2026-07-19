@@ -21,7 +21,7 @@ State machine:
 
 Any other state/lock pairing fails. Whitelist presence alone never authorizes work.
 
-The global lock does not prohibit manifest-bound Gate-1 exploration. An ordinary media asset at ledger status `concept` may own only its canonical source members and hashed Gate-1 provenance/review/evidence bytes, with `output:NONE` and seven literal pending gates. Its canonical `g1/REVIEW.md` is a direct `g1/EVIDENCE_MANIFEST.sha256` member at exact role `concept.review`. It has no `AUTHORIZATION.md`, `GATE_RECORD.tsv`, `SUBSET_EXPORT_ALLOWLIST.tsv`, `AUTHORING_STACK_RECEIPT.txt`, Gate 2–7 bytes, converted/output bytes, generated output, or final-source authority. `planned` owns no files; the exact 15 Markdown-only C7 tuples retain their narrow exception and do not count as ordinary concepts for the state derivation below.
+The global lock does not prohibit manifest-bound Gate-1 exploration. An ordinary media asset at ledger status `concept` may own only its canonical source members and hashed Gate-1 provenance/review/evidence bytes, with `output:NONE` and seven literal pending gates. Its canonical `g1/REVIEW.md` is the separately hashed `review:` locator outside the concept-evidence manifest; it binds that manifest's exact path/hash and cannot be a direct or transitive member. It has no `AUTHORIZATION.md`, `GATE_RECORD.tsv`, `SUBSET_EXPORT_ALLOWLIST.tsv`, `AUTHORING_STACK_RECEIPT.txt`, Gate 2–7 bytes, converted/output bytes, generated output, or final-source authority. `planned` owns no files; the exact 15 Markdown-only C7 tuples retain their narrow exception and do not count as ordinary concepts for the state derivation below.
 
 Pre-approval lifecycle state is derived from repository facts, not added as another editable field:
 

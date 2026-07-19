@@ -2063,6 +2063,23 @@ def run_hardening_self_test(data_schemas, verbose: false)
         PRODUCTION_LIFECYCLE_HARNESS_SHA256 &&
       approval_lifecycle_pins_ready?
   end
+  check.call("review records stay outside the evidence manifests whose hashes they bind") do
+    safe_context = {
+      manifests: { "evidence" => [{ path: "capture.png" }] }
+    }
+    direct_cycle = {
+      manifests: { "evidence" => [{ path: "REVIEW.md" }] }
+    }
+    nested_cycle = {
+      manifests: {
+        "evidence" => [{ path: "nested/EVIDENCE_MANIFEST.sha256" }],
+        "nested/EVIDENCE_MANIFEST.sha256" => [{ path: "REVIEW.md" }]
+      }
+    }
+    review_outside_evidence_manifest?(safe_context, "evidence", "REVIEW.md") &&
+      !review_outside_evidence_manifest?(direct_cycle, "evidence", "REVIEW.md") &&
+      !review_outside_evidence_manifest?(nested_cycle, "evidence", "REVIEW.md")
+  end
   check.call("generated camera review snapshots stay outside the ignored build tree") do
     GENERATED_CAMERA_CHILDREN.keys.all? do |child_id|
       generated_camera_review_snapshot_path(child_id) ==
@@ -5453,6 +5470,10 @@ def manifest_owned_paths(context, manifest_path, seen = Set.new)
   paths
 end
 
+def review_outside_evidence_manifest?(context, evidence_manifest_path, review_path)
+  !manifest_owned_paths(context, evidence_manifest_path).include?(review_path)
+end
+
 def quarrune_tiny3d_output(row)
   return nil unless row.is_a?(Hash)
   return nil unless %w[echo.quarrune anm.echo.quarrune].include?(row["production_id"])
@@ -5851,11 +5872,10 @@ def validate_gate1_attempt_history(production_id, evidence_manifest_path, owner_
         historical_context, row["evidence_manifest_path"], ["#{attempt_root}/"],
         "#{production_id} #{attempt_id} evidence"
       )
-      review_entry = historical_context[:entries][row["review_record_path"]]
-      error("#{production_id} #{attempt_id}: review record is not owned by its historical evidence manifest") unless
-        review_entry && review_entry[:digest] == row["review_record_sha256"] &&
-        review_entry[:role] == "gate.attempt_review" && review_entry[:capture] == "-" && review_entry[:build] == "-" &&
-        historical_context[:member_owner][row["review_record_path"]] == row["evidence_manifest_path"]
+      error("#{production_id} #{attempt_id}: review record must remain outside its historical evidence manifest") unless
+        review_outside_evidence_manifest?(
+          historical_context, row["evidence_manifest_path"], row["review_record_path"]
+        )
       review = parse_machine_record(
         "#{row['review_record_path']}@#{row['review_record_sha256']}", "#{production_id} #{attempt_id} rejection review",
         GATE_ATTEMPT_REVIEW_KEYS, commit: attempt_commit, fresh_clone: fresh_clone
@@ -5961,11 +5981,8 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
         concept_context, evidence_path, ["review/#{production_id}/g1/"],
         "#{production_id} Gate-1 concept evidence"
       )
-      review_entry = concept_context[:entries][review_path]
-      error("#{production_id}: canonical g1 REVIEW.md must be a direct concept-evidence-manifest member") unless
-        concept_context[:member_owner][review_path] == evidence_manifest_path
-      error("#{production_id}: canonical g1 REVIEW.md must use exact concept.review role") unless
-        review_entry && review_entry[:role] == "concept.review"
+      error("#{production_id}: canonical g1 REVIEW.md must remain outside its concept evidence manifest") unless
+        review_outside_evidence_manifest?(concept_context, evidence_path, review_path)
     end
     if evidence_locators["review"]
       concept_review = parse_machine_record(
@@ -7790,7 +7807,7 @@ cross_document_guards = {
     "unique ancestry-maximal pinned-key-valid public approval-tag target",
     "Pre-approval progression is a derived validator state",
     "one shared manifest ownership context",
-    "exact role `concept.review`",
+    "separately hashed `review:` locator outside the concept-evidence manifest",
     "`HEAD^{tree}` must equal `A^{tree}`",
     "only `APPROVED` compares it to local/fresh/public ROM identities",
     "every `.z64`, `.n64`, or `.v64` tree entry is forbidden",
@@ -7810,7 +7827,7 @@ cross_document_guards = {
     "exact eight current aggregate pairs",
     "one shared commit-bound context",
     "No mutable worktree blob can stand in for reviewed aggregate bytes",
-    "exact role `concept.review`",
+    "separately hashed `review:` locator outside the concept-evidence manifest",
     "`HEAD^{tree}` equals `A^{tree}`"
   ],
   "ASSET_REVIEW_TEMPLATES" => [
@@ -7818,7 +7835,7 @@ cross_document_guards = {
     "unique ancestry-maximal pinned-key-valid public approval ancestor",
     "exact eight populated aggregate pairs",
     "one shared commit-bound context",
-    "role `concept.review`",
+    "separately hashed `review:` locator outside the concept-evidence manifest",
     "`HEAD^{tree}` equals `A^{tree}`",
     "Pinned ImageMagick `7.1.2-13`",
     "Pinned `ffprobe 8.1.2`"
@@ -7835,7 +7852,7 @@ cross_document_guards = {
     "The eight mask positions are exactly",
     "one shared commit-bound payload-manifest context",
     "no aggregate/member is trusted from mutable worktree bytes",
-    "exact role `concept.review`",
+    "separately hashed `review:` locator outside the concept-evidence manifest",
     "`HEAD^{tree}` must equal `A^{tree}`",
     "equality to local/fresh/public ROM bytes is approval-only",
     "unique ancestry-maximal target",
