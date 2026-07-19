@@ -14,6 +14,11 @@ scripts/clean-build
 scripts/prepare-dependencies
 
 IMAGE_REFERENCE="$(python3 -c 'import json; print(json.load(open("config/toolchain.lock.json", encoding="utf-8"))["container"]["reference"])')"
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+if [[ ! "$SOURCE_DATE_EPOCH" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'source commit timestamp is not a positive integer: %q\n' "$SOURCE_DATE_EPOCH" >&2
+    exit 1
+fi
 CONTAINER_ID="$(node node_modules/libdragon/index.js start)"
 if [[ ! "$CONTAINER_ID" =~ ^[0-9a-f]{12}([0-9a-f]{52})?$ ]]; then
     printf 'libdragon CLI returned an invalid container ID: %q\n' "$CONTAINER_ID" >&2
@@ -46,6 +51,7 @@ fi
 docker exec \
     --workdir /libdragon \
     --user "$(id -u):$(id -g)" \
+    --env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
     --interactive \
     "$CONTAINER_ID" \
     ./scripts/container-build

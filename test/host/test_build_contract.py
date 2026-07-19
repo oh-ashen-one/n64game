@@ -224,11 +224,16 @@ class BuildContractTests(unittest.TestCase):
 
     def test_build_uses_audited_container_entrypoint(self) -> None:
         script = (ROOT / "scripts" / "build-rom").read_text(encoding="utf-8")
+        container_script = (ROOT / "scripts" / "container-build").read_text(encoding="utf-8")
         self.assertIn("node node_modules/libdragon/index.js start", script)
         self.assertNotIn("libdragon/index.js exec", script)
         self.assertIn("docker exec", script)
         self.assertIn(".Config.Image", script)
         self.assertIn('.Destination "/libdragon"', script)
+        self.assertIn('SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"', script)
+        self.assertIn('--env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"', script)
+        self.assertNotIn("git show", container_script)
+        self.assertIn('[[ ! "${SOURCE_DATE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]', container_script)
 
 
 if __name__ == "__main__":

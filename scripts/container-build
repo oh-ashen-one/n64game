@@ -10,7 +10,10 @@ test -d build/deps/tiny3d
 
 export TZ=UTC
 export LC_ALL=C
-SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+if [[ ! "${SOURCE_DATE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'SOURCE_DATE_EPOCH must be supplied as a positive integer by scripts/build-rom\n' >&2
+    exit 1
+fi
 export SOURCE_DATE_EPOCH
 export N64GAME_JOBS="${N64GAME_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 4)}"
 
