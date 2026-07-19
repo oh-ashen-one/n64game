@@ -1,13 +1,13 @@
 {
   "aggregate_pairs": [
-    "evidence",
     "payload",
-    "recipe",
-    "rollup.player",
-    "rollup.presentation",
-    "rollup.quarrune",
-    "rollup.sector",
-    "whitelist"
+    "whitelist",
+    "PENDING",
+    "PENDING",
+    "PENDING",
+    "PENDING",
+    "PENDING",
+    "PENDING"
   ],
   "case": "populated",
   "control": {

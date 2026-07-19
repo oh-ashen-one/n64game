@@ -7,11 +7,16 @@ require "time"
 module N64Game
   module AssetLifecycleContract
     SCHEMA = "n64game-production-asset-lifecycle-kernel-v1".freeze
-    BRANCHES = %w[populated approved repair generated_child move_pair h2 release].freeze
+    BRANCHES = %w[public_concept populated approved repair generated_child move_pair h2 release].freeze
     HEX40 = /\A[0-9a-f]{40}\z/.freeze
     HEX64 = /\A[0-9a-f]{64}\z/.freeze
     BUILD_ID = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,95}\z/.freeze
     SAFE_PATH = /\A[A-Za-z0-9][A-Za-z0-9._\/-]*\z/.freeze
+    PRODUCTION_ID = /\A[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+\z/.freeze
+    GENERIC_MACHINE_COMPONENTS = %w[
+      pending none unassigned unknown todo tbd test testing example sample placeholder dummy fake
+      reviewer operator person user agent owner creator temp temporary na n-a nil null
+    ].freeze
     COMPLETE_GATE_DECISIONS = %w[pass STATIC_STATE_EQ NON_ROM_DELIVERY_EQ INHERITED_CHILD_EQ].freeze
     ALL_GATE_DECISIONS = (["PENDING", "fail"] + COMPLETE_GATE_DECISIONS).freeze
     STABLE_REPAIR_FIELDS = %w[
@@ -35,6 +40,7 @@ module N64Game
       review/benchmark/rollups/sector/GATE_RECORD.tsv
       review/benchmark/rollups/presentation/GATE_RECORD.tsv
     ].freeze
+    ROLLUP_KEYS = %w[build_id gate_record_sha256 gates scope].freeze
     GENERATED_CAMERA_CHILDREN = {
       "ASSET_CAMERA_SHOT_UI_NONE" => "ui.panel.dialogue",
       "ASSET_CAMERA_SHOT_SIM_COMMS" => "env.annex.sim_chamber",
@@ -122,23 +128,99 @@ module N64Game
       issues
     end
 
+    def validate_public_concept(payload)
+      issues = []
+      check(issues,
+            exact_keys?(payload, %w[advanced_ids aggregate_pairs authority concept_ids decision lock registry_rows status]),
+            "public-concept payload keys differ")
+      check_control(payload, issues, approved: false)
+
+      aggregate_pairs = payload["aggregate_pairs"]
+      pending_pair = { "path" => "PENDING", "sha256" => "PENDING" }
+      check(issues, aggregate_pairs.is_a?(Array) && aggregate_pairs.length == 8,
+            "public-concept lifecycle requires exactly eight aggregate slots")
+      if aggregate_pairs.is_a?(Array)
+        aggregate_pairs.each_with_index do |pair, index|
+          check(issues, pair == pending_pair, "public-concept aggregate pair #{index + 1} is not literal PENDING")
+        end
+      end
+
+      rows = payload["registry_rows"]
+      check(issues, rows.is_a?(Array) && rows.length == 52,
+            "public-concept lifecycle requires exactly 52 control rows")
+      ids = []
+      if rows.is_a?(Array)
+        rows.each_with_index do |row, index|
+          basis = format("WB-%03d", index + 1)
+          unless row.is_a?(Hash)
+            issues << "#{basis} public-concept control row must be a Hash"
+            next
+          end
+          check(issues, exact_keys?(row, %w[basis gates production_id state]),
+                "#{basis} public-concept control row keys differ")
+          check(issues, row["basis"] == basis, "#{basis} public-concept control row order mismatch")
+          production_id = row["production_id"]
+          ids << production_id
+          check(issues, production_id.is_a?(String) && PRODUCTION_ID.match?(production_id) &&
+                        !expected_profile(production_id).nil?,
+                "#{basis} public-concept production ID is noncanonical")
+          check(issues, row["state"] == "INACTIVE", "#{basis} public-concept control row is active")
+          check(issues, row["gates"] == ["PENDING"] * 7,
+                "#{basis} public-concept gate vector is not pending")
+        end
+        check(issues, ids.all? { |identifier| identifier.is_a?(String) } && ids.uniq.length == 52,
+              "public-concept control production IDs are not unique")
+      end
+
+      concept_ids = payload["concept_ids"]
+      valid_concepts = concept_ids.is_a?(Array) && !concept_ids.empty? &&
+                       concept_ids.all? do |identifier|
+                         identifier.is_a?(String) && PRODUCTION_ID.match?(identifier) &&
+                           !expected_profile(identifier).nil?
+                       end
+      check(issues, valid_concepts, "public-concept lifecycle requires at least one ordinary concept ID")
+      if concept_ids.is_a?(Array) && concept_ids.all? { |identifier| identifier.is_a?(String) }
+        check(issues, concept_ids == concept_ids.sort.uniq,
+              "public-concept IDs must be sorted and unique")
+      end
+      check(issues, payload["advanced_ids"] == [], "public-concept advanced IDs must be exactly empty")
+
+      authority = payload["authority"]
+      unless authority.is_a?(Hash)
+        issues << "public-concept authority must be a Hash"
+        return issues
+      end
+      check(issues, exact_keys?(authority, %w[advertised_ref clean commit fresh_clone ref]),
+            "public-concept authority keys differ")
+      check(issues, authority["clean"] == true && authority["advertised_ref"] == true &&
+                    authority["fresh_clone"] == true,
+            "public-concept authority booleans must all be true")
+      check(issues, hex40?(authority["commit"]), "public-concept authority commit is malformed")
+      check(issues, valid_advertised_ref?(authority["ref"]), "public-concept authority ref is malformed")
+      issues
+    end
+
     def validate_populated(payload)
       issues = []
       check_control(payload, issues, approved: false, decisions: %w[PENDING REVIEW_REQUIRED BLOCKED])
       aggregate_pairs = payload["aggregate_pairs"]
-      check(issues, aggregate_pairs.is_a?(Array) && aggregate_pairs.length == 8,
-            "populated lifecycle requires exactly eight aggregate path/hash pairs")
-      if aggregate_pairs.is_a?(Array)
-        observed_paths = aggregate_pairs.map { |pair| pair.is_a?(Hash) ? pair["path"] : nil }
-        check(issues, observed_paths == AGGREGATE_PATHS, "aggregate path order/set is not canonical")
-        aggregate_pairs.each_with_index do |pair, index|
-          next unless pair.is_a?(Hash)
-          check(issues, exact_keys?(pair, %w[path sha256]), "aggregate pair #{index + 1} keys differ")
-          check(issues, hex64?(pair["sha256"]), "aggregate pair #{index + 1} digest is malformed")
-        end
+      aggregate_mask = validate_staged_aggregate_pairs(aggregate_pairs, issues)
+      registry_rows = payload["registry_rows"]
+      validate_registry_rows(registry_rows, issues, require_approved: false)
+      active_rows = registry_rows.is_a?(Array) ? registry_rows.select do |row|
+        row.is_a?(Hash) && %w[AUTHORIZED REPAIR_ONLY].include?(row["state"])
+      end : []
+      check(issues, !active_rows.empty?, "populated lifecycle requires at least one AUTHORIZED/REPAIR_ONLY registry row")
+      if payload["decision"] == "PENDING"
+        check(issues, active_rows.none? { |row| row["state"] == "REPAIR_ONLY" },
+              "PENDING populated lifecycle cannot contain REPAIR_ONLY registry rows")
       end
-      validate_registry_rows(payload["registry_rows"], issues, require_approved: false)
-      validate_rollups(payload["rollups"], issues, require_complete: false)
+      shared_build_id = payload["build_id"]
+      check(issues, concrete_build_id?(shared_build_id),
+            "populated lifecycle shared clean-build ID is malformed")
+      rollups = payload["rollups"]
+      validate_staged_rollups(rollups, aggregate_pairs, aggregate_mask, shared_build_id, issues)
+      validate_staged_evidence_claim(registry_rows, rollups, aggregate_mask, shared_build_id, issues)
       issues
     end
 
@@ -148,7 +230,7 @@ module N64Game
       check(issues, payload["defects"] == { "critical" => 0, "high" => 0, "medium" => 0 },
             "approved lifecycle requires zero critical/high/medium defects")
       build_id = payload["build_id"]
-      check(issues, build_id.is_a?(String) && BUILD_ID.match?(build_id), "approved build ID is malformed")
+      check(issues, concrete_build_id?(build_id), "approved build ID is malformed")
       registry_rows = payload["registry_rows"]
       validate_registry_rows(registry_rows, issues, require_approved: true, build_id: build_id)
       rollups = payload["rollups"]
@@ -434,6 +516,116 @@ module N64Game
       check(issues, payload["status"] == expected_status, "lifecycle status/decision mismatch")
     end
 
+    def validate_staged_aggregate_pairs(pairs, issues)
+      check(issues, pairs.is_a?(Array) && pairs.length == 8,
+            "populated lifecycle requires exactly eight aggregate path/hash pairs")
+      return nil unless pairs.is_a?(Array) && pairs.length == 8
+
+      pending_pair = { "path" => "PENDING", "sha256" => "PENDING" }
+      mask = pairs.each_with_index.map do |pair, index|
+        if pair == pending_pair
+          false
+        elsif pair.is_a?(Hash) && exact_keys?(pair, %w[path sha256]) &&
+              pair["path"] == AGGREGATE_PATHS[index] && hex64?(pair["sha256"])
+          true
+        else
+          issues << "aggregate pair #{index + 1} must be literal PENDING or its positional canonical path/digest"
+          nil
+        end
+      end
+
+      if [true, false].include?(mask[0]) && [true, false].include?(mask[1]) && mask[0] != mask[1]
+        issues << "aggregate payload/registry core must transition together"
+      end
+      if mask.drop(2).include?(true) && mask.first(2) != [true, true]
+        issues << "optional aggregate requires the populated payload/registry core pair"
+      end
+      check(issues, mask.first(2) == [true, true], "populated lifecycle requires aggregate mask prefix 11")
+      mask
+    end
+
+    def canonical_pending_rollup(scope)
+      {
+        "scope" => scope,
+        "build_id" => "PENDING",
+        "gates" => ["PENDING"] * 7,
+        "gate_record_sha256" => "PENDING"
+      }
+    end
+
+    def validate_staged_rollups(rows, aggregate_pairs, aggregate_mask, shared_build_id, issues)
+      check(issues, rows.is_a?(Array) && rows.length == 4,
+            "lifecycle requires exactly four positional integrated rollup slots")
+      return unless rows.is_a?(Array) && rows.length == 4
+
+      rows.each_with_index do |row, index|
+        scope = ROLLUP_SCOPES[index]
+        expected_pending = canonical_pending_rollup(scope)
+        expected_present = aggregate_mask.is_a?(Array) ? aggregate_mask[index + 4] : nil
+        actual_present = row.is_a?(Hash) && row != expected_pending
+        if [true, false].include?(expected_present)
+          check(issues, actual_present == expected_present,
+                "integrated rollup presence does not match aggregate mask bits 5-8")
+        end
+
+        if expected_present == false
+          check(issues, row == expected_pending, "#{scope} pending rollup slot is noncanonical")
+          next
+        end
+        next unless expected_present == true
+
+        unless row.is_a?(Hash)
+          issues << "#{scope} populated rollup slot must be a Hash"
+          next
+        end
+        check(issues, exact_keys?(row, ROLLUP_KEYS), "#{scope} populated rollup keys differ")
+        check(issues, row["scope"] == scope, "integrated rollup scope order/set mismatch")
+        gates = row["gates"]
+        check(issues, gates.is_a?(Array) && gates.length == 7 &&
+                      gates.all? { |gate| ALL_GATE_DECISIONS.include?(gate) },
+              "#{scope} gate vector is malformed")
+        check(issues, concrete_build_id?(row["build_id"]),
+              "#{scope} build ID is malformed")
+        check(issues, !shared_build_id.nil? && row["build_id"] == shared_build_id,
+              "#{scope} build ID differs from the shared clean-build ID")
+        check(issues, hex64?(row["gate_record_sha256"]), "#{scope} gate-record digest is malformed")
+        aggregate_digest = if aggregate_pairs.is_a?(Array) && aggregate_pairs[index + 4].is_a?(Hash)
+                             aggregate_pairs[index + 4]["sha256"]
+                           end
+        check(issues, hex64?(aggregate_digest) && row["gate_record_sha256"] == aggregate_digest,
+              "#{scope} gate-record digest differs from its aggregate pair")
+      end
+    end
+
+    def validate_staged_evidence_claim(registry_rows, rollups, aggregate_mask, shared_build_id, issues)
+      return unless aggregate_mask.is_a?(Array) && aggregate_mask[2] == true
+
+      registry_complete = registry_rows.is_a?(Array) && registry_rows.length == 52 &&
+                          registry_rows.all? do |row|
+                            next false unless row.is_a?(Hash) && %w[AUTHORIZED REPAIR_ONLY].include?(row["state"]) &&
+                                              row["build_id"] == shared_build_id
+
+                            profile = expected_profile(row["production_id"])
+                            gates = row["gates"]
+                            gates.is_a?(Array) && gates.length == 7 && gates.each_with_index.all? do |gate, gate_index|
+                              completion_allowed?(gate, profile, "G#{gate_index + 1}")
+                            end
+                          end
+      rollups_complete = aggregate_mask[4, 4] == [true, true, true, true] &&
+                         rollups.is_a?(Array) && rollups.length == 4 &&
+                         rollups.each_with_index.all? do |row, index|
+                           next false unless row.is_a?(Hash) && row["build_id"] == shared_build_id
+
+                           gates = row["gates"]
+                           profile = ROLLUP_PROFILES[ROLLUP_SCOPES[index]]
+                           gates.is_a?(Array) && gates.length == 7 && gates.each_with_index.all? do |gate, gate_index|
+                             completion_allowed?(gate, profile, "G#{gate_index + 1}")
+                           end
+                         end
+      check(issues, registry_complete && rollups_complete,
+            "populated evidence aggregate requires 52 active registry rows and four complete rollups with 392 legal decisions")
+    end
+
     def validate_registry_rows(rows, issues, require_approved:, build_id: nil)
       check(issues, rows.is_a?(Array) && rows.length == 52, "whitelist lifecycle requires exactly 52 registry rows")
       return unless rows.is_a?(Array)
@@ -458,8 +650,12 @@ module N64Game
           next
         end
         check(issues, %w[AUTHORIZED REPAIR_ONLY].include?(state), "#{basis} registry state is illegal")
+        check(issues, PRODUCTION_ID.match?(row["production_id"].to_s) && !expected_profile(row["production_id"]).nil?,
+              "#{basis} active production ID is noncanonical")
         check(issues, gates.is_a?(Array) && gates.length == 7 && gates.all? { |gate| ALL_GATE_DECISIONS.include?(gate) },
               "#{basis} gate vector is malformed")
+        check(issues, concrete_build_id?(row["build_id"]),
+              "#{basis} active registry build ID is malformed")
         if require_approved
           check(issues, state == "AUTHORIZED" && row["repair_ids"] == "NONE", "#{basis} is not cleanly authorized")
           check(issues, row["build_id"] == build_id, "#{basis} build ID differs from approval")
@@ -559,8 +755,30 @@ module N64Game
       end
     end
 
+    def valid_advertised_ref?(value)
+      return false unless value.is_a?(String)
+      return true if value.match?(%r{\Arefs/pull/[1-9][0-9]*/(?:head|merge)\z})
+      return false unless value.start_with?("refs/heads/")
+
+      suffix = value.delete_prefix("refs/heads/")
+      SAFE_PATH.match?(suffix) && !suffix.end_with?(".", "/") && !suffix.include?("..") &&
+        !suffix.include?("//") && suffix.split("/").none? do |component|
+          component.empty? || component.start_with?(".") || component.end_with?(".lock")
+        end
+    end
+
     def hex40?(value)
       value.is_a?(String) && HEX40.match?(value)
+    end
+
+    def concrete_build_id?(value)
+      return false unless value.is_a?(String) && BUILD_ID.match?(value)
+
+      compact = value.downcase.delete("._@+-")
+      GENERIC_MACHINE_COMPONENTS.none? do |component|
+        root = component.delete("._@+-")
+        compact == root || compact.match?(%r{\A#{Regexp.escape(root)}0*[0-9]+\z})
+      end
     end
 
     def hex64?(value)

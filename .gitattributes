@@ -15,10 +15,12 @@ review/**/AUTHORING_STACK_RECEIPT.txt text eol=lf
 config/toolchain.lock.json text eol=lf
 scripts/check-authoring-stack text eol=lf
 scripts/record-authoring-stack-receipt text eol=lf
+scripts/create-benchmark-transaction text eol=lf
 scripts/export-gate5-asset text eol=lf
 tools/n64game_authoring.py text eol=lf
 tools/n64game_authoring_receipt.py text eol=lf
 lib/n64game/authoring_stack_receipt.rb text eol=lf
+lib/n64game/public_commit_authority.rb text eol=lf
 
 # Keep text artifacts reviewable across platforms.
 *.md text eol=lf

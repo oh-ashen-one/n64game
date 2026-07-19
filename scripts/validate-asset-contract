@@ -16,6 +16,7 @@ require "date"
 ROOT = Pathname.new(__dir__).join("..").expand_path
 require ROOT.join("lib/n64game/asset_lifecycle_contract").to_s
 require ROOT.join("lib/n64game/authoring_stack_receipt").to_s
+require ROOT.join("lib/n64game/public_commit_authority").to_s
 ERRORS = []
 
 def error(message)
@@ -323,20 +324,20 @@ REPORT_ANALYZER_ID = "n64game-evidence-analyzer".freeze
 REPORT_ANALYZER_VERSION = "1.0.0".freeze
 PINNED_MAGICK_VERSION = "Version: ImageMagick 7.1.2-13 ".freeze
 PINNED_ARES_148_BINARY_SHA256 = "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345".freeze
-SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256 = "e0b0e632f7ebd49f48fd8e8a4cd94c682cf9e6d0d0cd3addbf05fb42c84622b0".freeze
+SEMANTIC_LIFECYCLE_SNAPSHOT_SHA256 = "a9f2ff50f53f4528c4cfeef1a55f15382ff86f5703b51acf66567af2f57a34b0".freeze
 SEMANTIC_LIFECYCLE_SNAPSHOT_MANIFEST_PATH = "test/fixtures/asset_contract/LIFECYCLE_SNAPSHOT_MANIFEST.sha256".freeze
 SEMANTIC_LIFECYCLE_SNAPSHOT_RUNNER_PATH = "scripts/test-asset-contract-lifecycle".freeze
 SEMANTIC_LIFECYCLE_SNAPSHOT_CASES = %w[
   populated approved repair generated_child move_pair h2 release
 ].freeze
 PRODUCTION_LIFECYCLE_HARNESS_IMPLEMENTED = true
-PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "af9b403081b175e9977ad0b6748d19f9c3220f1a58b8d12d5242b27a8ab750d6".freeze
+PRODUCTION_LIFECYCLE_HARNESS_SHA256 = "663b58eba34cfbd61fe91da856b1b64583c2645485761436ba089bd7ebd9bf32".freeze
 PRODUCTION_LIFECYCLE_HARNESS_MANIFEST_PATH =
   "test/fixtures/asset_lifecycle_production/PRODUCTION_LIFECYCLE_HARNESS_MANIFEST.sha256".freeze
 PRODUCTION_LIFECYCLE_HARNESS_RUNNER_PATH = "scripts/test-asset-lifecycle-production".freeze
 PRODUCTION_LIFECYCLE_KERNEL_PATH = "lib/n64game/asset_lifecycle_contract.rb".freeze
 PRODUCTION_LIFECYCLE_BRANCHES = %w[
-  populated approved repair generated_child move_pair h2 release
+  public_concept populated approved repair generated_child move_pair h2 release
 ].freeze
 AUTHORING_RECEIPT_EXPECTED_BY_REVISION = Hash.new { |hash, key| hash[key] = Set.new }
 AUTHORING_ROOT_PAYLOAD_PATHS = %w[
@@ -373,6 +374,22 @@ AGGREGATE_PAIR_FIELDS = [
   ["ROM build recipe path", "ROM build recipe SHA-256"],
   *ROLLUP_SPECS.map { |path_field, digest_field,| [path_field, digest_field] }
 ].freeze
+PUBLIC_CONCEPT_CONTRACT_PATHS = %w[
+  docs/ART_BIBLE.md
+  docs/ASSET_INVENTORY.md
+  docs/ASSET_LEDGER.md
+  docs/ASSET_REVIEW_TEMPLATES.md
+  docs/TOOLCHAIN.md
+  docs/VISUAL_BENCHMARK_APPROVAL.md
+].freeze
+PUBLIC_AUTHORITY_EXECUTION_PATHS = %w[
+  scripts/validate-asset-contract
+  lib/n64game/asset_lifecycle_contract.rb
+  lib/n64game/authoring_stack_receipt.rb
+  lib/n64game/public_commit_authority.rb
+].freeze
+PUBLIC_GIT_BINARY = "/usr/bin/git".freeze
+PUBLIC_CLONE_PATH = "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".freeze
 REQUIRED_IDENTITY_FIELDS = [
   "Reviewed payload Git commit", "Clean-build ID", "Local ROM path", "ROM byte count", "ROM SHA-256",
   "ROM header SHA-256", "Ares target", *PRIOR_BASELINE_FIELDS,
@@ -764,8 +781,9 @@ end
 def git_capture(*args, root: ROOT, env: {}, unsetenv_others: false, stdin_data: nil)
   isolated = unsetenv_others || Pathname.new(root).expand_path != ROOT.expand_path
   effective_env = isolated ? public_clone_env.merge(env) : env
+  git_binary = isolated ? PUBLIC_GIT_BINARY : "git"
   Open3.capture3(
-    effective_env, "git", *args, chdir: root.to_s, unsetenv_others: isolated,
+    effective_env, git_binary, *args, chdir: root.to_s, unsetenv_others: isolated,
     stdin_data: stdin_data
   )
 end
@@ -1029,7 +1047,9 @@ def parse_variable_tsv(path_hash, label, header, minimum_rows:, commit:, fresh_c
 end
 
 def same_repo_slug
-  remote, _err, status = git_capture("remote", "get-url", "origin")
+  remote, _err, status = git_capture(
+    "remote", "get-url", "origin", unsetenv_others: true
+  )
   return nil unless status.success?
   url = remote.strip
   match = url.match(%r{\A(?:https://github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?\z})
@@ -1038,7 +1058,7 @@ end
 
 def public_clone_env
   {
-    "PATH" => ENV.fetch("PATH", "/usr/bin:/bin"),
+    "PATH" => PUBLIC_CLONE_PATH,
     "LANG" => "C.UTF-8",
     "LC_ALL" => "C.UTF-8",
     "GIT_TERMINAL_PROMPT" => "0",
@@ -1047,6 +1067,7 @@ def public_clone_env
     "GIT_ASKPASS_REQUIRE" => "force",
     "GIT_CONFIG_GLOBAL" => "/dev/null",
     "GIT_CONFIG_NOSYSTEM" => "1",
+    "GIT_NO_REPLACE_OBJECTS" => "1",
     "GH_TOKEN" => nil,
     "GITHUB_TOKEN" => nil,
     "GITLAB_TOKEN" => nil
@@ -1074,7 +1095,7 @@ def prepare_fresh_public_clone(slug, payload_commit, tag_ref)
   clone = File.join(root, "repo")
   _out, err, status = Open3.capture3(
     public_clone_env,
-    "git", "-c", "credential.helper=", "-c", "http.extraHeader=", "clone", "--no-checkout", "--quiet",
+    PUBLIC_GIT_BINARY, "-c", "credential.helper=", "-c", "http.extraHeader=", "clone", "--no-checkout", "--quiet",
     "https://github.com/#{slug}.git", clone, chdir: root, unsetenv_others: true
   )
   unless status.success?
@@ -1097,7 +1118,7 @@ def prepare_fresh_public_payload_clone(slug, payload_commit)
   clone = File.join(root, "repo")
   _out, clone_error, clone_status = Open3.capture3(
     public_clone_env,
-    "git", "-c", "credential.helper=", "-c", "http.extraHeader=", "clone", "--no-checkout", "--quiet",
+    PUBLIC_GIT_BINARY, "-c", "credential.helper=", "-c", "http.extraHeader=", "clone", "--no-checkout", "--quiet",
     "https://github.com/#{slug}.git", clone, chdir: root, unsetenv_others: true
   )
   unless clone_status.success?
@@ -1121,6 +1142,159 @@ def prepare_fresh_public_payload_clone(slug, payload_commit)
     return nil
   end
   clone
+end
+
+def prepare_fresh_advertised_public_head(slug, label)
+  unless slug == N64Game::PublicCommitAuthority::REPOSITORY
+    error("#{label} requires exact public repository #{N64Game::PublicCommitAuthority::REPOSITORY}")
+    return nil
+  end
+
+  status_out, status_error, status_status = git_capture(
+    "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none",
+    unsetenv_others: true
+  )
+  unless status_status.success?
+    error("#{label} cannot inspect local worktree/index: #{status_error.lines.first.to_s.strip}")
+    return nil
+  end
+  head_out, head_error, head_status = git_capture(
+    "rev-parse", "HEAD^{commit}", unsetenv_others: true
+  )
+  local_head = head_out.strip
+  unless head_status.success? && local_head.match?(HEX40)
+    error("#{label} cannot resolve canonical local HEAD: #{head_error.lines.first.to_s.strip}")
+    return nil
+  end
+
+  public_url = N64Game::PublicCommitAuthority::PUBLIC_URL
+  advertised_out, advertised_error, advertised_status = public_git_capture(
+    slug, "ls-remote", "--refs", public_url,
+    "refs/heads/*", "refs/pull/*/head", "refs/pull/*/merge"
+  )
+  unless advertised_status.success?
+    error("#{label} cannot discover credential-free advertised refs: #{advertised_error.lines.first.to_s.strip}")
+    return nil
+  end
+  branch_ref_valid = lambda do |ref|
+    _format_out, _format_error, format_status = public_git_capture(slug, "check-ref-format", ref)
+    format_status.success?
+  end
+  begin
+    authority = N64Game::PublicCommitAuthority.select_advertised_ref!(
+      head: local_head, status_bytes: status_out, advertised_bytes: advertised_out,
+      branch_ref_valid: branch_ref_valid
+    )
+  rescue N64Game::PublicCommitAuthority::Violation => violation
+    violation.issues.each { |issue| error("#{label}: #{issue}") }
+    return nil
+  end
+
+  root = Dir.mktmpdir("n64game-advertised-head-")
+  TEMP_DIRS << root
+  begin
+    clone = N64Game::PublicCommitAuthority.clone_and_fetch!(
+      remote_url: public_url, selected_ref: authority["ref"], expected_head: local_head,
+      root: root, env: public_clone_env
+    )
+  rescue N64Game::PublicCommitAuthority::Violation => violation
+    violation.issues.each { |issue| error("#{label}: #{issue}") }
+    return nil
+  end
+  PUBLIC_AUTHORITY_EXECUTION_PATHS.each do |path|
+    material = materialized_commit_file(
+      path, local_head, "#{label} execution dependency #{path}",
+      fresh_clone: clone, allow_lfs: false
+    )
+    local_bytes = regular_without_symlink?(path) ? File.binread(ROOT.join(path)) : nil
+    error("#{label} local execution dependency differs from verified advertised revision: #{path}") unless
+      material && local_bytes && material[:bytes].b == local_bytes.b
+  end
+  authority.merge("fresh_clone" => clone)
+end
+
+def validate_staged_control_transaction(authority, reviewed_payload_commit)
+  return false unless authority && reviewed_payload_commit&.match?(HEX40)
+
+  clone = authority["fresh_clone"]
+  public_head = authority["commit"]
+  control_path = "docs/VISUAL_BENCHMARK_APPROVAL.md"
+  control_out, control_error, control_status = git_capture(
+    "rev-list", "-1", public_head, "--", control_path, root: clone
+  )
+  control_commit = control_out.strip
+  error("staged benchmark transaction cannot resolve its control commit: #{control_error.lines.first.to_s.strip}") unless
+    control_status.success? && control_commit.match?(HEX40)
+
+  parents = []
+  if control_commit.match?(HEX40)
+    parents_out, parents_error, parents_status = git_capture(
+      "rev-list", "--parents", "-n", "1", control_commit, root: clone
+    )
+    if parents_status.success?
+      parent_fields = parents_out.strip.split(" ")
+      parents = parent_fields.first == control_commit ? parent_fields.drop(1) : []
+    else
+      error("staged benchmark transaction cannot resolve control parents: #{parents_error.lines.first.to_s.strip}")
+    end
+  end
+  changed_paths = []
+  if control_commit.match?(HEX40) && parents.length == 1
+    diff_out, diff_error, diff_status = git_capture(
+      "diff", "--name-only", "-z", parents.first, control_commit, "--", root: clone
+    )
+    if diff_status.success?
+      changed_paths = diff_out.split("\0").reject(&:empty?)
+    else
+      error("staged benchmark transaction cannot enumerate payload/control diff: #{diff_error.lines.first.to_s.strip}")
+    end
+  end
+  _lineage_out, _lineage_error, lineage_status = git_capture(
+    "merge-base", "--is-ancestor", control_commit, public_head, root: clone
+  )
+  _public_out, _public_error, public_status = git_capture(
+    "cat-file", "-e", "#{control_commit}^{commit}", root: clone
+  )
+  control_at_transaction, _transaction_error, transaction_status = git_capture(
+    "show", "#{control_commit}:#{control_path}", root: clone
+  )
+  control_at_head, _head_error, head_status = git_capture(
+    "show", "#{public_head}:#{control_path}", root: clone
+  )
+  control_tree_out, _control_tree_error, control_tree_status = git_capture(
+    "rev-parse", "#{control_commit}^{tree}", root: clone
+  )
+  public_tree_out, _public_tree_error, public_tree_status = git_capture(
+    "rev-parse", "#{public_head}^{tree}", root: clone
+  )
+  begin
+    N64Game::PublicCommitAuthority.validate_control_transaction!(
+      public_head: public_head, control_commit: control_commit, parents: parents,
+      reviewed_payload_commit: reviewed_payload_commit, changed_paths: changed_paths,
+      current_descends_from_control: lineage_status.success?, control_public: public_status.success?,
+      control_bytes_equal: transaction_status.success? && head_status.success? &&
+        control_at_transaction.b == control_at_head.b,
+      public_tree_equal: control_tree_status.success? && public_tree_status.success? &&
+        control_tree_out.strip.match?(HEX40) && control_tree_out.strip == public_tree_out.strip
+    )
+  rescue N64Game::PublicCommitAuthority::Violation => violation
+    violation.issues.each { |issue| error("staged benchmark transaction: #{issue}") }
+    return false
+  end
+
+  true
+end
+
+def production_root_paths(root: ROOT)
+  %w[assets-src review].each_with_object(Set.new) do |root_name, paths|
+    absolute_root = Pathname.new(root).join(root_name)
+    next unless absolute_root.exist?
+    Dir.glob(absolute_root.join("**", "*").to_s, File::FNM_DOTMATCH).each do |absolute|
+      next if [".", ".."].include?(File.basename(absolute))
+      paths << Pathname.new(absolute).relative_path_from(Pathname.new(root)).to_s if
+        File.file?(absolute) || File.symlink?(absolute)
+    end
+  end
 end
 
 def verify_pinned_ssh_signature(signed_bytes, signature_bytes, report: true)
@@ -3928,8 +4102,16 @@ def exact_production_harness_receipt(manifest_digest, kernel_digest)
     "kernel_sha256" => kernel_digest,
     "branch_ids" => PRODUCTION_LIFECYCLE_BRANCHES,
     "negative_case_ids" => %w[
+      public_concept.no_concept public_concept.active_row public_concept.nonpending_aggregate
+      public_concept.false_authority public_concept.malformed_authority public_concept.malformed_ref
+      public_concept.advanced_id
       populated.aggregate_count
+      populated.split_core populated.optional_without_core populated.zero_active_rows
+      populated.malformed_pending_pair populated.rollup_mask_mismatch populated.evidence_incomplete
+      populated.rollup_digest_crossbind populated.rollup_build_crossbind populated.rollup_gate_vector
+      populated.evidence_build_crossbind populated.pending_repair_only populated.active_build_pending
       approved.inherited_completion approved.rollup_non_rom_g1 approved.rollup_static_state_g1
+      approved.pending_build
       repair.out_of_range_basis repair.non_string_token
       generated_child.noncanonical_tuple generated_child.extra_row
       move_pair.non_hash_child move_pair.missing_asset_id
@@ -3937,7 +4119,8 @@ def exact_production_harness_receipt(manifest_digest, kernel_digest)
     ],
     "live_adapter_coverage" => "EXCLUDED_BY_DESIGN",
     "live_only_adapters" => %w[
-      github_api signed_git_tags git_lfs_materialization ffprobe_media_decode ares_execution rom_rebuild
+      github_api signed_git_tags git_lfs_materialization advertised_ref_fresh_clone
+      benchmark_control_transaction ffprobe_media_decode ares_execution rom_rebuild
     ]
   }
 end
@@ -4571,7 +4754,12 @@ def verify_approval_lifecycle_fixture_suite(commit:, fresh_clone:, payload_conte
     payload_context[:member_owner][manifest_path] == expected_payload_root
   error("#{label} production validator must be a direct root payload member") unless
     payload_context[:member_owner]["scripts/validate-asset-contract"] == expected_payload_root
-  required_paths = [manifest_path, "scripts/validate-asset-contract", *rows.map { |row| row[:path] }]
+  error("#{label} public authority helper must be a direct root payload member") unless
+    payload_context[:member_owner]["lib/n64game/public_commit_authority.rb"] == expected_payload_root
+  required_paths = [
+    manifest_path, "scripts/validate-asset-contract", "lib/n64game/public_commit_authority.rb",
+    *rows.map { |row| row[:path] }
+  ]
   required_paths.each do |path|
     error("#{label} path is outside the reviewed payload closure: #{path}") unless
       payload_context[:closure].include?(path)
@@ -5616,6 +5804,11 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
         concept_context, evidence_path, ["review/#{production_id}/g1/"],
         "#{production_id} Gate-1 concept evidence"
       )
+      review_entry = concept_context[:entries][review_path]
+      error("#{production_id}: canonical g1 REVIEW.md must be a direct concept-evidence-manifest member") unless
+        concept_context[:member_owner][review_path] == evidence_manifest_path
+      error("#{production_id}: canonical g1 REVIEW.md must use exact concept.review role") unless
+        review_entry && review_entry[:role] == "concept.review"
     end
     if evidence_locators["review"]
       concept_review = parse_machine_record(
@@ -5645,7 +5838,28 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
     owned_paths_by_id[production_id].merge([provenance_path, source_manifest_path, evidence_manifest_path, review_path])
     owned_paths_by_id[production_id].merge(manifest_owned_paths(concept_context, source_manifest_path))
     owned_paths_by_id[production_id].merge(manifest_owned_paths(concept_context, evidence_manifest_path))
+
+    concept_owned_paths = owned_paths_by_id[production_id]
+    concept_owned_paths.each do |path|
+      basename = File.basename(path)
+      forbidden_basenames = %w[
+        AUTHORIZATION.md GATE_RECORD.tsv SUBSET_EXPORT_ALLOWLIST.tsv AUTHORING_STACK_RECEIPT.txt
+        OUTPUT_MANIFEST.sha256
+      ]
+      forbidden_path = forbidden_basenames.any? { |candidate| basename.casecmp?(candidate) } ||
+        path.match?(%r{/g[2-7]/}) ||
+        path.start_with?("build/", "review/benchmark/", "review/production/", "review/pairs/", "review/generated/")
+      error("#{production_id}: concept ownership includes forbidden authority/Gate-2+/output path: #{path}") if
+        forbidden_path
+      role = concept_context[:entries].dig(path, :role).to_s
+      forbidden_role = role.match?(
+        /\A(?:authorization|gate\.record|subset\.export_allowlist|authoring\.stack_receipt|output(?:\.|\z)|converted(?:\.|\z)|conversion(?:\.|\z))/
+      )
+      error("#{production_id}: concept ownership includes forbidden authority/output role #{role.inspect}: #{path}") if
+        forbidden_role
+    end
   end
+  concept_context
 end
 
 def verified_prior_approval_baseline(baseline_identity, slug, whitelist_ids, expected_subset_hashes)
@@ -5965,6 +6179,7 @@ inventory = read("docs/ASSET_INVENTORY.md")
 ledger = read("docs/ASSET_LEDGER.md")
 reviews = read("docs/ASSET_REVIEW_TEMPLATES.md")
 benchmark = read("docs/VISUAL_BENCHMARK_APPROVAL.md")
+toolchain = read("docs/TOOLCHAIN.md")
 data_schemas = read("docs/DATA_SCHEMAS.md")
 benchmark_header = benchmark_control_header(benchmark, "visual benchmark control")
 
@@ -6476,6 +6691,7 @@ preapproval_recipe_binding = nil
 preapproval_rollup_bindings = []
 preapproval_commit = nil
 preapproval_fresh_clone = nil
+preapproval_public_authority = nil
 preapproval_tree_entries = []
 preapproval_ledger_entries = ledger_entries
 preapproval_ledger_by_id = ledger_by_id
@@ -6524,8 +6740,20 @@ if decision != "APPROVED"
     error("populated preapproval aggregate set requires exact 40-hex payload commit") unless preapproval_commit&.match?(HEX40)
     error("populated preapproval aggregate set requires canonical clean-build ID") unless canonical_build_id?(pre_identity["Clean-build ID"])
     slug = same_repo_slug
-    error("populated preapproval aggregate set requires canonical public github.com origin") unless slug
-    preapproval_fresh_clone = prepare_fresh_public_payload_clone(slug, preapproval_commit) if slug && preapproval_commit&.match?(HEX40)
+    error("populated preapproval aggregate set requires exact canonical public repository") unless
+      slug == N64Game::PublicCommitAuthority::REPOSITORY
+    if slug == N64Game::PublicCommitAuthority::REPOSITORY && preapproval_commit&.match?(HEX40)
+      preapproval_public_authority = prepare_fresh_advertised_public_head(slug, "staged benchmark authority")
+      if preapproval_public_authority && validate_staged_control_transaction(preapproval_public_authority, preapproval_commit)
+        preapproval_fresh_clone = preapproval_public_authority["fresh_clone"]
+        _payload_lfs_out, payload_lfs_error, payload_lfs_status = public_git_capture(
+          slug, "lfs", "fetch", N64Game::PublicCommitAuthority::PUBLIC_URL, preapproval_commit,
+          root: preapproval_fresh_clone
+        )
+        error("staged payload Git LFS fetch failed: #{payload_lfs_error.lines.first.to_s.strip}") unless
+          payload_lfs_status.success?
+      end
+    end
   end
   error("nonapproved Ares target mismatch") unless pre_identity["Ares target"] == "Ares 148 / Homebrew Mode"
   defects = pre_identity["Open critical/high/medium defects"]
@@ -6580,6 +6808,8 @@ if decision != "APPROVED"
     path = binding.split("@", 2).first
     error("populated preapproval aggregate is not owned by PAYLOAD_MANIFEST: #{path}") unless
       preapproval_payload_context[:closure].include?(path)
+    error("populated preapproval aggregate must be a direct PAYLOAD_MANIFEST member: #{path}") unless
+      preapproval_payload_context[:member_owner][path] == pre_identity["Payload manifest path"]
     preapproval_benchmark_owned_paths << path if preapproval_commit && preapproval_fresh_clone
   end
   if preapproval_evidence_registry_binding && preapproval_commit && preapproval_fresh_clone
@@ -6592,6 +6822,9 @@ if decision != "APPROVED"
   if preapproval_recipe_binding && preapproval_commit && preapproval_fresh_clone
     error("populated preapproval ROM recipe is not owned by PAYLOAD_MANIFEST") unless
       preapproval_payload_context[:closure].include?(pre_identity["ROM build recipe path"])
+    error("populated preapproval ROM recipe must be a direct PAYLOAD_MANIFEST member") unless
+      preapproval_payload_context[:member_owner][pre_identity["ROM build recipe path"]] ==
+        pre_identity["Payload manifest path"]
     preapproval_benchmark_owned_paths << pre_identity["ROM build recipe path"]
     recipe_rows = parse_tsv(
       preapproval_recipe_binding, "preapproval ROM build recipe", ROM_RECIPE_HEADER, 1,
@@ -6619,6 +6852,7 @@ if decision != "APPROVED"
 
   workflow_path = pre_identity["Public build workflow file"]
   if workflow_path != "PENDING"
+    error("preapproval public workflow requires a populated ROM recipe aggregate") unless preapproval_recipe_binding
     error("preapproval public workflow path malformed") unless workflow_path.match?(WORKFLOW_PATH)
     error("preapproval public workflow is outside PAYLOAD_MANIFEST") unless preapproval_payload_context[:closure].include?(workflow_path)
     error("preapproval public workflow must be a direct PAYLOAD_MANIFEST member") unless
@@ -6811,19 +7045,19 @@ registry_rows.each_with_index do |fields, index|
   end
 end
 
-preapproval_kernel_rollups = []
-preapproval_rollup_bindings.each do |binding, _path_field, scope, profile, tier|
-  next unless binding && preapproval_commit && preapproval_fresh_clone
+preapproval_kernel_rollups = preapproval_rollup_bindings.map do |binding, _path_field, scope, profile, tier|
+  unless binding && preapproval_commit && preapproval_fresh_clone
+    next({
+      "scope" => scope, "build_id" => "PENDING", "gates" => ["PENDING"] * 7,
+      "gate_record_sha256" => "PENDING"
+    })
+  end
   preview_rows = parse_tsv(
     binding, "preapproval #{scope} gate record projection", GATE_RECORD_HEADER, 7,
     commit: preapproval_commit, fresh_clone: preapproval_fresh_clone,
     payload_context: preapproval_payload_context
   )
   vector = preview_rows.map { |row| row[4] }
-  preapproval_kernel_rollups << {
-    "scope" => scope, "build_id" => pre_identity["Clean-build ID"], "gates" => vector,
-    "gate_record_sha256" => binding.split("@", 2)[1]
-  }
   validate_gate_record(
     binding, "preapproval #{scope} gate record", scope: scope, profile: profile, tier: tier,
     source_digest: pre_identity["Whitelist/gate registry SHA-256"], output_digest: pre_identity["Whitelist/gate registry SHA-256"],
@@ -6832,8 +7066,111 @@ preapproval_rollup_bindings.each do |binding, _path_field, scope, profile, tier|
     payload_context: preapproval_payload_context, owned_paths: preapproval_benchmark_owned_paths,
     owner_ids: preapproval_asset_owner_ids.to_a
   ) if vector.length == 7
+  {
+    "scope" => scope, "build_id" => pre_identity["Clean-build ID"], "gates" => vector,
+    "gate_record_sha256" => binding.split("@", 2)[1]
+  }
 end
 
+if preapproval_aggregate_populated
+  if preapproval_commit && preapproval_fresh_clone
+    validate_concept_entries(
+      preapproval_ledger_entries, owned_paths_by_id, commit: preapproval_commit,
+      fresh_clone: preapproval_fresh_clone, payload_context: preapproval_payload_context
+    )
+  end
+else
+  public_concept_ids = ledger_entries.select { |entry| entry[:status] == "concept" }.map { |entry| entry[:id] }.sort
+  public_concept_advanced_ids = ledger_entries.select do |entry|
+    %w[source converted review approved].include?(entry[:status])
+  end.map { |entry| entry[:id] }.sort
+  unless public_concept_ids.empty?
+    concept_authority = prepare_fresh_advertised_public_head(
+      same_repo_slug, "public-head concept authority"
+    )
+    if concept_authority
+      concept_commit = concept_authority["commit"]
+      concept_clone = concept_authority["fresh_clone"]
+      committed_contract = {}
+      PUBLIC_CONCEPT_CONTRACT_PATHS.each do |path|
+        material = materialized_commit_file(
+          path, concept_commit, "public-head concept contract #{path}",
+          fresh_clone: concept_clone, allow_lfs: false
+        )
+        committed_contract[path] = material && material[:bytes]
+        local_bytes = regular_without_symlink?(path) ? File.binread(ROOT.join(path)) : nil
+        error("public-head concept local contract bytes differ from verified advertised revision: #{path}") unless
+          material && local_bytes && material[:bytes].b == local_bytes.b
+      end
+
+      committed_ledger = committed_contract["docs/ASSET_LEDGER.md"].to_s.dup.force_encoding(Encoding::UTF_8)
+      committed_inventory = committed_contract["docs/ASSET_INVENTORY.md"].to_s.dup.force_encoding(Encoding::UTF_8)
+      committed_control = committed_contract["docs/VISUAL_BENCHMARK_APPROVAL.md"].to_s.dup.force_encoding(Encoding::UTF_8)
+      error("public-head concept committed ledger/inventory/control must be valid UTF-8") unless
+        committed_ledger.valid_encoding? && committed_inventory.valid_encoding? && committed_control.valid_encoding?
+      committed_concept_entries = parse_ledger_entries(committed_ledger, "public-head concept committed ledger")
+      validate_ledger_scaffold(
+        committed_concept_entries, committed_inventory, "public-head concept committed ledger"
+      )
+      committed_header = benchmark_control_header(
+        committed_control, "public-head concept committed control"
+      )
+      committed_authorization_section = between(
+        committed_control, "### 2.1 Exact authorization and current-hash bindings",
+        "## 3. Exact benchmark evidence set"
+      )
+      committed_authorization_rows = committed_authorization_section.lines.grep(/^\| WB-\d{3} \|/).map do |line|
+        table_cells(line).map { |cell| strip_code(cell) }
+      end
+      error("public-head concept committed control must contain the exact current 52-row registry") unless
+        committed_authorization_rows == authorization_rows
+
+      committed_by_id = committed_concept_entries.each_with_object({}) { |entry, rows| rows[entry[:id]] = entry }
+      concept_context = validate_concept_entries(
+        committed_concept_entries, owned_paths_by_id, commit: concept_commit,
+        fresh_clone: concept_clone
+      )
+      tree_entries = commit_tree_entries(concept_commit, concept_clone)
+      public_production_paths = tree_entries.map { |entry| entry[:path] }.select do |path|
+        path.start_with?("assets-src/", "review/")
+      end.to_set
+      local_production_paths = production_root_paths
+      error("public-head concept local production-root path/symlink set differs from advertised revision") unless
+        local_production_paths == public_production_paths
+      validate_gate1_attempt_history_universe(concept_commit, concept_clone, owned_paths_by_id)
+      scan_payload_production_tree(tree_entries, committed_by_id, owned_paths_by_id, Set.new)
+
+      kernel_aggregate_pairs = AGGREGATE_PAIR_FIELDS.map do |path_field, digest_field|
+        { "path" => pre_identity[path_field], "sha256" => pre_identity[digest_field] }
+      end
+      kernel_control_rows = authorization_rows.map do |cells|
+        {
+          "basis" => cells[0], "production_id" => cells[1], "state" => cells[7],
+          "gates" => ["PENDING"] * 7
+        }
+      end
+      validate_shared_lifecycle_branch(
+        "public_concept",
+        {
+          "decision" => committed_header && committed_header[:decision],
+          "lock" => committed_header && committed_header[:production_lock],
+          "status" => committed_header && committed_header[:status],
+          "aggregate_pairs" => kernel_aggregate_pairs, "registry_rows" => kernel_control_rows,
+          "concept_ids" => public_concept_ids, "advanced_ids" => public_concept_advanced_ids,
+          "authority" => {
+            "clean" => true, "advertised_ref" => true, "fresh_clone" => true,
+            "commit" => concept_commit, "ref" => concept_authority["ref"]
+          }
+        },
+        "shared production public-concept lifecycle"
+      )
+      error("public-head concept committed concept ID set differs from current control revision") unless
+        committed_concept_entries.select { |entry| entry[:status] == "concept" }.map { |entry| entry[:id] }.sort ==
+          public_concept_ids
+      error("public-head concept manifest context did not materialize") unless concept_context.is_a?(Hash)
+    end
+  end
+end
 if preapproval_aggregate_populated
   kernel_registry_rows = registry_rows.map do |fields|
     row = WHITELIST_REGISTRY_HEADER.zip(fields).to_h
@@ -6847,24 +7184,12 @@ if preapproval_aggregate_populated
     {
       "decision" => decision, "lock" => benchmark_header && benchmark_header[:production_lock],
       "status" => benchmark_header && benchmark_header[:status],
+      "build_id" => pre_identity["Clean-build ID"],
       "aggregate_pairs" => kernel_aggregate_pairs, "registry_rows" => kernel_registry_rows,
       "rollups" => preapproval_kernel_rollups
     },
     "shared production populated lifecycle"
   )
-end
-
-if preapproval_aggregate_populated
-  if preapproval_commit && preapproval_fresh_clone
-    validate_concept_entries(
-      preapproval_ledger_entries, owned_paths_by_id, commit: preapproval_commit,
-      fresh_clone: preapproval_fresh_clone, payload_context: preapproval_payload_context
-    )
-  end
-else
-  local_only_concepts = ledger_entries.select { |entry| entry[:status] == "concept" }.map { |entry| entry[:id] }
-  error("ordinary concept rows require populated public payload authority; local-only concepts are forbidden: #{local_only_concepts.sort.join(', ')}") unless
-    local_only_concepts.empty?
 end
 if decision != "APPROVED" && preapproval_payload_binding && preapproval_commit && preapproval_fresh_clone
   validate_move_pair_atomicity(
@@ -7048,6 +7373,18 @@ if decision != "APPROVED" && preapproval_evidence_registry_rows.length == 14
     owner_ids: preapproval_asset_owner_ids
   )
 end
+if decision != "APPROVED" && preapproval_payload_binding && preapproval_commit && preapproval_fresh_clone
+  expected_rollup_owner = if preapproval_evidence_registry_binding
+                            "review/benchmark/evidence/gates/EVIDENCE_MANIFEST.sha256"
+                          else
+                            pre_identity["Payload manifest path"]
+                          end
+  preapproval_rollup_bindings.each do |binding, path_field, scope, _profile, _tier|
+    next unless binding
+    error("preapproval #{scope} rollup has the wrong sole manifest owner for its aggregate state") unless
+      preapproval_payload_context[:member_owner][pre_identity[path_field]] == expected_rollup_owner
+  end
+end
 if decision != "APPROVED" && preapproval_commit && preapproval_fresh_clone
   validate_gate1_attempt_history_universe(
     preapproval_commit, preapproval_fresh_clone, owned_paths_by_id
@@ -7203,8 +7540,10 @@ cross_document_guards = {
   "ART_BIBLE" => [
     "Schema-Version 4 makes repair history mechanical",
     "unique ancestry-maximal pinned-key-valid public approval-tag target",
-    "populating any of the exact eight aggregate path/hash pairs",
+    "Pre-approval progression is a derived validator state",
     "one shared manifest ownership context",
+    "exact role `concept.review`",
+    "`HEAD^{tree}` must equal `A^{tree}`",
     "only `APPROVED` compares it to local/fresh/public ROM identities",
     "every `.z64`, `.n64`, or `.v64` tree entry is forbidden",
     "Pinned ImageMagick `7.1.2-13`",
@@ -7222,20 +7561,34 @@ cross_document_guards = {
     "unique ancestry-maximal pinned-key-valid public approval target",
     "exact eight current aggregate pairs",
     "one shared commit-bound context",
-    "No mutable worktree blob can stand in for reviewed aggregate bytes"
+    "No mutable worktree blob can stand in for reviewed aggregate bytes",
+    "exact role `concept.review`",
+    "`HEAD^{tree}` equals `A^{tree}`"
   ],
   "ASSET_REVIEW_TEMPLATES" => [
     "completion uses disposition `NONE`, machine `fail` uses `revise` or `rebuild`",
     "unique ancestry-maximal pinned-key-valid public approval ancestor",
     "exact eight populated aggregate pairs",
     "one shared commit-bound context",
+    "role `concept.review`",
+    "`HEAD^{tree}` equals `A^{tree}`",
     "Pinned ImageMagick `7.1.2-13`",
     "Pinned `ffprobe 8.1.2`"
   ],
+  "TOOLCHAIN" => [
+    "Gate 4 derives incremental authoring state from the eight positional aggregate pairs",
+    "`STAGED_WB` uses `11xxxxxx`",
+    "Optional bits require the core",
+    "A workflow may remain pending with a recipe but cannot populate without one",
+    "all 392 gates complete on one global build",
+    "`HEAD^{tree}` equals `A^{tree}`"
+  ],
   "VISUAL_BENCHMARK_APPROVAL" => [
-    "The exact eight aggregate pairs",
-    "one shared commit-bound manifest context",
+    "The eight mask positions are exactly",
+    "one shared commit-bound payload-manifest context",
     "no aggregate/member is trusted from mutable worktree bytes",
+    "exact role `concept.review`",
+    "`HEAD^{tree}` must equal `A^{tree}`",
     "equality to local/fresh/public ROM bytes is approval-only",
     "unique ancestry-maximal target",
     "Every `.z64`, `.n64`, or `.v64` entry is forbidden",
@@ -7246,7 +7599,8 @@ cross_document_guards = {
 }
 document_bodies = {
   "ART_BIBLE" => art, "ASSET_INVENTORY" => inventory, "ASSET_LEDGER" => ledger,
-  "ASSET_REVIEW_TEMPLATES" => reviews, "VISUAL_BENCHMARK_APPROVAL" => benchmark
+  "ASSET_REVIEW_TEMPLATES" => reviews, "TOOLCHAIN" => toolchain,
+  "VISUAL_BENCHMARK_APPROVAL" => benchmark
 }
 cross_document_guards.each do |label, tokens|
   tokens.each do |token|

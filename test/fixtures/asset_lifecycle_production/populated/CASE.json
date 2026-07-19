@@ -11,30 +11,31 @@
         "sha256": "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9"
       },
       {
-        "path": "review/benchmark/BENCHMARK_EVIDENCE_REGISTRY.tsv",
-        "sha256": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca"
+        "path": "PENDING",
+        "sha256": "PENDING"
       },
       {
-        "path": "review/benchmark/ROM_BUILD_RECIPE.tsv",
-        "sha256": "cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcb"
+        "path": "PENDING",
+        "sha256": "PENDING"
       },
       {
-        "path": "review/benchmark/rollups/player/GATE_RECORD.tsv",
-        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        "path": "PENDING",
+        "sha256": "PENDING"
       },
       {
-        "path": "review/benchmark/rollups/quarrune/GATE_RECORD.tsv",
-        "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        "path": "PENDING",
+        "sha256": "PENDING"
       },
       {
-        "path": "review/benchmark/rollups/sector/GATE_RECORD.tsv",
-        "sha256": "cececececececececececececececececececececececececececececececece"
+        "path": "PENDING",
+        "sha256": "PENDING"
       },
       {
-        "path": "review/benchmark/rollups/presentation/GATE_RECORD.tsv",
-        "sha256": "cfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcf"
+        "path": "PENDING",
+        "sha256": "PENDING"
       }
     ],
+    "build_id": "benchmark-production-fixture",
     "decision": "PENDING",
     "lock": "LOCKED",
     "registry_rows": [
@@ -1809,10 +1810,10 @@
     ],
     "rollups": [
       {
-        "build_id": "benchmark-production-fixture",
-        "gate_record_sha256": "dcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdc",
+        "build_id": "PENDING",
+        "gate_record_sha256": "PENDING",
         "gates": [
-          "pass",
+          "PENDING",
           "PENDING",
           "PENDING",
           "PENDING",
@@ -1823,10 +1824,10 @@
         "scope": "rollup.player"
       },
       {
-        "build_id": "benchmark-production-fixture",
-        "gate_record_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "build_id": "PENDING",
+        "gate_record_sha256": "PENDING",
         "gates": [
-          "pass",
+          "PENDING",
           "PENDING",
           "PENDING",
           "PENDING",
@@ -1837,10 +1838,10 @@
         "scope": "rollup.quarrune"
       },
       {
-        "build_id": "benchmark-production-fixture",
-        "gate_record_sha256": "dededededededededededededededededededededededededededededededede",
+        "build_id": "PENDING",
+        "gate_record_sha256": "PENDING",
         "gates": [
-          "pass",
+          "PENDING",
           "PENDING",
           "PENDING",
           "PENDING",
@@ -1851,10 +1852,10 @@
         "scope": "rollup.sector"
       },
       {
-        "build_id": "benchmark-production-fixture",
-        "gate_record_sha256": "dfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdf",
+        "build_id": "PENDING",
+        "gate_record_sha256": "PENDING",
         "gates": [
-          "pass",
+          "PENDING",
           "PENDING",
           "PENDING",
           "PENDING",

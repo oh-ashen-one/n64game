@@ -1,0 +1,480 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "json"
+require "open3"
+require "optparse"
+require "securerandom"
+require "tmpdir"
+
+module N64GameBenchmarkTransaction
+  CANONICAL_REMOTE = "https://github.com/oh-ashen-one/n64game.git"
+  CONTROL_PATH = "docs/VISUAL_BENCHMARK_APPROVAL.md"
+  SAFETY_PREFIX = "refs/n64game/benchmark-transaction"
+  PUBLICATION_PREFIX = "refs/heads/gate4-benchmark-transaction"
+  ZERO_OID = "0" * 40
+  ROM_EXTENSIONS = %w[.z64 .n64 .v64].freeze
+  PORTABLE_PATH = /\A[A-Za-z0-9._\/-]+\z/.freeze
+  TOKEN_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,79}\z/.freeze
+  OID_PATTERN = /\A[0-9a-f]{40}\z/.freeze
+  CONTROL_ROW = /^(\| Reviewed payload Git commit \|[^|\n]*\| )`([^`\n]+)`( \|)$/.freeze
+  GIT_BINARY = "/usr/bin/git"
+  GIT_ENV = {
+    "PATH" => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    "GIT_TERMINAL_PROMPT" => "0",
+    "GCM_INTERACTIVE" => "never",
+    "GIT_ASKPASS" => "/usr/bin/false",
+    "GIT_ASKPASS_REQUIRE" => "force",
+    "SSH_ASKPASS" => "/usr/bin/false",
+    "GIT_EDITOR" => "/usr/bin/false",
+    "GIT_SEQUENCE_EDITOR" => "/usr/bin/false",
+    "GIT_PAGER" => "cat",
+    "GIT_LFS_SKIP_SMUDGE" => "1",
+    "GIT_CONFIG_GLOBAL" => "/dev/null",
+    "GIT_CONFIG_NOSYSTEM" => "1",
+    "GIT_NO_REPLACE_OBJECTS" => "1",
+    "GH_TOKEN" => nil,
+    "GITHUB_TOKEN" => nil,
+    "GITLAB_TOKEN" => nil,
+    "LC_ALL" => "C",
+    "LANG" => "C"
+  }.freeze
+  COMMIT_IDENTITY = {
+    "GIT_AUTHOR_NAME" => "N64Game Benchmark Transaction",
+    "GIT_AUTHOR_EMAIL" => "n64game-benchmark-transaction@users.noreply.github.com",
+    "GIT_COMMITTER_NAME" => "N64Game Benchmark Transaction",
+    "GIT_COMMITTER_EMAIL" => "n64game-benchmark-transaction@users.noreply.github.com"
+  }.freeze
+  GIT_COMMAND_CONFIG = [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", "credential.helper=",
+    "-c", "http.extraHeader="
+  ].freeze
+
+  class Failure < StandardError; end
+
+  module_function
+
+  def fail_closed(message)
+    raise Failure, message
+  end
+
+  def capture_git(root, *args)
+    stdout, stderr, status = Open3.capture3(
+      GIT_ENV, GIT_BINARY, "-C", root, *GIT_COMMAND_CONFIG, *args, unsetenv_others: true
+    )
+    [stdout.b, stderr.b, status]
+  end
+
+  def git!(root, *args)
+    stdout, stderr, status = capture_git(root, *args)
+    return stdout if status.success?
+
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    detail = "Git exited #{status.exitstatus}" if detail.empty?
+    fail_closed("git #{args.first} failed: #{detail.lines.first.to_s.strip}")
+  end
+
+  def git_optional(root, *args)
+    capture_git(root, *args)
+  end
+
+  def deterministic_commit!(root, message, epoch)
+    fail_closed("deterministic commit epoch is invalid") unless epoch.is_a?(Integer) && epoch.positive?
+    dated_env = COMMIT_IDENTITY.merge(
+      "GIT_AUTHOR_DATE" => "@#{epoch} +0000",
+      "GIT_COMMITTER_DATE" => "@#{epoch} +0000"
+    )
+    stdout, stderr, status = Open3.capture3(
+      GIT_ENV.merge(dated_env),
+      GIT_BINARY, "-C", root,
+      *GIT_COMMAND_CONFIG,
+      "-c", "commit.gpgSign=false",
+      "commit", "--quiet", "--no-verify", "-m", message,
+      unsetenv_others: true
+    )
+    return stdout.b if status.success?
+
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    detail = "Git exited #{status.exitstatus}" if detail.empty?
+    fail_closed("deterministic git commit failed: #{detail.lines.first.to_s.strip}")
+  end
+
+  def one_line(bytes, label)
+    lines = bytes.to_s.lines.map(&:strip).reject(&:empty?)
+    fail_closed("#{label} must resolve to exactly one line") unless lines.length == 1
+    lines.first
+  end
+
+  def canonical_input(path, root, label)
+    fail_closed("#{label} is required") if path.nil? || path.empty?
+    expanded = File.expand_path(path)
+    begin
+      stat = File.lstat(expanded)
+    rescue Errno::ENOENT
+      fail_closed("#{label} does not exist: #{expanded}")
+    end
+    fail_closed("#{label} must not be a symlink") if stat.symlink?
+    fail_closed("#{label} must be a regular file") unless stat.file?
+
+    resolved = File.realpath(expanded)
+    if resolved == root || resolved.start_with?(root + File::SEPARATOR)
+      fail_closed("#{label} must live outside the repository so the repository stays clean")
+    end
+    resolved
+  end
+
+  def parse_control(bytes, label)
+    fail_closed("#{label} contains NUL bytes") if bytes.include?("\0")
+    fail_closed("#{label} must use LF line endings") if bytes.include?("\r")
+    fail_closed("#{label} must end with exactly an LF-terminated line") unless bytes.end_with?("\n")
+
+    text = bytes.dup.force_encoding(Encoding::UTF_8)
+    fail_closed("#{label} must be valid UTF-8") unless text.valid_encoding?
+    matches = text.scan(CONTROL_ROW)
+    fail_closed("#{label} must contain exactly one Reviewed payload Git commit row") unless matches.length == 1
+    text
+  end
+
+  def normalize_control(text)
+    text.sub(CONTROL_ROW, "\\1`__PAYLOAD_COMMIT__`\\3")
+  end
+
+  def render_control(text, payload_commit)
+    fail_closed("payload commit is not a canonical Git object ID") unless OID_PATTERN.match?(payload_commit)
+    rendered = text.sub(CONTROL_ROW, "\\1`#{payload_commit}`\\3")
+    fail_closed("prepared control payload binding was not written exactly once") unless rendered.scan(payload_commit).length == 1
+    rendered
+  end
+
+  def parse_nul_paths(bytes, label)
+    return [] if bytes.empty?
+    fail_closed("#{label} is not NUL-terminated") unless bytes.end_with?("\0")
+    paths = bytes.split("\0", -1)
+    paths.pop
+    paths.each do |raw|
+      path = raw.dup.force_encoding(Encoding::UTF_8)
+      fail_closed("#{label} contains a non-UTF-8 path") unless path.valid_encoding?
+      fail_closed("#{label} contains a non-portable path") unless PORTABLE_PATH.match?(path)
+      segments = path.split("/")
+      fail_closed("#{label} contains an ambiguous path") if segments.any? { |segment| segment.empty? || segment == "." || segment == ".." }
+    end
+    fail_closed("#{label} contains duplicate paths") unless paths.uniq.length == paths.length
+    paths
+  end
+
+  def tree_mode(root, treeish, path)
+    bytes = git!(root, "ls-tree", "-z", treeish, "--", path)
+    return nil if bytes.empty?
+    rows = bytes.split("\0", -1).reject(&:empty?)
+    fail_closed("#{path} resolves ambiguously in #{treeish}") unless rows.length == 1
+    match = rows.first.match(/\A([0-9]{6}) [a-z]+ [0-9a-f]{40}\t/)
+    fail_closed("#{path} has an unreadable tree mode in #{treeish}") unless match
+    match[1]
+  end
+
+  def index_mode(root, path)
+    bytes = git!(root, "ls-files", "--stage", "-z", "--", path)
+    return nil if bytes.empty?
+    rows = bytes.split("\0", -1).reject(&:empty?)
+    fail_closed("#{path} has multiple index stages") unless rows.length == 1
+    match = rows.first.match(/\A([0-9]{6}) [0-9a-f]{40} ([0-3])\t/)
+    fail_closed("#{path} has an unreadable index mode") unless match
+    fail_closed("#{path} is unmerged in the transaction index") unless match[2] == "0"
+    match[1]
+  end
+
+  def validate_payload_paths!(worktree, paths)
+    fail_closed("payload patch produces no staged payload changes") if paths.empty?
+    paths.each do |path|
+      fail_closed("payload patch must exclude #{CONTROL_PATH}") if path == CONTROL_PATH
+      fail_closed("payload patch must not modify .gitmodules") if path == ".gitmodules"
+      fail_closed("payload patch contains a forbidden ROM path: #{path}") if ROM_EXTENSIONS.include?(File.extname(path).downcase)
+
+      old_mode = tree_mode(worktree, "HEAD", path)
+      new_mode = index_mode(worktree, path)
+      [old_mode, new_mode].compact.each do |mode|
+        next if %w[100644 100755].include?(mode)
+        kind = mode == "120000" ? "symlink" : (mode == "160000" ? "gitlink" : "unsupported mode #{mode}")
+        fail_closed("payload patch may not add, remove, or modify a #{kind}: #{path}")
+      end
+    end
+  end
+
+  def parents(root, commit)
+    line = one_line(git!(root, "rev-list", "--parents", "-n", "1", commit), "parents for #{commit}")
+    fields = line.split(" ")
+    fail_closed("Git returned a different commit while resolving parents") unless fields.shift == commit
+    fields
+  end
+
+  def ref_target(root, ref)
+    stdout, _stderr, status = git_optional(root, "rev-parse", "--verify", "#{ref}^{commit}")
+    return nil unless status.success?
+    value = stdout.to_s.strip
+    OID_PATTERN.match?(value) ? value : nil
+  end
+
+  def update_safety_ref!(root, ref, target, expected)
+    git!(root, "update-ref", "--create-reflog", ref, target, expected)
+    actual = ref_target(root, ref)
+    fail_closed("safety ref did not retain expected commit #{target}") unless actual == target
+  end
+
+  def exact_remote_oid(root, full_ref)
+    bytes = git!(root, "ls-remote", "--refs", CANONICAL_REMOTE, full_ref)
+    lines = bytes.to_s.lines.map(&:strip).reject(&:empty?)
+    fail_closed("current branch is not one exact advertised public branch") unless lines.length == 1
+    match = lines.first.match(/\A([0-9a-f]{40})\t(.+)\z/)
+    fail_closed("advertised branch response is malformed") unless match && match[2] == full_ref
+    match[1]
+  end
+
+  def ensure_clean_base!(root, expected_head = nil)
+    status = git!(
+      root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"
+    )
+    fail_closed("repository worktree and index must be exactly clean") unless status.empty?
+    head = one_line(git!(root, "rev-parse", "--verify", "HEAD^{commit}"), "current HEAD")
+    fail_closed("repository HEAD moved during transaction preparation") if expected_head && head != expected_head
+    head
+  end
+
+  def sha256(bytes)
+    Digest::SHA256.hexdigest(bytes)
+  end
+
+  def run(argv)
+    options = {}
+    parser = OptionParser.new do |opts|
+      opts.banner = "Usage: scripts/create-benchmark-transaction --payload-patch FILE --control-file FILE [--token TOKEN]"
+      opts.on("--payload-patch FILE", "External git --binary payload patch; must exclude approval control") { |value| options[:patch] = value }
+      opts.on("--control-file FILE", "External complete approval-control Markdown; payload commit is filled automatically") { |value| options[:control] = value }
+      opts.on("--token TOKEN", "Safe unique recovery/publication token") { |value| options[:token] = value }
+      opts.on("-h", "--help", "Show this help") do
+        puts opts
+        return 0
+      end
+    end
+    begin
+      parser.parse!(argv)
+    rescue OptionParser::ParseError => e
+      fail_closed(e.message)
+    end
+    fail_closed("unexpected positional arguments") unless argv.empty?
+
+    root = File.expand_path("..", __dir__)
+    top = one_line(git!(root, "rev-parse", "--show-toplevel"), "repository root")
+    fail_closed("helper must be located in the active repository root") unless File.realpath(top) == File.realpath(root)
+    fail_closed("run the helper from the repository root") unless File.realpath(Dir.pwd) == File.realpath(root)
+
+    configured_urls = git!(root, "config", "--get-all", "remote.origin.url").to_s.lines.map(&:strip).reject(&:empty?)
+    fail_closed("origin must be exactly #{CANONICAL_REMOTE}") unless configured_urls == [CANONICAL_REMOTE]
+    push_bytes, _push_error, push_status = git_optional(root, "config", "--get-all", "remote.origin.pushurl")
+    if push_status.success?
+      push_urls = push_bytes.to_s.lines.map(&:strip).reject(&:empty?)
+      fail_closed("origin push URL must be canonical when explicitly configured") unless push_urls == [CANONICAL_REMOTE]
+    end
+
+    full_ref = one_line(git!(root, "symbolic-ref", "--quiet", "HEAD"), "current branch ref")
+    fail_closed("transaction requires a local branch, not detached HEAD or a tag") unless full_ref.start_with?("refs/heads/")
+    branch = full_ref.sub(%r{\Arefs/heads/}, "")
+    _check_out, _check_error, check_status = git_optional(root, "check-ref-format", "--branch", branch)
+    fail_closed("current branch name is invalid") unless check_status.success?
+
+    patch_path = canonical_input(options[:patch], root, "payload patch")
+    control_input_path = canonical_input(options[:control], root, "prepared control")
+    fail_closed("payload patch and prepared control must be distinct files") if patch_path == control_input_path
+
+    patch_bytes = File.binread(patch_path)
+    fail_closed("payload patch must not be empty") if patch_bytes.empty?
+    prepared_control_bytes = File.binread(control_input_path)
+    prepared_control = parse_control(prepared_control_bytes, "prepared control")
+    base_control_path = File.join(root, CONTROL_PATH)
+    begin
+      base_control_stat = File.lstat(base_control_path)
+    rescue Errno::ENOENT
+      fail_closed("repository control is missing: #{CONTROL_PATH}")
+    end
+    fail_closed("repository control must be a regular non-symlink file") unless base_control_stat.file? && !base_control_stat.symlink?
+    base_control_bytes = File.binread(base_control_path)
+    base_control = parse_control(base_control_bytes, "repository control")
+    if normalize_control(prepared_control) == normalize_control(base_control)
+      fail_closed("prepared control must contain a caller-authored change besides the payload commit binding")
+    end
+
+    base = ensure_clean_base!(root)
+    base_epoch_text = one_line(git!(root, "show", "-s", "--format=%ct", base), "base commit timestamp")
+    fail_closed("base commit timestamp is not canonical") unless /\A[1-9][0-9]*\z/.match?(base_epoch_text)
+    base_epoch = Integer(base_epoch_text, 10)
+    fail_closed("base commit timestamp cannot safely derive transaction timestamps") if base_epoch >= (2**63 - 2)
+    payload_epoch = base_epoch + 1
+    control_epoch = base_epoch + 2
+    token = options[:token]
+    token ||= "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{Process.pid}-#{SecureRandom.hex(4)}"
+    fail_closed("token must match #{TOKEN_PATTERN.inspect}") unless TOKEN_PATTERN.match?(token)
+    safety_ref = "#{SAFETY_PREFIX}/#{token}"
+    publication_ref = "#{PUBLICATION_PREFIX}/#{token}"
+    fail_closed("safety ref already exists: #{safety_ref}") if ref_target(root, safety_ref)
+
+    safety_created = false
+    worktree = nil
+    payload_commit = nil
+    control_commit = nil
+    result = nil
+
+    Dir.mktmpdir("n64game-benchmark-transaction-") do |sandbox|
+      patch_snapshot = File.join(sandbox, "payload.patch")
+      File.binwrite(patch_snapshot, patch_bytes)
+      fail_closed("payload patch snapshot digest drifted") unless sha256(File.binread(patch_snapshot)) == sha256(patch_bytes)
+
+      authority = File.join(sandbox, "authority.git")
+      git!(sandbox, "init", "--bare", "--quiet", authority)
+      advertised = exact_remote_oid(authority, full_ref)
+      fail_closed("local HEAD is not the exact advertised public branch tip") unless advertised == base
+      git!(authority, "fetch", "--quiet", "--no-tags", "--force", CANONICAL_REMOTE, "#{full_ref}:refs/n64game/verified-public-tip")
+      fetched = one_line(git!(authority, "rev-parse", "--verify", "refs/n64game/verified-public-tip^{commit}"), "fresh fetched public branch")
+      fail_closed("fresh explicit-ref fetch does not equal local HEAD") unless fetched == base
+      fail_closed("advertised branch moved during authority verification") unless exact_remote_oid(authority, full_ref) == base
+      ensure_clean_base!(root, base)
+
+      update_safety_ref!(root, safety_ref, base, ZERO_OID)
+      safety_created = true
+
+      worktree = File.join(sandbox, "worktree")
+      git!(root, "worktree", "add", "--quiet", "--detach", worktree, base)
+
+      git!(worktree, "apply", "--index", "--binary", "--whitespace=error-all", patch_snapshot)
+      git!(worktree, "diff", "--cached", "--check")
+      payload_paths = parse_nul_paths(
+        git!(worktree, "diff", "--cached", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", "HEAD", "--"),
+        "payload patch path set"
+      )
+      validate_payload_paths!(worktree, payload_paths)
+
+      deterministic_commit!(worktree, "Stage Gate 4 benchmark payload", payload_epoch)
+      payload_commit = one_line(git!(worktree, "rev-parse", "--verify", "HEAD^{commit}"), "payload commit")
+      update_safety_ref!(root, safety_ref, payload_commit, base)
+      fail_closed("payload commit must be the sole-parent child of the public base") unless parents(worktree, payload_commit) == [base]
+
+      committed_payload_paths = parse_nul_paths(
+        git!(worktree, "diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, payload_commit, "--"),
+        "committed payload path set"
+      )
+      fail_closed("payload commit changed-path set drifted after commit") unless committed_payload_paths == payload_paths
+      payload_control = git!(worktree, "show", "#{payload_commit}:#{CONTROL_PATH}")
+      fail_closed("payload commit changed approval-control bytes") unless payload_control == base_control_bytes
+
+      rendered_control = render_control(prepared_control, payload_commit)
+      File.binwrite(File.join(worktree, CONTROL_PATH), rendered_control.b)
+      git!(worktree, "add", "--", CONTROL_PATH)
+      git!(worktree, "diff", "--cached", "--check")
+      control_paths = parse_nul_paths(
+        git!(worktree, "diff", "--cached", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", "HEAD", "--"),
+        "control commit path set"
+      )
+      fail_closed("control commit must change exactly #{CONTROL_PATH}") unless control_paths == [CONTROL_PATH]
+
+      deterministic_commit!(worktree, "Record Gate 4 benchmark control", control_epoch)
+      control_commit = one_line(git!(worktree, "rev-parse", "--verify", "HEAD^{commit}"), "control commit")
+      update_safety_ref!(root, safety_ref, control_commit, payload_commit)
+      fail_closed("control commit A must be the sole-parent child of payload commit P") unless parents(worktree, control_commit) == [payload_commit]
+
+      exact_control_paths = parse_nul_paths(
+        git!(worktree, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "--ignore-submodules=none", "-r", "-z", payload_commit, control_commit, "--"),
+        "P-to-A changed path set"
+      )
+      fail_closed("P-to-A must change exactly #{CONTROL_PATH}") unless exact_control_paths == [CONTROL_PATH]
+      committed_control = git!(worktree, "show", "#{control_commit}:#{CONTROL_PATH}")
+      fail_closed("control commit bytes differ from prepared bound control") unless committed_control == rendered_control.b
+      fail_closed("temporary transaction worktree is not clean after A") unless git!(
+        worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"
+      ).empty?
+
+      control_tree = one_line(git!(worktree, "rev-parse", "#{control_commit}^{tree}"), "control tree")
+      index_tree = one_line(git!(worktree, "write-tree"), "transaction index tree")
+      fail_closed("A tree does not exactly equal the clean transaction index tree") unless control_tree == index_tree
+      ensure_clean_base!(root, base)
+
+      payload_tree = one_line(git!(worktree, "rev-parse", "#{payload_commit}^{tree}"), "payload tree")
+      base_tree = one_line(git!(worktree, "rev-parse", "#{base}^{tree}"), "base tree")
+      canonical_payload_diff = git!(
+        worktree, "diff", "--binary", "--no-ext-diff", "--no-renames", "--ignore-submodules=none",
+        base, payload_commit, "--"
+      )
+      path_bytes = payload_paths.join("\0") + "\0"
+
+      result = {
+        "schema" => "n64game-benchmark-transaction-v1",
+        "result" => "PASS",
+        "repository" => "oh-ashen-one/n64game",
+        "source_branch" => branch,
+        "advertised_ref" => full_ref,
+        "base_commit" => base,
+        "base_tree" => base_tree,
+        "payload_commit_p" => payload_commit,
+        "payload_tree" => payload_tree,
+        "control_commit_a" => control_commit,
+        "control_tree" => control_tree,
+        "safety_ref" => safety_ref,
+        "safety_ref_target" => ref_target(root, safety_ref),
+        "publication_ref" => publication_ref,
+        "payload_changed_paths" => payload_paths,
+        "control_changed_paths" => exact_control_paths,
+        "payload_patch_sha256" => sha256(patch_bytes),
+        "payload_diff_sha256" => sha256(canonical_payload_diff),
+        "payload_path_set_sha256" => sha256(path_bytes.b),
+        "prepared_control_sha256" => sha256(prepared_control_bytes),
+        "committed_control_sha256" => sha256(committed_control),
+        "commit_identity" => "N64Game Benchmark Transaction <n64game-benchmark-transaction@users.noreply.github.com>",
+        "payload_commit_epoch_utc" => payload_epoch,
+        "control_commit_epoch_utc" => control_epoch,
+        "manual_steps" => [
+          "git log --oneline #{base}..#{control_commit}",
+          "git diff --name-status #{base} #{payload_commit}",
+          "git diff --name-status #{payload_commit} #{control_commit}",
+          "git push origin #{control_commit}:#{publication_ref}"
+        ],
+        "automatic_push" => false,
+        "automatic_merge" => false,
+        "source_branch_moved" => false
+      }
+    ensure
+      if worktree && File.directory?(worktree)
+        capture_git(root, "worktree", "remove", "--force", worktree)
+      end
+    end
+
+    fail_closed("transaction did not produce a receipt") unless result
+    puts JSON.pretty_generate(result)
+    0
+  rescue StandardError => e
+    message = e.is_a?(Failure) ? e.message : "unexpected #{e.class}: #{e.message}"
+    failure = {
+      "schema" => "n64game-benchmark-transaction-v1",
+      "result" => "FAIL",
+      "error" => message
+    }
+    if defined?(root) && root && defined?(safety_created) && safety_created
+      target = ref_target(root, safety_ref)
+      failure["base_commit"] = base if defined?(base) && base
+      failure["payload_commit_p"] = payload_commit if defined?(payload_commit) && payload_commit
+      failure["control_commit_a"] = control_commit if defined?(control_commit) && control_commit
+      failure["safety_ref"] = safety_ref
+      failure["safety_ref_target"] = target
+      failure["recovery_steps"] = [
+        "git show --no-patch --decorate #{target}",
+        "git branch recover-benchmark-#{token} #{safety_ref}"
+      ]
+    end
+    warn JSON.pretty_generate(failure)
+    1
+  end
+end
+
+exit N64GameBenchmarkTransaction.run(ARGV)
