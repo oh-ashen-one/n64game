@@ -36,6 +36,8 @@ class LfsAttributeTests(unittest.TestCase):
             "review/benchmark/evidence/native/exploration.png",
             "review/echo.ayselor/g1/concept_front.png",
             "review/benchmark/evidence/capture_60s/REPRESENTATIVE_60S.mp4",
+            "review/echo.quarrune/g5/quarrune_hero.t3dm",
+            "review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -64,6 +66,43 @@ class LfsAttributeTests(unittest.TestCase):
         self.assertEqual(
             self.attributes("review/echo.quarrune/g2/AUTHORING_STACK_RECEIPT.txt"),
             {"filter": "unspecified", "diff": "unspecified", "merge": "unspecified", "text": "set"},
+        )
+
+    def test_skeleton_binding_is_explicit_lf_text_not_lfs(self) -> None:
+        self.assertEqual(
+            self.attributes("review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv"),
+            {"filter": "unspecified", "diff": "unspecified", "merge": "unspecified", "text": "set"},
+        )
+
+    def test_gate5_tiny3d_review_snapshots_are_not_ignored(self) -> None:
+        paths = (
+            "review/echo.quarrune/g5/quarrune_hero.t3dm",
+            "review/echo.quarrune/g5/quarrune_distance.t3dm",
+            "review/anm.echo.quarrune/g5/anm_echo_quarrune.t3dm",
+            "review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata",
+            "review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv",
+        )
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--", *paths],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+        generated = subprocess.run(
+            ["git", "check-ignore", "--no-index", "scratch/generated.t3dm", "scratch/generated.sdata"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+        self.assertEqual(
+            generated.stdout.splitlines(), ["scratch/generated.t3dm", "scratch/generated.sdata"]
         )
 
 

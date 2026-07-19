@@ -30,6 +30,11 @@ filesystem/
 *.sprite
 *.font64
 *.t3dm
+*.sdata
+# Immutable Gate-5 review snapshots are deliberate public evidence, while
+# generated Tiny3D files everywhere else remain ignored.
+!review/**/*.t3dm
+!review/**/*.sdata
 *.wav64
 *.xm64
 *.z64
