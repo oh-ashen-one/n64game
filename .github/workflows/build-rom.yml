@@ -51,6 +51,9 @@ jobs:
       - name: Run host contract tests
         run: make test
 
+      - name: Run portable Gate 4 authoring-contract tests
+        run: make test-authoring
+
       - name: Finalize checksums and reports
         run: make report
 

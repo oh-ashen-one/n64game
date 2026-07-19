@@ -11,7 +11,7 @@ All runtime art must fit standard 4 MB Nintendo 64 operation, the scene caps in 
 Stages:
 
 - `S0` preproduction: concepts, orthographics, palettes, data contracts.
-- `S1` visual benchmark: one final environment corner, player, Quarrune, UI, animation, and VFX.
+- `S1` visual benchmark: one final environment corner, player, hero Quarrune, three fully finished supporting battle-distance silhouettes (Ayselor, Gyreclast, and Kivarrax), exact subset animation, UI, and VFX.
 - `S2` end-to-end greybox: tracked temporary geometry for the complete game flow.
 - `S3` gameplay/interface ready: finalized collision, nav/spawn/interaction data, event IDs, ownership, timing contracts, and temporary `tmp.*` integration only. `S3` never authorizes a final visual, animation, UI, VFX, music, voice, or SFX source/output.
 - `S4` production: final models, textures, rigs, animations, environments, UI, and audio.
@@ -142,15 +142,17 @@ Affinity cycle: `CURRENT > EMBER > GALE > STRATA > CURRENT`; strong multiplier 1
 | Asset ID | Battle slot / design | Affinity and four moves | Geometry / texture / rig | Required clips | Stage / priority |
 |---|---|---|---|---|---|
 | `echo.quarrune` | **Quarrune** — real starter A; compact six-legged ceramic ram, cobalt horn lattice, tank/support | Strata: Ridge Ram; Brace Relay; Grounding Ring; Steady Pulse | 1,250 / 650 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 20 joints | 14 total; `S1` owns idle A/B, entrance, reposition, Ridge Ram, Brace Relay, hit, knockout, and Horizon Break participation preview; remaining clips are `S4` | `S1/S4 P0` |
-| `echo.ayselor` | **Ayselor** — real starter B; hovering tri-wing manta/kite, clothlike fins, amber keel lamp | Gale: Sirocco Slice; Lift Current; Dazzle Wake; Guiding Draft | 1,150 / 600 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 15 including all four moves, Horizon Break, packet answer, lamp-dim alert, and story resolve | `S4 P1` |
+| `echo.ayselor` | **Ayselor** — real starter B; hovering tri-wing manta/kite, clothlike fins, amber keel lamp | Gale: Sirocco Slice; Lift Current; Dazzle Wake; Guiding Draft | 1,150 / 600 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 15 total; `S1` owns only the final 600-triangle distance model, texture, rig, blob shadow, and paired `idle_a`/`reposition`/`hit` subset; hero model and remaining clips are `S4` | `S1 subset P0 / S4 remainder P1` |
 | `echo.kilnback` | **Kilnback** — simulation player loan A; broad quadruped kiln body, furnace ribs | Ember: Cinder Charge; Bellows Guard; Scorch Mark; Banked Flame | 1,300 / 680 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 12 including all four moves and Sunline Cascade | `S4 P1` |
 | `echo.nacreel` | **Nacreel** — simulation player loan B; ribbon body and broken halo of conductive droplets | Current: Arc Jet; Conductive Veil; Flow Switch; Static Ripple | 1,100 / 560 tris; 4 mats; 64×64 CI8 + 32×32 IA8; 20 joints | 12 including all four moves and Sunline Cascade | `S4 P1` |
-| `echo.gyreclast` | **Gyreclast** — simulation opponent A; three-legged mineral excavator, offset drill claw | Strata: Auger Knuckle; Dust Screen; Fault Pin; Carapace Brace | 1,200 / 620 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 11 including all four moves | `S4 P1` |
-| `echo.kivarrax` | **Kivarrax** — simulation opponent B; long-legged fan-tailed desert runner | Gale: Crosswind Cut; Slipstream; Pressure Drop; Talon Sweep | 1,050 / 540 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 20 joints | 11 including all four moves | `S4 P1` |
+| `echo.gyreclast` | **Gyreclast** — simulation opponent A; three-legged mineral excavator, offset drill claw | Strata: Auger Knuckle; Dust Screen; Fault Pin; Carapace Brace | 1,200 / 620 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 11 total; `S1` owns only the final 620-triangle distance model, texture, rig, blob shadow, and paired `idle_a`/`reposition`/`hit` subset; hero model and remaining clips are `S4` | `S1 subset P0 / S4 remainder P1` |
+| `echo.kivarrax` | **Kivarrax** — simulation opponent B; long-legged fan-tailed desert runner | Gale: Crosswind Cut; Slipstream; Pressure Drop; Talon Sweep | 1,050 / 540 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 20 joints | 11 total; `S1` owns only the final 540-triangle distance model, texture, rig, blob shadow, and paired `idle_a`/`reposition`/`hit` subset; hero model and remaining clips are `S4` | `S1 subset P0 / S4 remainder P1` |
 | `echo.kovrass` | **Kovrass** — Estate opponent A; low brass/ceramic bellows body; support showcase | Ember: Clinker Bite; Boiler Chorus; Ash Mantle; Furnace Feint | 1,200 / 620 tris; 3 mats; 64×64 CI8 + 32×32 CI4; 18 joints | 11 including all four moves | `S4 P1` |
 | `echo.ulvorel` | **Ulvorel** — Estate opponent B; squat amphibious body, translucent hood, pendulum throat | Current: Rill Lash; Pressure Leap; Cooling Shroud; Undertow | 1,150 / 590 tris; 4 mats; 64×64 CI8 + 32×32 IA8; 20 joints | 11 including all four moves | `S4 P1` |
 
 Estate support showcase dependency: `echo.kovrass` must perform Boiler Chorus, visibly raising Ulvorel’s Power, followed by Ulvorel’s Pressure Leap. Model sockets, animation event frames, VFX, UI modifier feedback, and audio must support that readable sequence.
+
+The Gate 4 four-actor composition is exactly Quarrune as the one hero Echoform plus supporting Ayselor, Gyreclast, and Kivarrax at battle distance. The three support rows are finished production subsets, not placeholders: each `echo.* / RIGGED_MODEL / H2` subset passes all seven gates and two post-integration polish passes. Their paired animation authority is only `idle_a`, `reposition`, and `hit`; every hero mesh, other clip, move VFX/audio, portrait, vocal bank, and full-package member remains `S4` and globally locked until benchmark approval.
 
 Maximum four-active-actor battle texture working set: 176 KiB including portraits and VFX sprite atlas. Maximum actor geometry target: 6,000 visible triangles including distance-independent accessories.
 
@@ -544,11 +546,11 @@ Each bank includes `idle_a`, `idle_b`, `entrance`, `reposition`, one clip named 
 | Bank ID | Count | Move-performance clips | Finisher clip | Stage / priority |
 |---|---:|---|---|---|
 | `anm.echo.quarrune` | 14 | `S1`: idle_a/b, entrance, reposition, ridge_ram, brace_relay, hit, knockout; `S4`: grounding_ring, steady_pulse, victory, story_brace_alert, story_resolve | `S1` participation preview; final integrated horizon_break remains `S4` | `S1/S4 P0` |
-| `anm.echo.ayselor` | 15 | sirocco_slice, lift_current, dazzle_wake, guiding_draft; story_packet_ping, story_lamp_dim_alert, story_resolve | horizon_break | `S4 P1` |
+| `anm.echo.ayselor` | 15 | `S1`: idle_a, reposition, hit; `S4`: idle_b, entrance, sirocco_slice, lift_current, dazzle_wake, guiding_draft, knockout, victory, story_packet_ping, story_lamp_dim_alert, story_resolve | `S4`: horizon_break | `S1 subset P0 / S4 remainder P1` |
 | `anm.echo.kilnback` | 12 | cinder_charge, bellows_guard, scorch_mark, banked_flame | sunline_cascade | `S4 P1` |
 | `anm.echo.nacreel` | 12 | arc_jet, conductive_veil, flow_switch, static_ripple | sunline_cascade | `S4 P1` |
-| `anm.echo.gyreclast` | 11 | auger_knuckle, dust_screen, fault_pin, carapace_brace | — | `S4 P1` |
-| `anm.echo.kivarrax` | 11 | crosswind_cut, slipstream, pressure_drop, talon_sweep | — | `S4 P1` |
+| `anm.echo.gyreclast` | 11 | `S1`: idle_a, reposition, hit; `S4`: idle_b, entrance, auger_knuckle, dust_screen, fault_pin, carapace_brace, knockout, victory | — | `S1 subset P0 / S4 remainder P1` |
+| `anm.echo.kivarrax` | 11 | `S1`: idle_a, reposition, hit; `S4`: idle_b, entrance, crosswind_cut, slipstream, pressure_drop, talon_sweep, knockout, victory | — | `S1 subset P0 / S4 remainder P1` |
 | `anm.echo.kovrass` | 11 | clinker_bite, boiler_chorus, ash_mantle, furnace_feint | — | `S4 P1` |
 | `anm.echo.ulvorel` | 11 | rill_lash, pressure_leap, cooling_shroud, undertow | — | `S4 P1` |
 
@@ -721,7 +723,7 @@ The benchmark aggregate is `review/benchmark/PAYLOAD_MANIFEST.sha256`, not a sel
 | `ev.benchmark.capture_60s` | 1 continuous capture | at least 60 seconds representative traversal/dialogue/command/attack/support; raw audio and no hidden cuts around defects | `S1 P0` |
 | `ev.benchmark.performance` | 1 report + trace | frame time, heap, batches, particles, texture/geometry/animation/audio working sets | `S1 P0` |
 | `ev.benchmark.unload_reload` | 1 repeated trace | synchronized unload/reload returns resources and heap to exact measured baseline | `S1 P0` |
-| `ev.benchmark.gates` | exactly 46 benchmark-scope production-ID seven-decision vectors + 4 integrated rollups | every whitelist ID/subset individually; rollups for player, Quarrune, exact environment sector, and integrated UI/VFX/audio presentation; partial-package passes do not claim final full-package approval | `S1 P0` |
+| `ev.benchmark.gates` | exactly 52 benchmark-scope production-ID seven-decision vectors + 4 integrated rollups | every whitelist ID/subset individually, including six paired support-model/animation rows; rollups remain player, hero Quarrune, exact environment sector, and integrated UI/VFX/audio presentation; partial-package passes do not claim final full-package approval | `S1 P0` |
 | `ev.benchmark.authorship` | 1 rubric + reference-calibration record | nine visual-authorship categories, three independent reviewers, no protected reference frame committed | `S1 P0` |
 | `ev.benchmark.approval` | 1 non-self-referential attestation record | signed annotated origin tag points to the commit containing populated `docs/VISUAL_BENCHMARK_APPROVAL.md` and attests the separate 40-hex payload commit plus payload-manifest digest; local checks plus separate release-operator confirmation of remote protection; control/tag excluded from payload manifest | `S1 P0` |
 | `ev.turntable.chr.<id>.neutral` | 9 sets | 8-angle still/contact sheet and full rotation | `S4 P1` |
@@ -747,6 +749,8 @@ The benchmark aggregate is `review/benchmark/PAYLOAD_MANIFEST.sha256`, not a sel
 | `ev.storyboard.panel.<01-18>` | 18 reviews | aspect, identity, anatomy, staging, palette, clean text, continuity | `S6 P3` |
 | `ev.storyboard.contact_sheet` | 1 high-res image | numbered sequence readable and animatable | `S6 P3` |
 | `ev.cert.native_gallery` | complete gallery | every environment, both battles, major UI, loading, closing hook | `S7 P0` |
+
+The six new support bindings do not add aggregate evidence IDs or rollups. Their canonical per-asset Gate 1–7 records and evidence manifests are owned through `ev.benchmark.gates`; each of the three model-subset records is `H2` and therefore includes first-in-engine plus two real native-capture polish revisions. The shared native/enlarged and uninterrupted-capture evidence must show Quarrune, Ayselor, Gyreclast, and Kivarrax together at the exact representative battle camera, with all four finished silhouettes, blob shadows, idle/reposition/hit behavior, target clearance, and UI legible.
 
 ### 16.1 Exact 37-package UI evidence map
 

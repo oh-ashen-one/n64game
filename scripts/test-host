@@ -5,5 +5,5 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p build/reports
-python3 -m unittest discover -s test/host -p 'test_*.py' -v
-printf 'suite=gate3_build_contract\nresult=PASS\nscope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest; gameplay suites begin at Gate 5\n' > build/reports/host-tests.txt
+/usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_*.py' -v
+printf 'suite=gate3_build_and_gate4_contracts\nresult=PASS\nscope=dependency pins, runtime manifest, ROM header parser, report contract, Gate 3 boot-capture manifest, Gate 4 lifecycle semantic snapshot and tamper suite (not approval evidence); gameplay suites begin at Gate 5\n' > build/reports/host-tests.txt

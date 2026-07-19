@@ -1,0 +1,19 @@
+{
+  "case": "release",
+  "release": {
+    "approval_ref": "refs/tags/n64game-visual-benchmark/aaaaaaaaaaaa",
+    "approval_signature_valid": true,
+    "approval_target_contains_control": true,
+    "artifact_name": "n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+    "asset_url": "https://github.com/oh-ashen-one/n64game/releases/download/n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+    "payload_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "public_build_head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_tag": "n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remote_tag_protection": true,
+    "repository": "oh-ashen-one/n64game",
+    "rom_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "rom_size_bytes": 8388608,
+    "tag_target_descends_from_payload": true
+  },
+  "schema": "n64game-asset-lifecycle-case-v1"
+}

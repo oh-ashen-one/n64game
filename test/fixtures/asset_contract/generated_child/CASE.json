@@ -1,0 +1,14 @@
+{
+  "case": "generated_child",
+  "schema": "n64game-asset-lifecycle-case-v1",
+  "transition": {
+    "after_status": "converted",
+    "before_status": "concept",
+    "child_id": "ASSET_CAMERA_SHOT_ANNEX_GROUP",
+    "current_head_matches_public": true,
+    "generated_registry": "review/generated/GENERATED_CHILD_GATE_REGISTRY.tsv",
+    "ledger_owner": "env.annex.atrium_lower",
+    "production_package_delta": 0,
+    "transition_commit": "CURRENT_PUBLIC_HEAD"
+  }
+}

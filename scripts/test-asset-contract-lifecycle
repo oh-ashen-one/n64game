@@ -1,0 +1,351 @@
+#!/usr/bin/python3 -I
+"""Offline, hash-bound semantic snapshots that never authorize benchmark approval."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+SCHEMA = "n64game-asset-lifecycle-case-v1"
+RECEIPT_SCHEMA = "n64game-asset-lifecycle-semantic-snapshots-v1"
+AUTHORITY = "NON_APPROVAL_SEMANTIC_SNAPSHOT"
+CASE_TOPOLOGY = "parallel_nonchronological_scenarios"
+CROSS_BINDINGS = ("approved->repair", "approved->release")
+CASES = (
+    "populated",
+    "approved",
+    "repair",
+    "generated_child",
+    "move_pair",
+    "h2",
+    "release",
+)
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+SAFE_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+class FixtureError(RuntimeError):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise FixtureError(message)
+
+
+def exact_keys(value: dict[str, object], expected: set[str], label: str) -> None:
+    require(isinstance(value, dict), f"{label} must be an object")
+    require(set(value) == expected, f"{label} keys differ from the audited schema")
+
+
+def exact_json_value(actual: object, expected: object) -> bool:
+    """Compare decoded JSON without Python's bool/int or int/float coercions."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            exact_json_value(actual[key], expected[key]) for key in expected
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            exact_json_value(left, right) for left, right in zip(actual, expected)
+        )
+    return actual == expected
+
+
+def plain_int(value: object) -> bool:
+    return type(value) is int
+
+
+def hex_text(value: object, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def canonical_json(path: Path) -> dict[str, object]:
+    require(path.is_file() and not path.is_symlink(), f"fixture is missing, non-regular, or symlinked: {path}")
+    raw = path.read_bytes()
+    require(raw.endswith(b"\n") and not raw.endswith(b"\n\n"), f"fixture must have one final LF: {path}")
+    require(b"\r" not in raw and not raw.startswith(b"\xef\xbb\xbf"), f"fixture encoding is noncanonical: {path}")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise FixtureError(f"fixture is not canonical UTF-8 JSON: {path}: {error}") from error
+    canonical = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    require(raw == canonical, f"fixture JSON is not byte-canonical: {path}")
+    require(isinstance(value, dict), f"fixture root must be an object: {path}")
+    return value
+
+
+def validate_common(value: dict[str, object], case_name: str, extra_keys: set[str]) -> None:
+    exact_keys(value, {"case", "schema", *extra_keys}, case_name)
+    require(value["schema"] == SCHEMA, f"{case_name} schema mismatch")
+    require(value["case"] == case_name, f"{case_name} identity mismatch")
+
+
+def validate_populated(value: dict[str, object]) -> None:
+    validate_common(value, "populated", {"aggregate_pairs", "control", "whitelist_row"})
+    require(
+        exact_json_value(
+            value["aggregate_pairs"],
+            ["evidence", "payload", "recipe", "rollup.player", "rollup.presentation", "rollup.quarrune", "rollup.sector", "whitelist"],
+        ),
+        "populated aggregate-pair set is incomplete or unsorted",
+    )
+    control = value["control"]
+    exact_keys(control, {"decision", "lock", "prior_baseline", "public_payload_commit_bound", "status"}, "populated control")
+    require(
+        exact_json_value(
+            control,
+            {
+            "decision": "PENDING",
+            "lock": "LOCKED",
+            "prior_baseline": "NONE",
+            "public_payload_commit_bound": True,
+            "status": "Gate 4 control record",
+            },
+        ),
+        "populated control does not remain fail-closed",
+    )
+    row = value["whitelist_row"]
+    exact_keys(row, {"basis", "gates", "output_manifest", "production_id", "source_manifest", "state", "subset_sha256"}, "populated whitelist row")
+    require(row["basis"] == "WB-001" and row["production_id"] == "chr.player.ari", "populated whitelist binding mismatch")
+    require(row["state"] == "AUTHORIZED" and exact_json_value(row["gates"], ["PASS", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING", "PENDING"]), "populated gate vector mismatch")
+    require(row["output_manifest"] == "NONE", "pre-conversion populated row must have no output manifest")
+    require(
+        isinstance(row["source_manifest"], str)
+        and re.fullmatch(
+            r"assets-src/chr/chr\.player\.ari/SOURCE_MANIFEST\.sha256@[0-9a-f]{64}",
+            row["source_manifest"],
+        )
+        is not None,
+        "populated source manifest binding is missing",
+    )
+    require(hex_text(row["subset_sha256"], HEX64), "populated subset digest is malformed")
+
+
+def validate_approved(value: dict[str, object]) -> None:
+    validate_common(value, "approved", {"control", "counts", "identity"})
+    control = value["control"]
+    exact_keys(control, {"decision", "defects", "lock", "prior_baseline", "status"}, "approved control")
+    require(exact_json_value(control, {"decision": "APPROVED", "defects": {"critical": 0, "high": 0, "medium": 0}, "lock": "UNLOCKED", "prior_baseline": "NONE", "status": "Gate 4 approved control record"}), "approved control tuple mismatch")
+    counts = value["counts"]
+    exact_keys(counts, {"integrated_rollups", "total_gate_decisions", "whitelist_vectors"}, "approved counts")
+    require(exact_json_value(counts, {"integrated_rollups": 4, "total_gate_decisions": 392, "whitelist_vectors": 52}), "approved coverage counts mismatch")
+    identity = value["identity"]
+    exact_keys(identity, {"approval_ref", "build_id", "payload_commit", "payload_manifest_sha256", "registry_sha256", "release_asset_url", "release_tag", "rom_sha256", "rom_size_bytes"}, "approved identity")
+    payload = identity["payload_commit"]
+    require(hex_text(payload, HEX40), "approved payload commit is malformed")
+    require(hex_text(identity["payload_manifest_sha256"], HEX64) and hex_text(identity["registry_sha256"], HEX64), "approved payload/registry digest is malformed")
+    require(hex_text(identity["rom_sha256"], HEX64) and plain_int(identity["rom_size_bytes"]) and 0 < identity["rom_size_bytes"] < 16 * 1024 * 1024, "approved ROM identity is malformed")
+    require(identity["approval_ref"] == f"refs/tags/n64game-visual-benchmark/{payload[:12]}", "approved attestation ref is not payload-derived")
+    require(identity["release_tag"] == f"n64game-benchmark-{payload}", "approved release tag is not payload-derived")
+    require(identity["release_asset_url"] == f"https://github.com/oh-ashen-one/n64game/releases/download/{identity['release_tag']}/n64game-{payload}.z64", "approved release URL is not canonical")
+    require(isinstance(identity["build_id"], str) and re.fullmatch(r"benchmark-[a-z0-9._-]+", identity["build_id"]) is not None, "approved build ID is malformed")
+
+
+def validate_repair(value: dict[str, object]) -> None:
+    validate_common(value, "repair", {"control", "prior", "repair_rows"})
+    require(exact_json_value(value["control"], {"decision": "REVIEW_REQUIRED", "lock": "LOCKED", "new_activation_allowed": False}), "repair control must fail closed")
+    prior = value["prior"]
+    exact_keys(prior, {"control_commit", "payload_commit", "payload_manifest_sha256", "registry_sha256", "tag_object", "tag_ref"}, "repair prior baseline")
+    require(all(hex_text(prior[key], HEX40) for key in ("control_commit", "payload_commit", "tag_object")), "repair prior commit identity is malformed")
+    require(all(hex_text(prior[key], HEX64) for key in ("payload_manifest_sha256", "registry_sha256")), "repair prior digest is malformed")
+    require(len({prior["control_commit"], prior["payload_commit"], prior["tag_object"]}) == 3, "repair prior control/payload/tag object identities are not distinct")
+    require(prior["tag_ref"] == f"refs/tags/n64game-visual-benchmark/{prior['payload_commit'][:12]}", "repair baseline tag mismatch")
+    rows = value["repair_rows"]
+    require(isinstance(rows, list) and len(rows) == 1, "repair fixture must return exactly one row")
+    row = rows[0]
+    exact_keys(row, {"affected_gate", "basis", "defect_id", "new_authorization_sha256", "no_new_activation", "stable_owner_paths", "state", "unaffected_rows_byte_identical"}, "repair row")
+    require(row["basis"] == "WB-002" and row["affected_gate"] == "G6" and row["defect_id"] == "DEF-NATIVE-001", "repair return token mismatch")
+    require(row["state"] == "REPAIR_ONLY" and row["stable_owner_paths"] is True and row["unaffected_rows_byte_identical"] is True and row["no_new_activation"] is True, "repair row widens authority")
+    require(hex_text(row["new_authorization_sha256"], HEX64), "repair authorization digest is malformed")
+
+
+def validate_generated_child(value: dict[str, object]) -> None:
+    validate_common(value, "generated_child", {"transition"})
+    transition = value["transition"]
+    exact_keys(transition, {"after_status", "before_status", "child_id", "current_head_matches_public", "generated_registry", "ledger_owner", "production_package_delta", "transition_commit"}, "generated-child transition")
+    require(transition["child_id"] == "ASSET_CAMERA_SHOT_ANNEX_GROUP", "generated child is outside the frozen camera-child domain")
+    require(transition["before_status"] == "concept" and transition["after_status"] == "converted", "generated child transition skips or reverses the lifecycle")
+    require(transition["transition_commit"] == "CURRENT_PUBLIC_HEAD" and transition["current_head_matches_public"] is True, "generated child is not bound to public HEAD")
+    require(transition["generated_registry"] == "review/generated/GENERATED_CHILD_GATE_REGISTRY.tsv" and transition["ledger_owner"] == "env.annex.atrium_lower", "generated child ownership mismatch")
+    require(plain_int(transition["production_package_delta"]) and transition["production_package_delta"] == 0, "generated child incorrectly adds a production package")
+
+
+def validate_move_pair(value: dict[str, object]) -> None:
+    validate_common(value, "move_pair", {"pair"})
+    pair = value["pair"]
+    exact_keys(pair, {"capture", "children", "pair_proof", "sync_error_ms"}, "move pair")
+    require(pair["pair_proof"] == "review/pairs/quarrune.ridge_ram/PAIR_SYNC_PROOF.tsv" and plain_int(pair["sync_error_ms"]) and 0 <= pair["sync_error_ms"] <= 33, "move-pair synchronization proof mismatch")
+    capture = pair["capture"]
+    require(exact_json_value(capture, {"aspect": "4:3", "audio": True, "codec": "h264", "fps": 30}), "move-pair capture contract mismatch")
+    children = pair["children"]
+    require(isinstance(children, list) and len(children) == 2, "move pair must contain exactly two children")
+    ids = [child.get("asset_id") for child in children]
+    require(ids == ["sfx.move.quarrune.ridge_ram", "vfx.move.quarrune.ridge_ram"], "move-pair children are not canonical suffix siblings")
+    for child in children:
+        exact_keys(child, {"asset_id", "evidence_sha256", "gates", "source_sha256", "status"}, "move-pair child")
+        require(child["status"] == "approved" and exact_json_value(child["gates"], ["PASS"] * 7), "move-pair child is not independently approved")
+        require(hex_text(child["source_sha256"], HEX64) and hex_text(child["evidence_sha256"], HEX64), "move-pair child digest is malformed")
+    child_hashes = [child[key] for child in children for key in ("source_sha256", "evidence_sha256")]
+    require(len(set(child_hashes)) == 4, "move-pair children improperly share source/evidence")
+
+
+def validate_h2(value: dict[str, object]) -> None:
+    validate_common(value, "h2", {"scope"})
+    scope = value["scope"]
+    exact_keys(scope, {"final_g6_revalidated", "final_gate", "phases", "polish_passes", "scope_id", "tier"}, "H2 scope")
+    require(scope["scope_id"] == "echo.quarrune" and scope["tier"] == "H2" and plain_int(scope["polish_passes"]) and scope["polish_passes"] == 2, "H2 scope identity/pass count mismatch")
+    require(scope["final_g6_revalidated"] is True and scope["final_gate"] == "G7_PASS", "H2 scope reaches G7 without final G6")
+    phases = scope["phases"]
+    expected_names = ["first_in_engine", "polish_1_before", "polish_1_after", "polish_2_before", "polish_2_after"]
+    require(isinstance(phases, list) and [phase.get("name") for phase in phases] == expected_names, "H2 phase sequence mismatch")
+    for index, phase in enumerate(phases, start=1):
+        exact_keys(phase, {"capture_sha256", "commit", "name", "order", "output_sha256", "source_sha256"}, f"H2 phase {index}")
+        require(plain_int(phase["order"]) and phase["order"] == index and hex_text(phase["commit"], HEX40), "H2 phase order/commit mismatch")
+        require(all(hex_text(phase[key], HEX64) for key in ("capture_sha256", "output_sha256", "source_sha256")), "H2 phase digest is malformed")
+    require(phases[0]["source_sha256"] == phases[1]["source_sha256"] and phases[0]["output_sha256"] == phases[1]["output_sha256"], "H2 first-engine baseline is not polish-1 before state")
+    require(phases[2]["source_sha256"] == phases[3]["source_sha256"] and phases[2]["output_sha256"] == phases[3]["output_sha256"], "H2 polish-1 after is not polish-2 before state")
+    require(phases[0]["commit"] == phases[1]["commit"], "H2 first-engine baseline commit is not polish-1 before commit")
+    require(phases[2]["commit"] == phases[3]["commit"], "H2 polish-1 after commit is not polish-2 before commit")
+    require(
+        phases[1]["commit"] != phases[2]["commit"] and phases[3]["commit"] != phases[4]["commit"],
+        "H2 polish pass commit transition is not strict",
+    )
+    require(len({phase["commit"] for phase in phases}) == 3, "H2 polish phase commit chain cycles or aliases")
+    require(phases[1]["source_sha256"] != phases[2]["source_sha256"] or phases[1]["output_sha256"] != phases[2]["output_sha256"], "H2 polish pass 1 makes no material change")
+    require(phases[3]["source_sha256"] != phases[4]["source_sha256"] or phases[3]["output_sha256"] != phases[4]["output_sha256"], "H2 polish pass 2 makes no material change")
+    require(len({phase["capture_sha256"] for phase in phases}) == 5, "H2 phase captures are not distinct")
+
+
+def validate_release(value: dict[str, object]) -> None:
+    validate_common(value, "release", {"release"})
+    release = value["release"]
+    exact_keys(release, {"approval_ref", "approval_signature_valid", "approval_target_contains_control", "artifact_name", "asset_url", "payload_commit", "public_build_head", "release_tag", "remote_tag_protection", "repository", "rom_sha256", "rom_size_bytes", "tag_target_descends_from_payload"}, "release")
+    payload = release["payload_commit"]
+    require(hex_text(payload, HEX40) and release["public_build_head"] == payload, "release is not built from the payload commit")
+    require(release["repository"] == "oh-ashen-one/n64game", "release repository mismatch")
+    require(release["release_tag"] == f"n64game-benchmark-{payload}" and release["artifact_name"] == f"n64game-{payload}.z64", "release tag/artifact derivation mismatch")
+    require(release["asset_url"] == f"https://github.com/{release['repository']}/releases/download/{release['release_tag']}/{release['artifact_name']}", "release asset URL mismatch")
+    require(release["approval_ref"] == f"refs/tags/n64game-visual-benchmark/{payload[:12]}", "release approval ref mismatch")
+    require(release["approval_signature_valid"] is True and release["approval_target_contains_control"] is True and release["tag_target_descends_from_payload"] is True and release["remote_tag_protection"] is True, "release attestation/protection proof is incomplete")
+    require(hex_text(release["rom_sha256"], HEX64) and plain_int(release["rom_size_bytes"]) and 0 < release["rom_size_bytes"] < 16 * 1024 * 1024, "release ROM identity is malformed")
+
+
+def validate_suite_bindings(values: dict[str, dict[str, object]]) -> None:
+    approved = values["approved"]["identity"]
+    repair = values["repair"]["prior"]
+    release = values["release"]["release"]
+    require(
+        repair["payload_commit"] == approved["payload_commit"]
+        and repair["payload_manifest_sha256"] == approved["payload_manifest_sha256"]
+        and repair["registry_sha256"] == approved["registry_sha256"]
+        and repair["tag_ref"] == approved["approval_ref"],
+        "repair baseline is not the exact approved fixture identity",
+    )
+    require(
+        release["payload_commit"] == approved["payload_commit"]
+        and release["public_build_head"] == approved["payload_commit"]
+        and release["approval_ref"] == approved["approval_ref"]
+        and release["release_tag"] == approved["release_tag"]
+        and release["asset_url"] == approved["release_asset_url"]
+        and release["rom_sha256"] == approved["rom_sha256"]
+        and release["rom_size_bytes"] == approved["rom_size_bytes"],
+        "release is not the exact approved fixture identity",
+    )
+
+
+VALIDATORS = {
+    "populated": validate_populated,
+    "approved": validate_approved,
+    "repair": validate_repair,
+    "generated_child": validate_generated_child,
+    "move_pair": validate_move_pair,
+    "h2": validate_h2,
+    "release": validate_release,
+}
+
+
+def validate_manifest(manifest: Path, root: Path) -> str:
+    expected_manifest = root / "test/fixtures/asset_contract/LIFECYCLE_SNAPSHOT_MANIFEST.sha256"
+    require(manifest.is_file() and not manifest.is_symlink(), "fixture manifest is missing, non-regular, or symlinked")
+    require(manifest.resolve() == expected_manifest.resolve(), "fixture manifest path is noncanonical")
+    raw = manifest.read_bytes()
+    require(raw.endswith(b"\n") and not raw.endswith(b"\n\n") and b"\r" not in raw, "fixture manifest line endings are noncanonical")
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+    lines = raw.decode("utf-8").splitlines()
+    runner_path = "scripts/test-asset-contract-lifecycle"
+    case_paths = {name: f"test/fixtures/asset_contract/{name}/CASE.json" for name in CASES}
+    expected_paths = sorted([runner_path, *case_paths.values()])
+    require(len(lines) == len(expected_paths), "fixture manifest must own exactly runner plus seven cases")
+    observed_paths: list[str] = []
+    observed_roles: list[str] = []
+    for index, line in enumerate(lines):
+        fields = line.split("\t")
+        require(len(fields) == 6, f"fixture manifest row {index + 1} must have six TAB fields")
+        member_path, byte_count, digest, build, capture, role = fields
+        require(SAFE_PATH.fullmatch(member_path) and ".." not in member_path.split("/"), f"fixture manifest path is unsafe: {member_path}")
+        require(byte_count == str(int(byte_count)) and not (byte_count.startswith("0") and byte_count != "0"), f"fixture manifest count is noncanonical: {member_path}")
+        require(HEX64.fullmatch(digest) and build == "build:-" and capture == "capture:-", f"fixture manifest identity token is malformed: {member_path}")
+        member = root / member_path
+        require(member.is_file() and not member.is_symlink(), f"fixture member is missing, non-regular, or symlinked: {member_path}")
+        member_bytes = member.read_bytes()
+        require(len(member_bytes) == int(byte_count) and hashlib.sha256(member_bytes).hexdigest() == digest, f"fixture member digest/count mismatch: {member_path}")
+        observed_paths.append(member_path)
+        observed_roles.append(role)
+    expected_roles_by_path = {runner_path: "role:semantic_snapshot.runner"}
+    expected_roles_by_path.update(
+        {path: f"role:semantic_snapshot.{name}" for name, path in case_paths.items()}
+    )
+    expected_roles = [expected_roles_by_path[path] for path in expected_paths]
+    require(observed_paths == expected_paths, "fixture manifest members are not exact raw-byte path order")
+    require(observed_roles == expected_roles, "fixture manifest roles/order differ from the audited suite")
+    fixture_root = root / "test/fixtures/asset_contract"
+    observed_files = sorted(path.relative_to(root).as_posix() for path in fixture_root.rglob("*") if path.is_file() or path.is_symlink())
+    expected_files = sorted([expected_manifest.relative_to(root).as_posix(), *case_paths.values()])
+    require(observed_files == expected_files, "fixture root contains missing, extra, or symlinked files")
+    runner = root / runner_path
+    require(os.access(runner, os.X_OK), "fixture runner is not executable")
+    values: dict[str, dict[str, object]] = {}
+    for case_name in CASES:
+        value = canonical_json(root / case_paths[case_name])
+        VALIDATORS[case_name](value)
+        values[case_name] = value
+    validate_suite_bindings(values)
+    return manifest_sha256
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--fixture-manifest", required=True)
+    arguments = parser.parse_args()
+    require(arguments.json, "--json is required")
+    root = Path(__file__).resolve().parents[1]
+    manifest_sha256 = validate_manifest(Path(arguments.fixture_manifest), root)
+    receipt = {
+        "schema": RECEIPT_SCHEMA,
+        "authority": AUTHORITY,
+        "result": "PASS",
+        "manifest_sha256": manifest_sha256,
+        "cases": list(CASES),
+        "topology": CASE_TOPOLOGY,
+        "cross_bindings": list(CROSS_BINDINGS),
+    }
+    sys.stdout.write(json.dumps(receipt, separators=(",", ":")) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except FixtureError as error:
+        print(f"asset lifecycle semantic snapshot failure: {error}", file=sys.stderr)
+        raise SystemExit(1)

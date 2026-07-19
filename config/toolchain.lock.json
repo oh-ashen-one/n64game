@@ -49,8 +49,42 @@
   },
   "authoring": {
     "blender_target": "4.5.11 LTS",
+    "blender_macos_arm64": {
+      "version": "4.5.11 LTS",
+      "version_tuple": [
+        4,
+        5,
+        11
+      ],
+      "build_hash": "4db51e9d1e1e",
+      "build_platform": "Darwin",
+      "release_asset_url": "https://download.blender.org/release/Blender4.5/blender-4.5.11-macos-arm64.dmg",
+      "release_asset_size": 308255028,
+      "release_asset_sha256": "1fad76c7da9451c7d6db99f1a5ed3c0a1a461d0aa07bf2b639e2fb4804ca4f13",
+      "executable_size": 175667888,
+      "executable_sha256": "8156431a9b9ec1daf49bccea4bd92f327f6efc1ca330d5103881580f3e7773ef",
+      "bundle_identifier": "org.blenderfoundation.blender",
+      "codesign_team_identifier": "68UA947AUU",
+      "macos_user_relative_path": "Applications/Blender-4.5.11.app/Contents/MacOS/Blender"
+    },
     "fast64_version": "2.5.3",
-    "fast64_commit": "8e9630c11824a9c00e9379279d43c64264eda87e"
+    "fast64_commit": "8e9630c11824a9c00e9379279d43c64264eda87e",
+    "fast64": {
+      "version": "2.5.3",
+      "tag": "v2.5.3",
+      "commit": "8e9630c11824a9c00e9379279d43c64264eda87e",
+      "repository": "https://github.com/Fast-64/fast64.git",
+      "release_url": "https://github.com/Fast-64/fast64/releases/tag/v2.5.3",
+      "release_asset_url": "https://github.com/Fast-64/fast64/releases/download/v2.5.3/fast64-v2.5.3.zip",
+      "release_asset_size": 1882004,
+      "release_asset_sha256": "2a308e04ee591e328856e8dff5bbe5aa72f284873e874ba5aba5927831889010",
+      "blender_user_relative_path": "Library/Application Support/Blender/4.5/scripts/addons/fast64",
+      "source_tree_file_count": 226,
+      "source_tree_size": 10387545,
+      "source_tree_manifest_sha256": "14bb6c7b527ba364fa5e2a5011779ddd24c61f998c79c120f28d895d92e62e6b",
+      "source_tree_manifest_algorithm": "sha256-size-path-v1",
+      "source_tree_exclusions": []
+    }
   },
   "github_actions": {
     "checkout_v7_0_0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",

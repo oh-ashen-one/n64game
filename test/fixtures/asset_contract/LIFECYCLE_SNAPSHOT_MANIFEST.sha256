@@ -1,0 +1,8 @@
+scripts/test-asset-contract-lifecycle	22025	093316629bcc25e8a42c81498c315c8bf4710b1994bc7a61122e9454a83e0d60	build:-	capture:-	role:semantic_snapshot.runner
+test/fixtures/asset_contract/approved/CASE.json	1199	881b6393646da95565a03d29702ca47d4fccbe577ad5d4e0d9511f61a0048ab6	build:-	capture:-	role:semantic_snapshot.approved
+test/fixtures/asset_contract/generated_child/CASE.json	465	f2f60743d055b0ae5cb7c3cabb59c17a4340c0cf84393fd5dade5aa2786ff946	build:-	capture:-	role:semantic_snapshot.generated_child
+test/fixtures/asset_contract/h2/CASE.json	2306	c2171d1c1650da4617b7b652c4486f38104779549452b056894db8f7ae775a57	build:-	capture:-	role:semantic_snapshot.h2
+test/fixtures/asset_contract/move_pair/CASE.json	1198	c3a35134e051859378fae26601caa7e3cf0d54906a71c57e1e30c6aafe5f7f29	build:-	capture:-	role:semantic_snapshot.move_pair
+test/fixtures/asset_contract/populated/CASE.json	947	3b8f1edf793b83e89213974565facf148ce1caba311564e772816620ea65f5d7	build:-	capture:-	role:semantic_snapshot.populated
+test/fixtures/asset_contract/release/CASE.json	968	8cb13218758065865abd6351d9d0a7a954b29557780b08b6bd28a85e616fdbfe	build:-	capture:-	role:semantic_snapshot.release
+test/fixtures/asset_contract/repair/CASE.json	1021	23d4de83108ebff374a38e02721c5b526102435013cca49df8e65b5ce86fb4d2	build:-	capture:-	role:semantic_snapshot.repair

@@ -1,0 +1,29 @@
+{
+  "case": "repair",
+  "control": {
+    "decision": "REVIEW_REQUIRED",
+    "lock": "LOCKED",
+    "new_activation_allowed": false
+  },
+  "prior": {
+    "control_commit": "cccccccccccccccccccccccccccccccccccccccc",
+    "payload_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "payload_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "registry_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "tag_object": "abababababababababababababababababababab",
+    "tag_ref": "refs/tags/n64game-visual-benchmark/aaaaaaaaaaaa"
+  },
+  "repair_rows": [
+    {
+      "affected_gate": "G6",
+      "basis": "WB-002",
+      "defect_id": "DEF-NATIVE-001",
+      "new_authorization_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+      "no_new_activation": true,
+      "stable_owner_paths": true,
+      "state": "REPAIR_ONLY",
+      "unaffected_rows_byte_identical": true
+    }
+  ],
+  "schema": "n64game-asset-lifecycle-case-v1"
+}

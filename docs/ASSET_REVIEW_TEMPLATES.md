@@ -807,7 +807,7 @@ The populated control record is always `docs/VISUAL_BENCHMARK_APPROVAL.md`; do n
 
 For any post-approval review, first apply Art Bible section 16.7. Confirm the worktree/index is completely clean; local and credential-free public default `HEAD` are identical; the signed approval target is an ancestor; no ROM extension is tracked/staged; and unchanged history matches all 15 ledger cells plus current referenced bytes. If anything changes, require direct current ledger/inventory ownership by `review/production/PAYLOAD_MANIFEST.sha256`, no workflow member, `SHA256("FULL_PRODUCTION")` plus `subset_allowlist: NONE` for each changed/new active row, and exact pair/generated controls with no special-namespace extras. Validate and scan the public commit, not mutable worktree bytes.
 
-- [ ] Every pre-approval final source/output is inside the exact 46-production-ID canonical whitelist and exact permitted sector/clip/state/cue list, with a populated unique `WB-###` basis, explicit ledger row, Gate 1 pass hash, canonical source-manifest `path@SHA-256`, and canonical output-manifest `path@SHA-256` or literal `NONE` matching the files.
+- [ ] Every pre-approval final source/output is inside the exact 52-production-ID canonical whitelist and exact permitted sector/clip/state/cue/asset list, with a populated unique `WB-###` basis, explicit ledger row, Gate 1 pass hash, canonical source-manifest `path@SHA-256`, and canonical output-manifest `path@SHA-256` or literal `NONE` matching the files.
 - [ ] `env.annex.sim_chamber` and the other three `env.annex.atrium_lower` sectors remain final-production locked.
 - [ ] Every whitelist production ID has exactly one inventory-resolving explicit ledger row, complete provenance/input rights/transformations/retrievable source, deterministic profile/tier, current gate vector, and canonical evidence-manifest state.
 - [ ] The exact eight `present.*` labels are non-owning `alias_of`; any BOM alias has only the ordered owner list and `payload_bytes=0`, with offset/path/hash/compression/source/creator/rights/license/provenance/status/gates/evidence literal `NONE`, and contributes no payload/count/deduplication input.
@@ -817,6 +817,8 @@ For any post-approval review, first apply Art Bible section 16.7. Confirm the wo
 - [ ] Exact final room sector: ceramic brace, teal service cage, floor change, warm practical, cool ambient, simulation-facing doorway, signage glyphs, complete scoped collision/camera volumes, and at least five purposeful prop instances.
 - [ ] Final player model: exploration idle, walk, run, interaction, and dialogue gesture.
 - [ ] Final Quarrune: idle A/B, entrance, one attack, one support, hit, knockout, and Horizon Break participation preview.
+- [ ] Ayselor, Gyreclast, and Kivarrax are fully finished supporting battle-distance silhouettes using only each exact final distance model, texture, rig, blob shadow, `idle_a`, `reposition`, and `hit`; Quarrune remains the only hero Echoform, and no supporting hero mesh, other clip, move VFX/audio, portrait, vocal, or full-package output exists pre-approval.
+- [ ] Each supporting `echo.* / RIGGED_MODEL / H2` subset has its own seven decisions, independently reviewed first-in-engine checkpoint, two real polish revisions, and final Gate-6 revalidation; each paired `anm.echo.* / ANIMATION / M7` subset has its own seven decisions and exact three-clip evidence.
 - [ ] Four-actor battle footprints and representative target cursor, HP, move list, affinity cue, and shared Resonance meter.
 - [ ] One complete ordinary hit VFX and Horizon Break braid core with synchronized original/licensed review audio.
 - [ ] Final texture conversion, vertex color, lighting, fog, art-bible display grade, blob shadows, loading transition, dialogue panel, and Field Relay motif.
@@ -826,7 +828,7 @@ For any post-approval review, first apply Art Bible section 16.7. Confirm the wo
 
 `review/benchmark/PAYLOAD_MANIFEST.sha256` uses the canonical section-16.3 grammar. It covers the first 14 substantive evidence records through non-cyclic members/subordinate manifests. It excludes `docs/VISUAL_BENCHMARK_APPROVAL.md` and `ev.benchmark.approval`; the fifteenth record is a signed annotated origin-tag attestation pointing to the commit containing the populated control and attesting the separate payload commit/digest. The local validator checks the tag's origin presence, object, signature/signer, exact five-line attested text, and target/control; it cannot infer remote-host protection, which the release operator must confirm separately. The tag/control are never members of the payload graph, so no direct or transitive self-hash exists. Path alone is invalid.
 
-The payload also owns exact `WHITELIST_GATE_REGISTRY.tsv`, `BENCHMARK_EVIDENCE_REGISTRY.tsv`, `ROM_BUILD_RECIPE.tsv`, parsed gate records, and every ordinary/LFS member those records bind. Validate Art Bible sections 16.4–16.5: exact headers/row counts/order; one global path/hash/capture owner; 46 subset/build/state/repair/seven-gate bindings; 14 evidence manifests/measurement records/role-count-build-capture sets; and all objective/rubric metric references. A URL/release locator is never review evidence and `PASS` text alone proves nothing.
+The payload also owns exact `WHITELIST_GATE_REGISTRY.tsv`, `BENCHMARK_EVIDENCE_REGISTRY.tsv`, `ROM_BUILD_RECIPE.tsv`, parsed gate records, and every ordinary/LFS member those records bind. Validate Art Bible sections 16.4–16.5: exact headers/row counts/order; one global path/hash/capture owner; 52 subset/build/state/repair/seven-gate bindings; 14 evidence manifests/measurement records/role-count-build-capture sets; and all objective/rubric metric references. A URL/release locator is never review evidence and `PASS` text alone proves nothing.
 
 - [ ] Every objective/rubric reference is sorted canonical `ev.benchmark.<id>#<metric>`, resolves to a parsed measurement row/member, and has a nonempty reviewer observation.
 - [ ] Every advanced whitelist ledger row maps one-to-one to `AUTHORIZED`/exact-return `REPAIR_ONLY` and back; all registry paths/hashes/build/status/seven decisions match control and ledger.
@@ -838,7 +840,8 @@ The payload also owns exact `WHITELIST_GATE_REGISTRY.tsv`, `BENCHMARK_EVIDENCE_R
 - [ ] Pinned ffmpeg `8.1.2` fully decodes every representative MP4 frame to RGB24. Every `FRAME_AUDIT.tsv` index/start/duration/RGB hash matches the decoded frame, and duration, placeholder/sub-30, performance, five-category working set, warning, and unload/reload claims are recomputed from those rows. `MEASUREMENTS.tsv` value/unit pairs equal the canonical reports exactly.
 - [ ] `ARES_RUN.tsv` binds one run ID/build/ROM/Ares-148 binary/revision/Homebrew Mode/three RGBA16 framebuffers/wrapper/invocation/capture/frame-audit/execution-log tuple. The seven wrapper events are exact and monotonic, derive `BOOT_READY` from a child handshake, and end at child/final exit zero. Approval reruns the reviewed wrapper and receives the exact digest-bound JSON receipt; a human operator statement alone is not evidence.
 - [ ] Every native PNG report binding names one unique representative-video frame index and RGB SHA-256; full PNG decode equals that frame exactly. Enlarged PNGs are exact 4x nearest-neighbor derivatives. Reports use only pinned `n64game-evidence-analyzer` `1.0.0` at/after the run.
-- [ ] Gate 3 has replaced the fail-closed audited Ares-binary and full approval-lifecycle fixture-suite pins; the normal validator runs its deterministic hardening coverage test, and `--self-test-hardening` reports all telemetry/license/identity/G1-chain/camera-seal/unlock mutation cases passing.
+- [x] Gate 3 pins the audited Ares binary to `7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345`. The local-only lifecycle semantic snapshot/tamper suite is independently pinned to `e0b0e632f7ebd49f48fd8e8a4cd94c682cf9e6d0d0cd3addbf05fb42c84622b0`, byte-verified, run through `/usr/bin/python3 -I`, and emits exact `NON_APPROVAL_SEMANTIC_SNAPSHOT` authority; it cannot authorize a row or enter benchmark evidence.
+- [ ] Implement, commit, pin, and independently audit a production-validator lifecycle harness that drives the real populated/approved/repair/generated-child/move-pair/H2/release paths. Until its verifier exists, `PRODUCTION_LIFECYCLE_HARNESS_SHA256` remains `PENDING`, a typed digest cannot bypass the explicit verifier error, and `APPROVED` remains unreachable.
 - [ ] ROM is ignored/untracked and absent from Git/LFS. Local, fresh-public-clone build, successful public workflow run, same-repo release API/download, size/header/SHA, and build ID all match.
 - [ ] SSH annotated tag suffix equals payload prefix; public origin object/peeled target equal local; payload is an ancestor and fresh-clone reachable; exact message verifies against the Gate-2-pinned ED25519 public key. Private signing material remains external/uncommitted.
 
@@ -856,7 +859,7 @@ The payload also owns exact `WHITELIST_GATE_REGISTRY.tsv`, `BENCHMARK_EVIDENCE_R
 | `ev.benchmark.capture_60s` | uninterrupted representative capture | | | |
 | `ev.benchmark.performance` | frame/heap/batch/particle/working-set report | | | |
 | `ev.benchmark.unload_reload` | exact baseline-return trace | | | |
-| `ev.benchmark.gates` | 46 benchmark-scope seven-decision vectors plus player/Quarrune/sector/integrated-presentation rollups; partial package is not final package approval | | | |
+| `ev.benchmark.gates` | 52 benchmark-scope seven-decision vectors plus player/hero-Quarrune/sector/integrated-presentation rollups; six paired support-model/animation rows remain partial packages | | | |
 | `ev.benchmark.authorship` | nine-category rubric/reference calibration | | | |
 | `ev.benchmark.approval` | signed non-self-referential origin-tag attestation; tag target contains populated control and message attests separate 40-hex payload commit plus payload-manifest digest; remote protection confirmed separately | external tag ref/signature, not payload member | | |
 
@@ -866,7 +869,7 @@ The payload also owns exact `WHITELIST_GATE_REGISTRY.tsv`, `BENCHMARK_EVIDENCE_R
 |---|---|---|---|
 | Frame rate | 30 FPS target met in representative views | | |
 | Peak free heap | at least 512 KiB | | |
-| Native readability | player, route, target, action, UI all clear | | |
+| Native readability | player/route plus Quarrune, Ayselor, Gyreclast, and Kivarrax positions, silhouettes, blob shadows, target, action, result, and UI all clear | | |
 | Originality | no recognizable protected design/expression | | |
 | Asset completeness | no placeholder/default/incomplete visible face | | |
 | Conversion | zero unexplained warnings | | |
@@ -923,7 +926,7 @@ Use after individual Gate 7 passes to catch missing coverage and integration dri
 | Storyboard panels/package | 18 + package | | | | | |
 | Generated camera-shot children | 15 `C7` IDs with exact parent/BOM linkage and seven decisions before approval | | | | | |
 | Presentation aliases | exactly 8 closed `A0 present.*` aliases; zero ledger/source/output/gates/evidence/bytes/count/dedup ownership; BOM metadata has ordered owners, `payload_bytes=0`, every ownership field `NONE` | | | | | |
-| Visual benchmark control/evidence | one valid control record; exactly 46 whitelist production IDs and 15 benchmark evidence IDs before production unlock | | | | | |
+| Visual benchmark control/evidence | one valid control record; exactly 52 whitelist production IDs and 15 benchmark evidence IDs before production unlock | | | | | |
 | Converted BOM / bundle-size reports | 2 reports | | | | | |
 
 Batch acceptance requires zero missing canonical production ID, every ID assigned exactly one profile/tier, seven valid ordered decisions per production ID, both post-integration passes for every `H2`, zero critical/high/medium defect, complete input/output rights and transformation provenance, recomputable release-candidate evidence manifests, exact pair/UI/alias/child set equality, and no temporary content except canonical polished `ui.screen.cutscene_slate` exposed through non-owning `present.cutscene_slate`.

@@ -1,0 +1,31 @@
+{
+  "case": "approved",
+  "control": {
+    "decision": "APPROVED",
+    "defects": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0
+    },
+    "lock": "UNLOCKED",
+    "prior_baseline": "NONE",
+    "status": "Gate 4 approved control record"
+  },
+  "counts": {
+    "integrated_rollups": 4,
+    "total_gate_decisions": 392,
+    "whitelist_vectors": 52
+  },
+  "identity": {
+    "approval_ref": "refs/tags/n64game-visual-benchmark/aaaaaaaaaaaa",
+    "build_id": "benchmark-approved-fixture",
+    "payload_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "payload_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "registry_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "release_asset_url": "https://github.com/oh-ashen-one/n64game/releases/download/n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/n64game-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.z64",
+    "release_tag": "n64game-benchmark-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rom_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "rom_size_bytes": 8388608
+  },
+  "schema": "n64game-asset-lifecycle-case-v1"
+}
