@@ -183,16 +183,20 @@ class AuthoringReceiptAdapterTests(unittest.TestCase):
             "lib/n64game/tiny3d_package_contract.rb": 0o644,
             "config/toolchain.lock.json": 0o644,
             "scripts/check-authoring-stack": 0o755,
+            "scripts/export-gate5-asset": 0o755,
             "scripts/record-authoring-stack-receipt": 0o755,
             "tools/n64game_authoring.py": 0o644,
             "tools/n64game_authoring_receipt.py": 0o644,
+            "tools/n64game_gate5_export.py": 0o644,
         }
         checker_paths = sorted(
             (
                 "scripts/check-authoring-stack",
+                "scripts/export-gate5-asset",
                 "scripts/record-authoring-stack-receipt",
                 "tools/n64game_authoring.py",
                 "tools/n64game_authoring_receipt.py",
+                "tools/n64game_gate5_export.py",
             )
         )
         checker = hashlib.sha256(b"n64game-authoring-checker-bundle-v1\n")
@@ -377,9 +381,11 @@ class AuthoringReceiptAdapterTests(unittest.TestCase):
             "lib/n64game/tiny3d_package_contract.rb": "100644",
             "config/toolchain.lock.json": "100644",
             "scripts/check-authoring-stack": "100755",
+            "scripts/export-gate5-asset": "100755",
             "scripts/record-authoring-stack-receipt": "100755",
             "tools/n64game_authoring.py": "100644",
             "tools/n64game_authoring_receipt.py": "100644",
+            "tools/n64game_gate5_export.py": "100644",
         }
         for path, mode in root_paths.items():
             self.assertIn(f'"{path}" => "{mode}"', (ROOT / "lib/n64game/authoring_stack_receipt.rb").read_text(encoding="utf-8"))

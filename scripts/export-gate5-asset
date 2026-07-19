@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ -L "$0" ]; then
+  /bin/echo "Gate-5 exporter entrypoint must not be invoked through a symlink" >&2
+  exit 1
+fi
+SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && /bin/pwd -P)"
+ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && /bin/pwd -P)"
+exec /usr/bin/python3 -I -B "$ROOT/tools/n64game_gate5_export.py" "$@"

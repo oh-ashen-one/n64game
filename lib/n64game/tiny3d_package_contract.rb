@@ -57,12 +57,20 @@ module N64Game
     BLOB_SHADOW_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite".freeze
     BODY_TOP_REFERENCE = 0x51554230
     BODY_BOTTOM_REFERENCE = 0x51554231
+    # These bytes are the exact record emitted by the pinned Tiny3D writer for
+    # a Fast64 one-cycle, point-filtered TEX0 x SHADE material. The importer
+    # always owns the alpha-compare and sample-filter bits in OtherModeMask, so
+    # even opaque output carries bit zero in the mask (not in the value). Its
+    # g_fog=0 input serializes FogMode::DISABLED=1; FogMode::DEFAULT=0 is only
+    # the absence of rdp_settings, which would also force a two-cycle combiner.
+    # Explicit set_blend=0 plus a zero blend_color is required to suppress the
+    # importer's otherwise implicit blend alpha of 128.
     QUARRUNE_TEX_SHADE_COMBINER = 0x0012_1824_8833_FFFF
     QUARRUNE_OTHER_MODE_VALUE = 0x0000_0000_0000_0000
-    QUARRUNE_OTHER_MODE_MASK = 0x0000_3000_0000_0000
+    QUARRUNE_OTHER_MODE_MASK = 0x0000_3000_0000_0001
     QUARRUNE_BLEND_MODE = 0x0000_0000
     QUARRUNE_DRAW_FLAGS = 0x0000_0007
-    QUARRUNE_FOG_MODE = 0
+    QUARRUNE_FOG_MODE = 1
     QUARRUNE_COLOR_FLAGS = 0
     QUARRUNE_VERTEX_FX = 0
     QUARRUNE_MATERIAL_COLORS = [0, 0, 0, 0].freeze
@@ -429,7 +437,7 @@ module N64Game
                  material[:prim_color] == QUARRUNE_MATERIAL_COLORS &&
                  material[:env_color] == QUARRUNE_MATERIAL_COLORS &&
                  material[:blend_color] == QUARRUNE_MATERIAL_COLORS
-            raise ParseError, "#{path}: Quarrune material render state must exactly use TEX0 x SHADE, opaque blending, depth/textured/shaded flags, point filtering, default fog/colors, and ordinary UVs"
+            raise ParseError, "#{path}: Quarrune material render state must exactly use TEX0 x SHADE, opaque blending, depth/textured/shaded flags, point filtering, disabled fog/zero colors, and ordinary UVs"
           end
           texture_a
         end

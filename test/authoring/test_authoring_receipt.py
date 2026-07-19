@@ -352,13 +352,70 @@ class AuthoringReceiptTests(unittest.TestCase):
                 )
 
     def test_true_implementation_flag_still_requires_exact_nonpending_sha(self) -> None:
-        with mock.patch.object(receipt, "GATE5_EXPORT_IMPLEMENTED", True):
+        with (
+            mock.patch.object(receipt, "GATE5_EXPORT_IMPLEMENTED", True),
+            mock.patch.object(receipt, "APPROVED_GATE5_EXPORTER_SHA256", "PENDING"),
+        ):
             with self.assertRaisesRegex(receipt.AuthoringReceiptError, "approval SHA-256"):
                 receipt.run_checked_export(
                     [receipt.CANONICAL_GATE5_EXPORTER_PATH],
                     check=mock.Mock(),
                     run=mock.Mock(),
                 )
+
+    def test_gate5_export_command_injects_scope_and_build_and_forbids_override(self) -> None:
+        command = receipt.gate5_exporter_command(
+            "echo.quarrune", "n64game-g5-deadbeef", ["--deterministic"]
+        )
+        self.assertEqual(
+            command,
+            [
+                str(ROOT / receipt.CANONICAL_GATE5_EXPORTER_PATH),
+                "--scope", "echo.quarrune",
+                "--paired-scope", "anm.echo.quarrune",
+                "--build-id", "n64game-g5-deadbeef",
+                "--deterministic",
+            ],
+        )
+        for arguments in (
+            [],
+            ["--scope", "echo.ayselor", "--deterministic"],
+            ["--build-id", "other", "--deterministic"],
+            ["--deterministic", "--deterministic"],
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(receipt.AuthoringReceiptError):
+                receipt.gate5_exporter_command("echo.quarrune", "n64game-g5-deadbeef", arguments)
+        paired_command = receipt.gate5_exporter_command(
+            "anm.echo.quarrune", "n64game-g5-deadbeef", ["--deterministic"]
+        )
+        self.assertEqual(paired_command, command)
+        with self.assertRaisesRegex(receipt.AuthoringReceiptError, "Quarrune scope pair"):
+            receipt.gate5_exporter_command(
+                "echo.ayselor", "n64game-g5-deadbeef", ["--deterministic"]
+            )
+
+    def test_pair_export_command_injects_both_owners_and_replace_once(self) -> None:
+        self.assertEqual(
+            receipt.gate5_pair_exporter_command(
+                "echo.quarrune", "anm.echo.quarrune", "n64game-g5-deadbeef", replace=True
+            ),
+            [
+                str(ROOT / receipt.CANONICAL_GATE5_EXPORTER_PATH),
+                "--scope", "echo.quarrune",
+                "--paired-scope", "anm.echo.quarrune",
+                "--build-id", "n64game-g5-deadbeef",
+                "--deterministic",
+                "--replace",
+            ],
+        )
+        with self.assertRaisesRegex(receipt.AuthoringReceiptError, "only echo.quarrune"):
+            receipt.gate5_pair_exporter_command(
+                "echo.ayselor", "anm.echo.ayselor", "n64game-g5-deadbeef", replace=False
+            )
+        with self.assertRaisesRegex(receipt.AuthoringReceiptError, "requires --replace"):
+            receipt.gate5_pair_exporter_command(
+                "echo.quarrune", "anm.echo.quarrune", "n64game-g5-deadbeef", replace=False
+            )
 
     def test_explicitly_pinned_export_runs_between_two_equal_stack_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -388,6 +445,7 @@ class AuthoringReceiptTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args[0], 0)
 
             with (
+                mock.patch.object(receipt, "ROOT", root),
                 mock.patch.object(receipt, "GATE5_EXPORT_IMPLEMENTED", True),
                 mock.patch.object(
                     receipt, "APPROVED_GATE5_EXPORTER_SHA256", receipt.sha256_file(exporter)
@@ -534,6 +592,107 @@ class AuthoringReceiptTests(unittest.TestCase):
                 receipt.write_receipt(destination, b"second\n", root=root)
             receipt.write_receipt(destination, b"second\n", root=root, replace=True)
             self.assertEqual(destination.read_bytes(), b"second\n")
+
+    def test_paired_writer_rolls_back_both_receipts_on_promotion_fault(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "review" / "echo.quarrune" / "g5" / "AUTHORING_STACK_RECEIPT.txt"
+            second = root / "review" / "anm.echo.quarrune" / "g5" / "AUTHORING_STACK_RECEIPT.txt"
+            for path, payload in ((first, b"old-model\n"), (second, b"old-animation\n")):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(payload)
+            faulted = False
+
+            def replace_once(source: os.PathLike[str] | str, destination: os.PathLike[str] | str) -> None:
+                nonlocal faulted
+                if not faulted and Path(destination) == second:
+                    faulted = True
+                    raise OSError("controlled receipt fault")
+                os.replace(source, destination)
+
+            with self.assertRaisesRegex(receipt.AuthoringReceiptError, "rolled back"):
+                receipt.write_receipts_atomically(
+                    [(first, b"new-model\n"), (second, b"new-animation\n")],
+                    root=root,
+                    replace=True,
+                    replace_func=replace_once,
+                )
+            self.assertEqual(first.read_bytes(), b"old-model\n")
+            self.assertEqual(second.read_bytes(), b"old-animation\n")
+
+    def test_paired_writer_rolls_back_both_receipts_on_interruption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "review" / "echo.quarrune" / "g5" / "AUTHORING_STACK_RECEIPT.txt"
+            second = root / "review" / "anm.echo.quarrune" / "g5" / "AUTHORING_STACK_RECEIPT.txt"
+            for path, payload in ((first, b"old-model\n"), (second, b"old-animation\n")):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(payload)
+            interrupted = False
+
+            def interrupt_once(source: os.PathLike[str] | str, destination: os.PathLike[str] | str) -> None:
+                nonlocal interrupted
+                if not interrupted and Path(destination) == second:
+                    interrupted = True
+                    raise KeyboardInterrupt("controlled receipt interruption")
+                os.replace(source, destination)
+
+            with self.assertRaisesRegex(receipt.AuthoringReceiptError, "rolled back"):
+                receipt.write_receipts_atomically(
+                    [(first, b"new-model\n"), (second, b"new-animation\n")],
+                    root=root,
+                    replace=True,
+                    replace_func=interrupt_once,
+                )
+            self.assertEqual(first.read_bytes(), b"old-model\n")
+            self.assertEqual(second.read_bytes(), b"old-animation\n")
+
+    def test_paired_main_builds_two_receipts_from_one_checked_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scopes = ("echo.quarrune", "anm.echo.quarrune")
+            sources: dict[str, Path] = {}
+            outputs: dict[str, Path] = {}
+            destinations: dict[str, Path] = {}
+            for scope in scopes:
+                sources[scope] = root / "source" / scope / "SOURCE_MANIFEST.sha256"
+                outputs[scope] = root / "output" / scope / "OUTPUT_MANIFEST.sha256"
+                destinations[scope] = root / "receipt" / scope / "AUTHORING_STACK_RECEIPT.txt"
+                sources[scope].parent.mkdir(parents=True)
+                outputs[scope].parent.mkdir(parents=True)
+                sources[scope].write_bytes(("source:" + scope + "\n").encode())
+                outputs[scope].write_bytes(("output:" + scope + "\n").encode())
+            written: list[tuple[Path, bytes]] = []
+
+            def capture_write(records: list[tuple[Path, bytes]], **_kwargs: object) -> None:
+                written.extend(records)
+
+            with (
+                mock.patch.object(receipt, "GATE5_EXPORT_IMPLEMENTED", True),
+                mock.patch.object(receipt, "APPROVED_GATE5_EXPORTER_SHA256", "a" * 64),
+                mock.patch.object(receipt, "canonical_source_manifest", side_effect=lambda scope: sources[scope]),
+                mock.patch.object(receipt, "canonical_output_manifest", side_effect=lambda scope: outputs[scope]),
+                mock.patch.object(receipt, "canonical_receipt_path", side_effect=lambda scope, _gate: destinations[scope]),
+                mock.patch.object(receipt, "preflight_receipt_target"),
+                mock.patch.object(receipt, "require_repo_regular"),
+                mock.patch.object(receipt, "run_checked_export", return_value=self.stack_identity()) as checked,
+                mock.patch.object(receipt, "write_receipts_atomically", side_effect=capture_write),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                result = receipt.main([
+                    "g5-export-pair", "--scope", scopes[0], "--paired-scope", scopes[1],
+                    "--build-id", "n64game-g5-deadbeef", "--replace",
+                ])
+            self.assertEqual(result, 0)
+            command = checked.call_args.args[0]
+            self.assertEqual(command.count("--scope"), 1)
+            self.assertEqual(command.count("--paired-scope"), 1)
+            self.assertEqual([path for path, _payload in written], [destinations[value] for value in scopes])
+            rendered = [payload.decode("utf-8") for _path, payload in written]
+            self.assertIn("scope_id: echo.quarrune\n", rendered[0])
+            self.assertIn("scope_id: anm.echo.quarrune\n", rendered[1])
+            self.assertIn("build_id: n64game-g5-deadbeef\n", rendered[0])
+            self.assertIn("build_id: n64game-g5-deadbeef\n", rendered[1])
 
     def test_writer_rejects_parent_symlink_even_when_target_stays_inside_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
