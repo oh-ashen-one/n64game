@@ -365,6 +365,45 @@ class Gate5ExporterRealTests(unittest.TestCase):
             with self.assertRaisesRegex(gate5.Gate5ExportError, "differs from reviewed"):
                 gate5.validate_output_allowlists(broken, animation_rows, entries, candidate=False)
 
+    def test_final_output_allowlist_rejects_cross_owner_swapped_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            write_fixture(stage, fixture_contract.fixture())
+            entries = gate5.validate_staged_pair(stage, BUILD_ID, ROOT)
+            model_rows: list[gate5.AllowlistRow] = []
+            animation_rows: list[gate5.AllowlistRow] = []
+            for relative, entry in sorted(entries.items()):
+                scope = gate5.MODEL_SCOPE if relative in gate5.MODEL_ROLES else gate5.ANIMATION_SCOPE
+                row = gate5.AllowlistRow(
+                    scope, "a" * 64, "OUTPUT", relative, entry.digest, entry.role, ("OUTPUT:runtime",)
+                )
+                (model_rows if scope == gate5.MODEL_SCOPE else animation_rows).append(row)
+
+            swapped_model = list(model_rows)
+            swapped_animation = list(animation_rows)
+            model_row = swapped_model[0]
+            animation_row = swapped_animation[0]
+            swapped_model[0] = gate5.AllowlistRow(
+                model_row.production_id, model_row.subset_sha256, animation_row.stage,
+                animation_row.member_path, animation_row.member_sha256,
+                animation_row.manifest_role, animation_row.selectors,
+            )
+            swapped_animation[0] = gate5.AllowlistRow(
+                animation_row.production_id, animation_row.subset_sha256, model_row.stage,
+                model_row.member_path, model_row.member_sha256,
+                model_row.manifest_role, model_row.selectors,
+            )
+            self.assertEqual(
+                {row.member_path for row in (*swapped_model, *swapped_animation)},
+                set(gate5.MANAGED_OUTPUT_PATHS),
+            )
+            self.assertTrue(all(row.production_id == gate5.MODEL_SCOPE for row in swapped_model))
+            self.assertTrue(all(row.production_id == gate5.ANIMATION_SCOPE for row in swapped_animation))
+            with self.assertRaisesRegex(gate5.Gate5ExportError, "owner partition"):
+                gate5.validate_output_allowlists(
+                    swapped_model, swapped_animation, entries, candidate=False
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -556,13 +556,28 @@ def validate_output_allowlists(
     *,
     candidate: bool,
 ) -> None:
-    output_rows = [row for row in (*model_rows, *animation_rows) if row.stage == "OUTPUT"]
+    model_output_rows = [row for row in model_rows if row.stage == "OUTPUT"]
+    animation_output_rows = [row for row in animation_rows if row.stage == "OUTPUT"]
+    output_rows = [*model_output_rows, *animation_output_rows]
     if candidate:
         if output_rows:
             raise Gate5ExportError("--candidate requires source-only allowlists; partial/final OUTPUT authority is forbidden")
         return
-    if {row.member_path for row in output_rows} != set(MANAGED_OUTPUT_PATHS):
+    if len(output_rows) != len(MANAGED_OUTPUT_PATHS) or {
+        row.member_path for row in output_rows
+    } != set(MANAGED_OUTPUT_PATHS):
         raise Gate5ExportError("final Gate-5 export requires exact OUTPUT rows for every paired package member")
+    owner_partitions = (
+        (MODEL_SCOPE, model_output_rows, set(MODEL_ROLES)),
+        (ANIMATION_SCOPE, animation_output_rows, set(ANIMATION_ROLES)),
+    )
+    for scope, rows, expected_paths in owner_partitions:
+        if (
+            len(rows) != len(expected_paths)
+            or {row.member_path for row in rows} != expected_paths
+            or any(row.production_id != scope for row in rows)
+        ):
+            raise Gate5ExportError("final Gate-5 OUTPUT rows violate the exact model/animation owner partition")
     for row in output_rows:
         entry = staged_entries[row.member_path]
         if row.selectors != ("OUTPUT:runtime",):

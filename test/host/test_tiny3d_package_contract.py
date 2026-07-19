@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import struct
 import subprocess
 import tarfile
@@ -801,9 +802,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
             "animation_build_id": BUILD_ID,
         }
 
-    def test_pinned_importer_roundtrips_exact_producible_material_state(self) -> None:
-        build_root = ROOT / "build"
-        build_root.mkdir(parents=True, exist_ok=True)
+    def build_pinned_importer(self, stage: Path) -> Path:
         vendor = ROOT / "vendor" / "tiny3d"
         archive = subprocess.run(
             ["/usr/bin/git", "-C", str(vendor), "archive", "--format=tar", TINY3D_COMMIT,
@@ -814,23 +813,164 @@ class Tiny3DPackageContractTests(unittest.TestCase):
             env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
         )
         self.assertEqual(archive.returncode, 0, archive.stderr.decode(errors="replace"))
-        with tempfile.TemporaryDirectory(prefix="tiny3d-material-", dir=build_root) as temporary:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as source:
+            source.extractall(stage)
+        importer_dir = stage / "tools" / "gltf_importer"
+        completed = subprocess.run(
+            ["/usr/bin/make", "-C", str(importer_dir), "-j2"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=300,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        importer = importer_dir / "gltf_to_t3d"
+        self.assertTrue(importer.is_file())
+        return importer
+
+    def require_pinned_blender(self) -> Path:
+        lock = json.loads((ROOT / "config/toolchain.lock.json").read_text(encoding="utf-8"))
+        pin = lock["authoring"]["blender_macos_arm64"]
+        override = os.environ.get("N64GAME_BLENDER_BINARY")
+        blender = Path(override) if override else Path.home() / pin["macos_user_relative_path"]
+        if not blender.is_file() or blender.is_symlink():
+            self.skipTest(f"exact pinned Blender is unavailable at {blender}")
+        digest = hashlib.sha256()
+        with blender.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        if digest.hexdigest() != pin["executable_sha256"]:
+            self.skipTest(f"Blender at {blender} is not the exact pinned executable")
+        return blender
+
+    def assert_quarrune_material_contract(self, data: bytes, label: str) -> None:
+        materials = tiny3d_material_records(data)
+        self.assertEqual(
+            set(materials), {"QR_Ceramic", "QR_Resonator", "QR_CobaltLattice"}, label
+        )
+        expected_state = bytes.fromhex(
+            "001218248833ffff"  # one-cycle TEX0 x SHADE
+            "0000000000000000"  # OtherMode value: point/opaque
+            "0000300000000001"  # writer-owned sample plus alpha-compare masks
+            "00000000"          # opaque blend mode
+            "00000007"          # depth, textured, shaded
+            "00010000"          # reserved, disabled fog, no colors, ordinary UVs
+            "000000000000000000000000"  # zero primitive/environment/blend colors
+        )
+        for name, record in materials.items():
+            with self.subTest(model=label, material=name):
+                self.assertEqual(record[:0x30], expected_state)
+                self.assertEqual(record[0x60:0x8C], bytes(0x2C), "TILE1 must remain empty")
+
+        expected_textures = {
+            "QR_Ceramic": (BODY_TOP_REFERENCE, None, 64, 32),
+            "QR_Resonator": (BODY_BOTTOM_REFERENCE, None, 64, 32),
+            "QR_CobaltLattice": (0, ACCENT_TEXTURE_ROM_PATH, 32, 32),
+        }
+        string_offset = struct.unpack_from(">I", data, 0x18)[0]
+        strings = data[string_offset:]
+        for name, (expected_reference, expected_path, width, height) in expected_textures.items():
+            record = materials[name]
+            reference, path_offset, texture_hash, runtime, actual_width, actual_height = \
+                struct.unpack_from(">IIIIHH", record, 0x34)
+            self.assertEqual(
+                (reference, runtime, actual_width, actual_height),
+                (expected_reference, 0, width, height),
+            )
+            if expected_path is None:
+                self.assertEqual((path_offset, texture_hash), (0, expected_reference))
+            else:
+                end = strings.index(b"\0", path_offset)
+                self.assertEqual(strings[path_offset:end].decode(), expected_path)
+                self.assertEqual(texture_hash, tiny3d_string_hash(expected_path))
+            self.assertEqual(
+                struct.unpack_from(">ffbbBB", record, 0x48),
+                (0.0, float(width - 1), 0, 0, 0, 1),
+            )
+            self.assertEqual(
+                struct.unpack_from(">ffbbBB", record, 0x54),
+                (0.0, float(height - 1), 0, 0, 0, 1),
+            )
+
+    def test_authored_quarrune_glbs_roundtrip_through_pinned_importer(self) -> None:
+        blender = self.require_pinned_blender()
+        environment = {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        for name in ("HOME", "TMPDIR"):
+            if os.environ.get(name):
+                environment[name] = os.environ[name]
+        authored = subprocess.run(
+            [
+                str(blender), "--background", "--factory-startup", "--offline-mode",
+                "--disable-autoexec", "--python", str(ROOT / "tools/n64game_quarrune_author.py"),
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=300,
+            env=environment,
+        )
+        self.assertEqual(authored.returncode, 0, authored.stdout[-8000:])
+        output_root = ROOT / "build/generated/quarrune_authoring"
+        report = json.loads((output_root / "candidate_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
+        self.assertEqual(report["action_order"], ANIMATION_NAMES)
+
+        build_root = ROOT / "build"
+        build_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="tiny3d-authored-material-", dir=build_root) as temporary:
             stage = Path(temporary)
-            with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as source:
-                source.extractall(stage)
-            importer_dir = stage / "tools" / "gltf_importer"
-            completed = subprocess.run(
-                ["/usr/bin/make", "-C", str(importer_dir), "-j2"],
+            importer = self.build_pinned_importer(stage)
+            texture_root = stage / "filesystem/echo/echo.quarrune"
+            generated = subprocess.run(
+                [
+                    "/usr/bin/python3", "-I", "-B",
+                    str(ROOT / "tools/n64game_quarrune_textures.py"),
+                    "--output-dir", str(texture_root),
+                ],
+                cwd=ROOT,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
-                timeout=300,
-                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+                timeout=60,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
             )
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            importer = importer_dir / "gltf_to_t3d"
-            self.assertTrue(importer.is_file())
+            self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+            for stem in ("quarrune_hero", "quarrune_distance"):
+                glb = output_root / f"{stem}.glb"
+                output = stage / f"{stem}.t3dm"
+                converted = subprocess.run(
+                    [
+                        str(importer), str(glb), str(output), "--base-scale=64",
+                        "--asset-path=filesystem",
+                    ],
+                    cwd=stage,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                    env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+                )
+                self.assertEqual(converted.returncode, 0, converted.stdout + converted.stderr)
+                self.assert_quarrune_material_contract(output.read_bytes(), stem)
+
+    def test_pinned_importer_roundtrips_exact_producible_material_state(self) -> None:
+        build_root = ROOT / "build"
+        build_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="tiny3d-material-", dir=build_root) as temporary:
+            stage = Path(temporary)
+            importer = self.build_pinned_importer(stage)
             gltf, asset_path = write_tiny3d_material_probe(stage)
             outputs: list[bytes] = []
             for index in range(2):
@@ -849,47 +989,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
                 self.assertEqual(converted.returncode, 0, converted.stdout + converted.stderr)
                 outputs.append(output.read_bytes())
             self.assertEqual(outputs[0], outputs[1], "pinned importer material output is not deterministic")
-
-            data = outputs[0]
-            materials = tiny3d_material_records(data)
-            self.assertEqual(set(materials), {"QR_Ceramic", "QR_Resonator", "QR_CobaltLattice"})
-            expected_state = bytes.fromhex(
-                "001218248833ffff"  # one-cycle TEX0 x SHADE
-                "0000000000000000"  # OtherMode value: point/opaque
-                "0000300000000001"  # writer-owned sample plus alpha-compare masks
-                "00000000"          # opaque blend mode
-                "00000007"          # depth, textured, shaded
-                "00010000"          # reserved, disabled fog, no colors, ordinary UVs
-                "000000000000000000000000"  # zero primitive/environment/blend colors
-            )
-            for name, record in materials.items():
-                with self.subTest(material=name):
-                    self.assertEqual(record[:0x30], expected_state)
-                    self.assertEqual(record[0x60:0x8C], bytes(0x2C), "TILE1 must remain empty")
-
-            expected_textures = {
-                "QR_Ceramic": (BODY_TOP_REFERENCE, None, 64, 32),
-                "QR_Resonator": (BODY_BOTTOM_REFERENCE, None, 64, 32),
-                "QR_CobaltLattice": (0, ACCENT_TEXTURE_ROM_PATH, 32, 32),
-            }
-            string_offset = struct.unpack_from(">I", data, 0x18)[0]
-            strings = data[string_offset:]
-            for name, (expected_reference, expected_path, width, height) in expected_textures.items():
-                record = materials[name]
-                reference, path_offset, texture_hash, runtime, actual_width, actual_height = \
-                    struct.unpack_from(">IIIIHH", record, 0x34)
-                self.assertEqual((reference, runtime, actual_width, actual_height),
-                                 (expected_reference, 0, width, height))
-                if expected_path is None:
-                    self.assertEqual((path_offset, texture_hash), (0, expected_reference))
-                else:
-                    end = strings.index(b"\0", path_offset)
-                    self.assertEqual(strings[path_offset:end].decode(), expected_path)
-                    self.assertEqual(texture_hash, tiny3d_string_hash(expected_path))
-                self.assertEqual(struct.unpack_from(">ffbbBB", record, 0x48),
-                                 (0.0, float(width - 1), 0, 0, 0, 1))
-                self.assertEqual(struct.unpack_from(">ffbbBB", record, 0x54),
-                                 (0.0, float(height - 1), 0, 0, 0, 1))
+            self.assert_quarrune_material_contract(outputs[0], "synthetic_probe")
 
     def test_exact_two_model_nine_stream_pair_passes_and_reports_decoded_contract(self) -> None:
         values = fixture()
