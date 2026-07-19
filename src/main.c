@@ -28,9 +28,10 @@ typedef struct {
     uint8_t target_slot;
     uint32_t sequence;
     uint8_t bytes[N64GAME_SAVE_BYTES];
-    N64GameCore snapshot;
+    N64GameCore pending_game;
     uint8_t settle_frames;
     bool faulted;
+    bool pending;
 } SaveWriter;
 
 static N64GameInput read_game_input(void)
@@ -38,6 +39,7 @@ static N64GameInput read_game_input(void)
     const joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
     const joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
     uint16_t pressed = 0U;
+    uint16_t held = 0U;
     if (buttons.d_up) {
         pressed |= N64GAME_INPUT_UP;
     }
@@ -59,6 +61,27 @@ static N64GameInput read_game_input(void)
     if (buttons.start) {
         pressed |= N64GAME_INPUT_START;
     }
+    if (buttons.z) {
+        pressed |= N64GAME_INPUT_PAUSE;
+    }
+    if (buttons.c_down) {
+        pressed |= N64GAME_INPUT_RELAY;
+    }
+    if (inputs.btn.a) {
+        held |= N64GAME_INPUT_CONFIRM;
+    }
+    if (inputs.btn.b) {
+        held |= N64GAME_INPUT_CANCEL;
+    }
+    if (inputs.btn.start) {
+        held |= N64GAME_INPUT_START;
+    }
+    if (inputs.btn.z) {
+        held |= N64GAME_INPUT_PAUSE;
+    }
+    if (inputs.btn.c_down) {
+        held |= N64GAME_INPUT_RELAY;
+    }
     int8_t stick_x = inputs.stick_x;
     int8_t stick_y = inputs.stick_y;
     if (inputs.btn.d_left) {
@@ -73,6 +96,7 @@ static N64GameInput read_game_input(void)
     }
     return (N64GameInput){
         .pressed = pressed,
+        .held = held,
         .stick_x = stick_x,
         .stick_y = stick_y,
     };
@@ -101,10 +125,7 @@ static bool save_writer_begin(
     }
     writer->sequence = current_sequence + 1U;
     writer->target_slot = active_slot_valid ? (uint8_t)(active_slot ^ UINT8_C(1)) : 0U;
-    writer->snapshot = *game;
-    writer->snapshot.save_requested = false;
     if (!n64game_save_encode(game, writer->sequence, writer->bytes)) {
-        writer->faulted = true;
         return false;
     }
     uint8_t invalid_footer[N64GAME_SAVE_FOOTER_BYTES];
@@ -120,6 +141,22 @@ static bool save_writer_begin(
     );
     writer->phase = SAVE_WRITE_INVALIDATING;
     writer->settle_frames = 0U;
+    return true;
+}
+
+static bool save_writer_queue(SaveWriter *writer, const N64GameCore *game)
+{
+    if (writer->faulted) {
+        return false;
+    }
+    uint8_t validation_bytes[N64GAME_SAVE_BYTES];
+    if (!n64game_save_encode(game, 0U, validation_bytes)) {
+        return false;
+    }
+    /* Coalesce to the newest request-time snapshot while a write is active. */
+    writer->pending_game = *game;
+    writer->pending_game.save_requested = false;
+    writer->pending = true;
     return true;
 }
 
@@ -167,7 +204,7 @@ static bool save_writer_pump(
         writer->phase = SAVE_WRITE_IDLE;
         return false;
     }
-    *continue_game = writer->snapshot;
+    *continue_game = verified_game;
     *save_sequence = writer->sequence;
     *active_slot = writer->target_slot;
     writer->phase = SAVE_WRITE_IDLE;
@@ -240,17 +277,32 @@ int main(void)
                     &save_writer, &continue_game, &save_sequence, &active_save_slot)) {
                 continue_available = true;
             }
-            if (game.save_requested && save_writer.phase == SAVE_WRITE_IDLE) {
-                if (save_writer_begin(
-                    &save_writer, &game, save_sequence,
+            if (save_writer.phase == SAVE_WRITE_IDLE && save_writer.pending) {
+                const N64GameCore pending_game = save_writer.pending_game;
+                save_writer.pending = false;
+                (void)save_writer_begin(
+                    &save_writer, &pending_game, save_sequence,
                     continue_available, active_save_slot
-                )) {
+                );
+            }
+            if (game.save_requested) {
+                bool accepted = false;
+                if (save_writer.phase == SAVE_WRITE_IDLE && !save_writer.pending) {
+                    accepted = save_writer_begin(
+                        &save_writer, &game, save_sequence,
+                        continue_available, active_save_slot
+                    );
+                } else {
+                    accepted = save_writer_queue(&save_writer, &game);
+                }
+                if (accepted) {
                     game.save_requested = false;
                 }
             }
         }
 
-        const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE || eeprom_is_busy();
+        const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE ||
+            save_writer.pending || eeprom_is_busy();
         const bool save_usable = save_available && !save_writer.faulted;
         n64game_renderer_draw(
             &renderer,

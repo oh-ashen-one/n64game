@@ -37,7 +37,7 @@ TOC_OFFSET = (LIBDRAGON_IPL3_END + 15) & ~15
 EXPECTED_HOST_TEST_REPORT = (
     "suite=n64game_host_contracts\n"
     "result=PASS\n"
-    "scope=dependency pins, production and candidate runtime manifests, ROM header parser, report contract, boot-capture manifest, semantic snapshot, production-shared lifecycle branch/death tests, exact opening timing, controller disconnect freeze, battle UI, one-survivor victory, retry, canonical checkpoints, corruption rejection, and dual-slot copy-on-write save recovery (live adapters and emulator interaction excluded; not release approval evidence)\n"
+    "scope=dependency pins, production and candidate runtime manifests, ROM header parser, report contract, boot-capture manifest, semantic snapshot, production-shared lifecycle branch/death tests, exact opening timing, controller disconnect freeze, four-sector input-only Annex route, acceleration/run/collision, examines, pause and Field Relay pages, controller-only 2v2 victory, defeat/retry/return snapshots, post-chapter archive, versioned canonical checkpoints, save debounce, corruption rejection, and dual-slot copy-on-write recovery (live adapters, Ares timing, and final visual approval excluded)\n"
 )
 
 

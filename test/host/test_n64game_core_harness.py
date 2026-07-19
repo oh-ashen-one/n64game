@@ -25,6 +25,7 @@ class N64GameCoreHarnessTests(unittest.TestCase):
                     "-I",
                     str(ROOT / "src"),
                     str(ROOT / "src" / "n64game_core.c"),
+                    str(ROOT / "src" / "n64game_annex.c"),
                     str(ROOT / "src" / "n64game_save.c"),
                     str(ROOT / "test" / "host" / "n64game_core_harness.c"),
                     "-o",

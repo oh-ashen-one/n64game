@@ -23,6 +23,7 @@ N64_CFLAGS += -std=gnu2x -Os -Wall -Wextra -Werror -Wshadow -Wconversion
 
 OBJS := \
 	$(BUILD_DIR)/main.o \
+	$(BUILD_DIR)/n64game_annex.o \
 	$(BUILD_DIR)/n64game_core.o \
 	$(BUILD_DIR)/n64game_render.o \
 	$(BUILD_DIR)/n64game_save.o \

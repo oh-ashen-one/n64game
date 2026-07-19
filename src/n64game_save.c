@@ -14,6 +14,14 @@ enum {
     OFFSET_FLAGS = 23,
     OFFSET_PLAYER_HP = 24,
     OFFSET_RESONANCE = 28,
+    OFFSET_ANNEX_SECTOR = 29,
+    OFFSET_EXAMINE_FLAGS = 30,
+    OFFSET_RELAY_PAGES = 31,
+    OFFSET_PLAY_TICKS = 32,
+    OFFSET_ACTIVE_CONTROL_TICKS = 36,
+    OFFSET_PARTY_ECHOES = 40,
+    OFFSET_SETTINGS = 42,
+    OFFSET_RESERVED = 43,
     OFFSET_CHECKSUM = 60,
 };
 
@@ -81,7 +89,14 @@ static bool valid_progress(const N64GameCore *game)
     if (!game->opening_cinematic_seen || !valid_name(game) ||
         game->party_hp[0] < 0 || game->party_hp[0] > N64GAME_QUARRUNE_MAX_HP ||
         game->party_hp[1] < 0 || game->party_hp[1] > N64GAME_AYSELOR_MAX_HP ||
-        game->battle.resonance > N64GAME_RESONANCE_MAX) {
+        (game->party_hp[0] == 0 && game->party_hp[1] == 0) ||
+        game->battle.resonance > N64GAME_RESONANCE_MAX ||
+        game->active_control_ticks > game->play_ticks ||
+        (unsigned)game->annex_sector >= (unsigned)N64GAME_ANNEX_SECTOR_COUNT ||
+        (game->examine_flags & UINT8_C(0xF0)) != 0U ||
+        (game->relay_pages_seen & UINT8_C(0xF0)) != 0U ||
+        (game->settings_flags & UINT8_C(0xF8)) != 0U ||
+        (!game->relay_unlocked && game->relay_pages_seen != 0U)) {
         return false;
     }
 
@@ -136,6 +151,14 @@ bool n64game_save_encode(
     put_u16(bytes, OFFSET_PLAYER_HP, (uint16_t)game->party_hp[0]);
     put_u16(bytes, OFFSET_PLAYER_HP + 2U, (uint16_t)game->party_hp[1]);
     bytes[OFFSET_RESONANCE] = game->battle.resonance;
+    bytes[OFFSET_ANNEX_SECTOR] = (uint8_t)game->annex_sector;
+    bytes[OFFSET_EXAMINE_FLAGS] = game->examine_flags;
+    bytes[OFFSET_RELAY_PAGES] = game->relay_pages_seen;
+    put_u32(bytes, OFFSET_PLAY_TICKS, game->play_ticks);
+    put_u32(bytes, OFFSET_ACTIVE_CONTROL_TICKS, game->active_control_ticks);
+    bytes[OFFSET_PARTY_ECHOES] = (uint8_t)N64GAME_ECHO_QUARRUNE;
+    bytes[OFFSET_PARTY_ECHOES + 1U] = (uint8_t)N64GAME_ECHO_AYSELOR;
+    bytes[OFFSET_SETTINGS] = game->settings_flags;
     put_u32(bytes, OFFSET_CHECKSUM, n64game_save_checksum(bytes));
     return true;
 }
@@ -157,7 +180,13 @@ bool n64game_save_decode(
     if (name_length == 0U || name_length > N64GAME_NAME_CAPACITY ||
         bytes[OFFSET_SCENE] > N64GAME_SCENE_END_CHAPTER ||
         bytes[OFFSET_QUEST] > N64GAME_QUEST_COMPLETE ||
-        bytes[OFFSET_RESONANCE] > N64GAME_RESONANCE_MAX) {
+        bytes[OFFSET_RESONANCE] > N64GAME_RESONANCE_MAX ||
+        bytes[OFFSET_ANNEX_SECTOR] >= N64GAME_ANNEX_SECTOR_COUNT ||
+        (bytes[OFFSET_EXAMINE_FLAGS] & UINT8_C(0xF0)) != 0U ||
+        (bytes[OFFSET_RELAY_PAGES] & UINT8_C(0xF0)) != 0U ||
+        bytes[OFFSET_PARTY_ECHOES] != (uint8_t)N64GAME_ECHO_QUARRUNE ||
+        bytes[OFFSET_PARTY_ECHOES + 1U] != (uint8_t)N64GAME_ECHO_AYSELOR ||
+        (bytes[OFFSET_SETTINGS] & UINT8_C(0xF8)) != 0U) {
         return false;
     }
     for (size_t index = OFFSET_NAME + name_length; index < OFFSET_SCENE; ++index) {
@@ -165,7 +194,7 @@ bool n64game_save_decode(
             return false;
         }
     }
-    for (size_t index = OFFSET_RESONANCE + 1U; index < OFFSET_CHECKSUM; ++index) {
+    for (size_t index = OFFSET_RESERVED; index < OFFSET_CHECKSUM; ++index) {
         if (bytes[index] != 0U) {
             return false;
         }
@@ -186,13 +215,37 @@ bool n64game_save_decode(
     decoded.battle_won = (flags & SAVE_FLAG_BATTLE) != 0U;
     decoded.battle_reward_claimed = (flags & SAVE_FLAG_REWARD) != 0U;
     decoded.slice_complete = (flags & SAVE_FLAG_COMPLETE) != 0U;
-    decoded.party_hp[0] = (int16_t)get_u16(bytes, OFFSET_PLAYER_HP);
-    decoded.party_hp[1] = (int16_t)get_u16(bytes, OFFSET_PLAYER_HP + 2U);
+    const uint16_t quarrune_hp = get_u16(bytes, OFFSET_PLAYER_HP);
+    const uint16_t ayselor_hp = get_u16(bytes, OFFSET_PLAYER_HP + 2U);
+    if (quarrune_hp > N64GAME_QUARRUNE_MAX_HP || ayselor_hp > N64GAME_AYSELOR_MAX_HP) {
+        return false;
+    }
+    decoded.party_hp[0] = (int16_t)quarrune_hp;
+    decoded.party_hp[1] = (int16_t)ayselor_hp;
     decoded.battle.resonance = bytes[OFFSET_RESONANCE];
+    decoded.annex_sector = (N64GameAnnexSector)bytes[OFFSET_ANNEX_SECTOR];
+    decoded.examine_flags = bytes[OFFSET_EXAMINE_FLAGS];
+    decoded.relay_pages_seen = bytes[OFFSET_RELAY_PAGES];
+    decoded.play_ticks = get_u32(bytes, OFFSET_PLAY_TICKS);
+    decoded.active_control_ticks = get_u32(bytes, OFFSET_ACTIVE_CONTROL_TICKS);
+    decoded.settings_flags = bytes[OFFSET_SETTINGS];
+    n64game_annex_safe_anchor(
+        decoded.annex_sector, &decoded.player_x_q8, &decoded.player_z_q8
+    );
     if (!valid_progress(&decoded)) {
         return false;
     }
     decoded.save_requested = false;
+    decoded.manual_save_latched = false;
+    if (decoded.scene == N64GAME_SCENE_END_CHAPTER) {
+        decoded.menu = N64GAME_MENU_POST_CHAPTER_ROOT;
+        decoded.menu_parent = N64GAME_MENU_POST_CHAPTER_ROOT;
+        decoded.paused = true;
+    } else {
+        decoded.menu = N64GAME_MENU_CLOSED;
+        decoded.menu_parent = N64GAME_MENU_CLOSED;
+        decoded.paused = false;
+    }
     *game_out = decoded;
     *sequence_out = get_u32(bytes, OFFSET_SEQUENCE);
     return true;
