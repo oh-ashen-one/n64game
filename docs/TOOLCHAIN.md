@@ -1,6 +1,6 @@
 # Gate 3 Toolchain and Reproducible ROM Build
 
-This document describes the implemented Gate 3 build contract. The current ROM is a small original Tiny3D diagnostic scene used to prove exact dependency compatibility and Ares boot. It is not the complete game opening, a vertical slice, or a claim that later production gates are finished.
+This document describes the implemented Gate 3 build contract. The current ROM is a small original Tiny3D diagnostic scene used to prove exact dependency compatibility and to produce the candidate for a separate Ares boot review. It is not the complete game opening, a vertical slice, or a claim that later production gates are finished.
 
 ## Exact dependency authority
 
@@ -39,6 +39,8 @@ make clean     # remove ignored build/ plus the one transient root ROM staging p
 ```
 
 `scripts/build-rom` starts by deleting only the resolved repository `build/` path and the exact transient root-level `n64game-gate3.z64` staging path used by libdragon's upstream make rule. It exports each pinned submodule through `git archive` into `build/deps/`, so generated headers and dependency objects never dirty the public gitlinks. CLI 12.2.1 creates or starts the digest-addressed container; the wrapper then verifies its running state, exact image identity, and one expected read-write project mount before invoking the audited project build with Docker. Direct `libdragon exec` is intentionally avoided because its fresh-container recovery path silently runs the vendor's broader `build.sh` before the requested command. The audited container entrypoint installs the pinned libdragon library/tools, builds Tiny3D locally, and compiles the project with warnings as errors.
+
+Project code enables `-Wshadow` and `-Wconversion` as errors in addition to the pinned toolchain defaults. One known conversion warning inside Tiny3D's inline `t3d_mat4fp_set_float` mask is suppressed only while parsing the pinned upstream header; strict conversion diagnostics resume before any project declaration or function body.
 
 The selected OCI image currently publishes Linux AMD64 plus provenance, not an ARM64 runtime. The wrapper sets `DOCKER_DEFAULT_PLATFORM=linux/amd64`; Apple Silicon therefore requires Docker's x86 emulation. CI runs the same image natively on an AMD64 runner.
 

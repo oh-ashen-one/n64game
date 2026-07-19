@@ -12,9 +12,9 @@ N64_CFLAGS += -std=gnu2x -Os -Wall -Wextra -Werror -Wshadow -Wconversion
 
 OBJS := $(BUILD_DIR)/main.o
 
-.PHONY: all clean
+.PHONY: all clean stage-rom
 
-all: $(ROM_OUTPUT)
+all: stage-rom
 
 $(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) $(T3D_ROOT)/build/libt3d.a
 
@@ -22,9 +22,9 @@ $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME GATE 3"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k
 $(ROM_NAME).z64: N64_ROM_CONTROLLER1 = n64
 
-$(ROM_OUTPUT): $(ROM_NAME).z64
-	@mkdir -p $(dir $@)
-	mv $< $@
+stage-rom: $(ROM_NAME).z64
+	@mkdir -p $(dir $(ROM_OUTPUT))
+	mv $< $(ROM_OUTPUT)
 
 $(T3D_ROOT)/build/libt3d.a:
 	$(MAKE) -C $(T3D_ROOT) -j$${N64GAME_JOBS:-4}

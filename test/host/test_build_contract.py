@@ -46,7 +46,7 @@ class BuildContractTests(unittest.TestCase):
         report = build.validate_runtime_assets()
         self.assertEqual(report["runtime_asset_count"], 0)
 
-    def test_fake_valid_rom_header_is_accepted(self) -> None:
+    def test_pinned_structural_rom_fixture_is_accepted(self) -> None:
         data = self.pinned_rom_fixture()
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "test.z64"
@@ -54,6 +54,24 @@ class BuildContractTests(unittest.TestCase):
             report = build.inspect_rom(path)
         self.assertEqual(report["title"], "N64GAME GATE 3")
         self.assertEqual(report["sha256"], hashlib.sha256(data).hexdigest())
+
+    def test_validate_rom_command_rejects_a_symlink(self) -> None:
+        data = self.pinned_rom_fixture()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "target.z64"
+            link = Path(temp_dir) / "link.z64"
+            target.write_bytes(data)
+            link.symlink_to(target)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "tools" / "n64game_build.py"), "validate-rom", str(link)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not be a symlink", result.stdout)
 
     def test_wrong_rom_byte_order_is_rejected(self) -> None:
         data = self.pinned_rom_fixture()
@@ -102,9 +120,21 @@ class BuildContractTests(unittest.TestCase):
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         self.assertIn("ROM_OUTPUT := $(BUILD_DIR)/$(ROM_NAME).z64", makefile)
-        self.assertIn("all: $(ROM_OUTPUT)", makefile)
-        self.assertIn("$(ROM_OUTPUT): $(ROM_NAME).z64", makefile)
-        self.assertIn("mv $< $@", makefile)
+        self.assertIn("all: stage-rom", makefile)
+        self.assertIn("stage-rom: $(ROM_NAME).z64", makefile)
+        self.assertIn("mkdir -p $(dir $(ROM_OUTPUT))", makefile)
+        self.assertIn("mv $< $(ROM_OUTPUT)", makefile)
+        self.assertNotIn("$(ROM_OUTPUT): $(ROM_NAME).z64", makefile)
+
+    def test_conversion_suppression_is_scoped_to_the_tiny3d_header(self) -> None:
+        source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        push = source.index("#pragma GCC diagnostic push")
+        include = source.index("#include <t3d/t3d.h>")
+        pop = source.index("#pragma GCC diagnostic pop")
+        main = source.index("int main(void)")
+        self.assertLess(push, include)
+        self.assertLess(include, pop)
+        self.assertLess(pop, main)
 
     def test_lock_is_valid_json_with_immutable_container(self) -> None:
         lock = json.loads((ROOT / "config" / "toolchain.lock.json").read_text(encoding="utf-8"))

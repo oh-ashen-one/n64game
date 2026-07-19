@@ -2,7 +2,14 @@
 // Gate 3 diagnostic scene. This is original project code, not production art.
 
 #include <libdragon.h>
+
+// The pinned Tiny3D header has one audited long-to-uint16_t mask assignment in
+// an inline helper. Keep -Wconversion fatal for project code while containing
+// that upstream diagnostic to the header where it originates.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
 #include <t3d/t3d.h>
+#pragma GCC diagnostic pop
 
 #define FONT_ID 1
 

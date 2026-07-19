@@ -456,9 +456,15 @@ def main() -> int:
         elif args.command == "validate-assets":
             print(json.dumps(validate_runtime_assets(), sort_keys=True))
         elif args.command == "validate-rom":
-            print(json.dumps(inspect_rom(Path(args.rom).resolve()), sort_keys=True))
+            rom_argument = Path(args.rom)
+            if rom_argument.is_symlink():
+                raise ContractError(f"ROM path must not be a symlink: {rom_argument}")
+            print(json.dumps(inspect_rom(rom_argument.resolve()), sort_keys=True))
         elif args.command == "report":
-            manifest = write_reports(Path(args.rom).resolve())
+            rom_argument = Path(args.rom)
+            if rom_argument.is_symlink():
+                raise ContractError(f"ROM path must not be a symlink: {rom_argument}")
+            manifest = write_reports(rom_argument.resolve())
             print(json.dumps({"rom_sha256": manifest["rom"]["sha256"], "result": "PASS"}, sort_keys=True))
         elif args.command == "bootstrap":
             return bootstrap(args.mode)
