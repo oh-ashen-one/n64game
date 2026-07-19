@@ -10,7 +10,9 @@ include $(T3D_ROOT)/t3d.mk
 
 N64_CFLAGS += -std=gnu2x -Os -Wall -Wextra -Werror -Wshadow -Wconversion
 
-OBJS := $(BUILD_DIR)/main.o
+OBJS := \
+	$(BUILD_DIR)/main.o \
+	$(BUILD_DIR)/quarrune_render_assets.o
 
 .PHONY: all clean stage-rom
 

@@ -2,6 +2,7 @@
 
 require "digest"
 require "set"
+require_relative "libdragon_sprite_contract"
 
 module N64Game
   # Pure, bounds-checked validation for the pinned Tiny3D v4 on-disk format.
@@ -21,6 +22,13 @@ module N64Game
     QUARRUNE_BONE_COUNT = 20
     SKELETON_DOMAIN = "n64game-tiny3d-skeleton-v1\n".b.freeze
     STREAM_SET_DOMAIN = "n64game-quarrune-animation-stream-set-v1\n".b.freeze
+    RUNTIME_HELPER_BUNDLE_DOMAIN = "n64game-quarrune-runtime-helper-v1\n".b.freeze
+    RUNTIME_HELPER_PATHS = %w[
+      src/quarrune_render_assets.c
+      src/quarrune_render_assets.h
+    ].freeze
+    APPROVED_RUNTIME_HELPER_BUNDLE_SHA256 =
+      "b9125d3375842e75dc4d0227abbf2158126e1b9ba684842c9f9326071c7b7853".freeze
 
     MODEL_PRODUCTION_ID = "echo.quarrune".freeze
     ANIMATION_PRODUCTION_ID = "anm.echo.quarrune".freeze
@@ -28,13 +36,42 @@ module N64Game
     ANIMATION_HEADER_ROLE = "output.tiny3d.animation_header".freeze
     ANIMATION_STREAM_ROLE = "output.tiny3d.animation_stream".freeze
     SKELETON_BINDING_ROLE = "output.skeleton_binding".freeze
+    BODY_TEXTURE_ROLE = "output.texture.body".freeze
+    ACCENT_TEXTURE_ROLE = "output.texture.accent".freeze
+    BLOB_SHADOW_ROLE = "output.blob_shadow.sprite".freeze
+    RUNTIME_BINDING_ROLE = "output.runtime_binding".freeze
     RESERVED_ROLES = [
-      MODEL_ROLE, ANIMATION_HEADER_ROLE, ANIMATION_STREAM_ROLE, SKELETON_BINDING_ROLE
+      MODEL_ROLE, ANIMATION_HEADER_ROLE, ANIMATION_STREAM_ROLE, SKELETON_BINDING_ROLE,
+      BODY_TEXTURE_ROLE, ACCENT_TEXTURE_ROLE, BLOB_SHADOW_ROLE, RUNTIME_BINDING_ROLE
     ].freeze
 
     HERO_MODEL_PATH = "review/echo.quarrune/g5/quarrune_hero.t3dm".freeze
     DISTANCE_MODEL_PATH = "review/echo.quarrune/g5/quarrune_distance.t3dm".freeze
     MODEL_PATHS = [DISTANCE_MODEL_PATH, HERO_MODEL_PATH].freeze
+    BODY_TEXTURE_PATH = "review/echo.quarrune/g5/tex_quarrune_body_ci8_64x64.sprite".freeze
+    ACCENT_TEXTURE_PATH = "review/echo.quarrune/g5/tex_quarrune_accent_ci4_32x32.sprite".freeze
+    BLOB_SHADOW_PATH = "review/echo.quarrune/g5/tex_quarrune_blob_shadow_ia8_32x32.sprite".freeze
+    RUNTIME_BINDING_PATH = "review/echo.quarrune/g5/RUNTIME_BINDING.tsv".freeze
+    BODY_TEXTURE_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.sprite".freeze
+    ACCENT_TEXTURE_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite".freeze
+    BLOB_SHADOW_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite".freeze
+    BODY_TOP_REFERENCE = 0x51554230
+    BODY_BOTTOM_REFERENCE = 0x51554231
+    QUARRUNE_TEX_SHADE_COMBINER = 0x0012_1824_8833_FFFF
+    QUARRUNE_OTHER_MODE_VALUE = 0x0000_0000_0000_0000
+    QUARRUNE_OTHER_MODE_MASK = 0x0000_3000_0000_0000
+    QUARRUNE_BLEND_MODE = 0x0000_0000
+    QUARRUNE_DRAW_FLAGS = 0x0000_0007
+    QUARRUNE_FOG_MODE = 0
+    QUARRUNE_COLOR_FLAGS = 0
+    QUARRUNE_VERTEX_FX = 0
+    QUARRUNE_MATERIAL_COLORS = [0, 0, 0, 0].freeze
+    MIN_UV_SPAN = 8 * 32
+    BODY_DYNAMIC_BINDINGS = [
+      { reference: BODY_TOP_REFERENCE, rect: [0, 0, 64, 32] },
+      { reference: BODY_BOTTOM_REFERENCE, rect: [0, 32, 64, 64] }
+    ].freeze
+    MODEL_SPRITE_PATHS = [ACCENT_TEXTURE_PATH, BLOB_SHADOW_PATH, BODY_TEXTURE_PATH].sort.freeze
     ANIMATION_HEADER_PATH = "review/anm.echo.quarrune/g5/anm_echo_quarrune.t3dm".freeze
     SKELETON_BINDING_PATH = "review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv".freeze
     ANIMATION_NAMES = %w[
@@ -53,6 +90,16 @@ module N64Game
       animation_header_sha256 animation_stream_set_sha256 skeleton_signature_sha256
       bone_count animation_names build_id
     ].freeze
+    RUNTIME_BINDING_KEYS = %w[
+      schema libdragon_commit tiny3d_commit runtime_helper_paths runtime_helper_bundle_sha256
+      production_id body_sprite_path body_sprite_sha256
+      body_rom_path body_top_reference body_top_rect_px body_bottom_reference body_bottom_rect_px
+      body_reference_size_px body_upload_mode material_profile
+      accent_sprite_path accent_sprite_sha256 accent_rom_path blob_shadow_sprite_path
+      blob_shadow_sprite_sha256 blob_shadow_rom_path blob_shadow_format blob_shadow_size_px
+      footprint_mm footprint_offset_mm base_opacity_q8 build_id
+    ].freeze
+    RUNTIME_BINDING_SCHEMA = "n64game-quarrune-runtime-binding-v1".freeze
 
     class ParseError < StandardError; end
 
@@ -93,6 +140,10 @@ module N64Game
 
       def u32(offset, field)
         raw(offset, 4, field).unpack1("N")
+      end
+
+      def u64(offset, field)
+        raw(offset, 8, field).unpack1("Q>")
       end
 
       def f32(offset, field)
@@ -279,6 +330,37 @@ module N64Game
       end
       return issues unless issues.empty?
 
+      begin
+        validate_production_model_pair(decoded_models)
+        decoded_sprites = {
+          BODY_TEXTURE_PATH => N64Game::LibdragonSpriteContract.validate_profile(
+            bytes_by_path[BODY_TEXTURE_PATH] || bytes_by_path[BODY_TEXTURE_PATH.to_sym],
+            label: BODY_TEXTURE_PATH, format: "CI8", width: 64, height: 64, fits_tmem: false
+          ),
+          ACCENT_TEXTURE_PATH => N64Game::LibdragonSpriteContract.validate_profile(
+            bytes_by_path[ACCENT_TEXTURE_PATH] || bytes_by_path[ACCENT_TEXTURE_PATH.to_sym],
+            label: ACCENT_TEXTURE_PATH, format: "CI4", width: 32, height: 32, fits_tmem: true
+          ),
+          BLOB_SHADOW_PATH => N64Game::LibdragonSpriteContract.validate_profile(
+            bytes_by_path[BLOB_SHADOW_PATH] || bytes_by_path[BLOB_SHADOW_PATH.to_sym],
+            label: BLOB_SHADOW_PATH, format: "IA8", width: 32, height: 32, fits_tmem: true
+          )
+        }
+        validate_sprite_content(decoded_sprites)
+        runtime_binding = parse_runtime_binding(
+          bytes_by_path[RUNTIME_BINDING_PATH] || bytes_by_path[RUNTIME_BINDING_PATH.to_sym],
+          RUNTIME_BINDING_PATH
+        )
+        expected_runtime = expected_runtime_binding(model_entries, model_build_id)
+        RUNTIME_BINDING_KEYS.each do |key|
+          issues << "#{RUNTIME_BINDING_PATH}: #{key} binding mismatch" unless
+            runtime_binding[key] == expected_runtime[key]
+        end
+      rescue ParseError => error
+        issues << error.message
+      end
+      return issues unless issues.empty?
+
       signatures = MODEL_PATHS.map { |path| decoded_models[path][:skeleton_signature] }
       signatures << decoded_animation[:skeleton_signature]
       issues << "Quarrune hero, distance, and animation skeleton signatures differ" unless signatures.uniq.length == 1
@@ -298,6 +380,195 @@ module N64Game
       issues
     rescue StandardError => error
       ["Quarrune Tiny3D pair validator failed closed: #{error.class}: #{error.message}"]
+    end
+
+    def runtime_helper_bundle_sha256(members)
+      return nil unless members.is_a?(Hash) && members.keys.map(&:to_s).sort == RUNTIME_HELPER_PATHS.sort
+
+      digest = Digest::SHA256.new
+      digest.update(RUNTIME_HELPER_BUNDLE_DOMAIN)
+      RUNTIME_HELPER_PATHS.sort.each do |path|
+        bytes = members[path] || members[path.to_sym]
+        return nil unless bytes.is_a?(String)
+
+        digest.update("#{path}\t#{Digest::SHA256.hexdigest(bytes)}\n")
+      end
+      digest.hexdigest
+    end
+
+    def validate_production_model_pair(decoded_models)
+      hero = decoded_models.fetch(HERO_MODEL_PATH)
+      distance = decoded_models.fetch(DISTANCE_MODEL_PATH)
+      unless hero[:triangle_count].between?(850, 1250)
+        raise ParseError, "#{HERO_MODEL_PATH}: triangle count must remain within the reviewed 850-1250 hero budget"
+      end
+      unless distance[:triangle_count].positive? && distance[:triangle_count] <= 650 &&
+             distance[:triangle_count] * 100 >= hero[:triangle_count] * 45 &&
+             distance[:triangle_count] * 100 <= hero[:triangle_count] * 60
+        raise ParseError, "#{DISTANCE_MODEL_PATH}: triangle count must be at most 650 and 45-60 percent of hero"
+      end
+      decoded_models.each do |path, model|
+        unless model[:material_count] == 3 && model[:used_material_indices] == [0, 1, 2]
+          raise ParseError, "#{path}: Quarrune must contain exactly three materials and use every one"
+        end
+        names = model[:materials].map { |material| material[:name] }
+        raise ParseError, "#{path}: Quarrune material names must be unique" unless names.uniq.length == 3
+        active = model[:materials].map do |material|
+          texture_a, texture_b = material[:textures]
+          unless active_texture?(texture_a) && empty_texture?(texture_b)
+            raise ParseError, "#{path}: every Quarrune material must bind exactly one texture in slot A/TILE0 and leave slot B empty"
+          end
+          unless material[:color_combiner] == QUARRUNE_TEX_SHADE_COMBINER &&
+                 material[:other_mode_value] == QUARRUNE_OTHER_MODE_VALUE &&
+                 material[:other_mode_mask] == QUARRUNE_OTHER_MODE_MASK &&
+                 material[:blend_mode] == QUARRUNE_BLEND_MODE &&
+                 material[:draw_flags] == QUARRUNE_DRAW_FLAGS &&
+                 material[:fog] == QUARRUNE_FOG_MODE &&
+                 material[:color_flags] == QUARRUNE_COLOR_FLAGS &&
+                 material[:vertex_fx] == QUARRUNE_VERTEX_FX &&
+                 material[:prim_color] == QUARRUNE_MATERIAL_COLORS &&
+                 material[:env_color] == QUARRUNE_MATERIAL_COLORS &&
+                 material[:blend_color] == QUARRUNE_MATERIAL_COLORS
+            raise ParseError, "#{path}: Quarrune material render state must exactly use TEX0 x SHADE, opaque blending, depth/textured/shaded flags, point filtering, default fog/colors, and ordinary UVs"
+          end
+          texture_a
+        end
+        dynamic = active.select { |texture| texture[:reference].positive? }
+        static = active.select { |texture| texture[:path] }
+        unless dynamic.map { |texture| texture[:reference] }.sort ==
+               [BODY_TOP_REFERENCE, BODY_BOTTOM_REFERENCE].sort
+          raise ParseError, "#{path}: body materials must use the exact two pathless CI8 region references"
+        end
+        dynamic.each do |texture|
+          unless texture[:path].nil? && texture[:width] == 64 && texture[:height] == 32 &&
+                 canonical_axes?(texture[:axes], 64, 32)
+            raise ParseError, "#{path}: dynamic body region dimensions/tile parameters are not canonical"
+          end
+        end
+        unless static.length == 1 && static.first[:reference].zero? &&
+               static.first[:path] == ACCENT_TEXTURE_ROM_PATH &&
+               static.first[:width] == 32 && static.first[:height] == 32 &&
+               canonical_axes?(static.first[:axes], 32, 32)
+          raise ParseError, "#{path}: accent material must use the exact static 32x32 CI4 sprite"
+        end
+
+        model[:objects].each_with_index do |object, object_index|
+          texture = model[:materials].fetch(object[:material])[:textures].first
+          maximum_s = texture[:width] * 32
+          maximum_t = texture[:height] * 32
+          unless object[:drawn_source_uvs].all? do |s, t|
+                   s.between?(0, maximum_s) && t.between?(0, maximum_t)
+                 end
+            raise ParseError, "#{path}: object #{object_index} packed UVs leave its region-local texture bounds"
+          end
+        end
+        3.times do |material_index|
+          uvs = model[:objects].select { |object| object[:material] == material_index }
+                               .flat_map { |object| object[:drawn_source_uvs] }
+          s_values = uvs.map(&:first)
+          t_values = uvs.map(&:last)
+          unless s_values.max - s_values.min >= MIN_UV_SPAN &&
+                 t_values.max - t_values.min >= MIN_UV_SPAN
+            raise ParseError, "#{path}: material #{material_index} UV island is too collapsed to be an authored texture mapping"
+          end
+        end
+      end
+    end
+
+    def active_texture?(texture)
+      texture[:reference].positive? || !texture[:path].nil?
+    end
+
+    def empty_texture?(texture)
+      texture[:reference].zero? && texture[:path].nil? && texture[:hash].zero? &&
+        texture[:width].zero? && texture[:height].zero? &&
+        texture[:axes].all? do |axis|
+          axis[:low] == 0.0 && axis[:high] == 0.0 && axis[:mask].zero? &&
+            axis[:shift].zero? && axis[:mirror].zero? && axis[:clamp].zero?
+        end
+    end
+
+    def canonical_axes?(axes, width, height)
+      expected_high = [width - 1, height - 1]
+      axes.each_with_index.all? do |axis, index|
+        axis[:low] == 0.0 && axis[:high] == expected_high[index].to_f &&
+          axis[:mask].zero? && axis[:shift].zero? && axis[:mirror].zero? && axis[:clamp] == 1
+      end
+    end
+
+    def validate_sprite_content(decoded_sprites)
+      {
+        BODY_TEXTURE_PATH => 32,
+        ACCENT_TEXTURE_PATH => 8
+      }.each do |path, minimum_colors|
+        sprite = decoded_sprites.fetch(path)
+        used = sprite[:indices].to_set
+        unless sprite[:palette_used] >= minimum_colors && used == (0...sprite[:palette_used]).to_set
+          raise ParseError, "#{path}: texture must use a contiguous intentional palette of at least #{minimum_colors} colors"
+        end
+        used_palette = sprite[:palette].first(sprite[:palette_used])
+        unless used_palette.uniq.length == used_palette.length && used_palette.all? { |color| (color & 1) == 1 }
+          raise ParseError, "#{path}: used material palette colors must be unique and opaque"
+        end
+        luminance = used_palette.map do |color|
+          red = (color >> 11) & 0x1F
+          green = (color >> 6) & 0x1F
+          blue = (color >> 1) & 0x1F
+          red * 3 + green * 6 + blue
+        end
+        unless luminance.max - luminance.min >= 24
+          raise ParseError, "#{path}: used material palette lacks a readable value range"
+        end
+      end
+
+      shadow = decoded_sprites.fetch(BLOB_SHADOW_PATH)
+      pixels = shadow[:pixel_data].bytes
+      alpha = pixels.map { |byte| byte & 0x0F }
+      border = []
+      32.times do |index|
+        border.concat([alpha[index], alpha[31 * 32 + index], alpha[index * 32], alpha[index * 32 + 31]])
+      end
+      raise ParseError, "#{BLOB_SHADOW_PATH}: blob shadow perimeter must be transparent" unless border.all?(&:zero?)
+      covered = alpha.each_index.select { |index| alpha[index].positive? }
+      unless covered.length.between?(128, 800) && alpha.uniq.length >= 5 && alpha.max >= 10
+        raise ParseError, "#{BLOB_SHADOW_PATH}: blob shadow coverage/alpha ramp is not authored"
+      end
+      center_alpha = [alpha[15 * 32 + 15], alpha[15 * 32 + 16], alpha[16 * 32 + 15], alpha[16 * 32 + 16]].max
+      raise ParseError, "#{BLOB_SHADOW_PATH}: blob shadow center is not opaque enough" unless center_alpha >= 10
+      total_weight = alpha.sum
+      centroid_x = alpha.each_with_index.sum { |value, index| value * (index % 32) }.to_f / total_weight
+      centroid_y = alpha.each_with_index.sum { |value, index| value * (index / 32) }.to_f / total_weight
+      unless centroid_x.between?(12.0, 19.0) && centroid_y.between?(12.0, 19.0)
+        raise ParseError, "#{BLOB_SHADOW_PATH}: blob shadow weighted center leaves the authored footprint"
+      end
+      unless connected_mask?(covered.to_set, 32, 32)
+        raise ParseError, "#{BLOB_SHADOW_PATH}: blob shadow alpha mask contains disconnected islands"
+      end
+    end
+
+    def connected_mask?(mask, width, height)
+      return false if mask.empty?
+
+      remaining = mask.dup
+      stack = [remaining.first]
+      remaining.delete(stack.first)
+      until stack.empty?
+        index = stack.pop
+        x = index % width
+        y = index / width
+        (-1..1).each do |dy|
+          (-1..1).each do |dx|
+            next if dx.zero? && dy.zero?
+            nx = x + dx
+            ny = y + dy
+            next unless nx.between?(0, width - 1) && ny.between?(0, height - 1)
+            neighbor = ny * width + nx
+            next unless remaining.delete?(neighbor)
+            stack << neighbor
+          end
+        end
+      end
+      remaining.empty?
     end
 
     def decode_model(bytes, label = "Tiny3D model")
@@ -348,7 +619,7 @@ module N64Game
         raise ParseError, "#{label}: model AABB is not the exact union of object AABBs"
       end
       parse_bvh(file, bvh_chunk, object_data) if bvh_chunk
-      parse_materials(file, materials)
+      material_data = parse_materials(file, materials)
       validate_index_layout(file, index_chunk, object_data)
 
       {
@@ -357,6 +628,10 @@ module N64Game
         object_count: objects.length,
         has_bvh: !bvh_chunk.nil?,
         material_count: materials.length,
+        materials: material_data,
+        objects: object_data,
+        used_material_indices: object_data.map { |object| object[:material] }.uniq.sort,
+        triangle_count: object_data.sum { |object| object[:triangle_count] },
         vertex_count: file.total_vertices,
         index_count: file.total_indices,
         bone_count: skeleton[:bones].length,
@@ -450,22 +725,46 @@ module N64Game
 
       model_t3d = model_entries.select { |entry| File.extname(entry[:path].to_s).downcase == ".t3dm" }
       model_streams = model_entries.select { |entry| File.extname(entry[:path].to_s).downcase == ".sdata" }
+      model_sprites = model_entries.select { |entry| File.extname(entry[:path].to_s).downcase == ".sprite" }
       model_role_entries = model_entries.select { |entry| entry[:role] == MODEL_ROLE }
       issues << "echo.quarrune output must contain exactly the hero and distance T3DM files" unless
         model_t3d.map { |entry| entry[:path] }.sort == MODEL_PATHS
       issues << "output.tiny3d.model role may name only the canonical hero and distance files" unless
         model_role_entries.map { |entry| entry[:path] }.sort == MODEL_PATHS
       issues << "echo.quarrune output must not own animation streams" unless model_streams.empty?
+      issues << "echo.quarrune output must contain exactly the body, accent, and blob-shadow sprites" unless
+        model_sprites.map { |entry| entry[:path] }.sort == MODEL_SPRITE_PATHS
       model_t3d.each do |entry|
         issues << "#{entry[:path]} has the wrong model role" unless entry[:role] == MODEL_ROLE
       end
       issues << "echo.quarrune output must not own the skeleton binding" if
         model_entries.any? { |entry| entry[:role] == SKELETON_BINDING_ROLE || entry[:path] == SKELETON_BINDING_PATH }
-      expected_model_reserved = MODEL_PATHS.map { |path| [MODEL_ROLE, path] }.sort
+      expected_model_reserved = MODEL_PATHS.map { |path| [MODEL_ROLE, path] } + [
+        [BODY_TEXTURE_ROLE, BODY_TEXTURE_PATH],
+        [ACCENT_TEXTURE_ROLE, ACCENT_TEXTURE_PATH],
+        [BLOB_SHADOW_ROLE, BLOB_SHADOW_PATH],
+        [RUNTIME_BINDING_ROLE, RUNTIME_BINDING_PATH]
+      ]
       actual_model_reserved = model_entries.select { |entry| RESERVED_ROLES.include?(entry[:role]) }
                                            .map { |entry| [entry[:role], entry[:path]] }.sort
-      issues << "echo.quarrune reserved Tiny3D roles differ from the exact model-role/path mapping" unless
-        actual_model_reserved == expected_model_reserved
+      issues << "echo.quarrune reserved package roles differ from the exact model/texture/shadow/binding mapping" unless
+        actual_model_reserved == expected_model_reserved.sort
+      {
+        BODY_TEXTURE_PATH => BODY_TEXTURE_ROLE,
+        ACCENT_TEXTURE_PATH => ACCENT_TEXTURE_ROLE,
+        BLOB_SHADOW_PATH => BLOB_SHADOW_ROLE
+      }.each do |path, role|
+        entry = model_sprites.find { |candidate| candidate[:path] == path }
+        issues << "#{path} has the wrong sprite role" unless entry && entry[:role] == role
+      end
+      runtime_bindings = model_entries.select do |entry|
+        entry[:path] == RUNTIME_BINDING_PATH || entry[:role] == RUNTIME_BINDING_ROLE
+      end
+      issues << "echo.quarrune output must contain exactly one canonical runtime binding" unless
+        runtime_bindings.map { |entry| entry[:path] } == [RUNTIME_BINDING_PATH]
+      runtime_bindings.each do |entry|
+        issues << "#{entry[:path]} has the wrong runtime-binding role" unless entry[:role] == RUNTIME_BINDING_ROLE
+      end
 
       animation_t3d = animation_entries.select { |entry| File.extname(entry[:path].to_s).downcase == ".t3dm" }
       animation_streams = animation_entries.select { |entry| File.extname(entry[:path].to_s).downcase == ".sdata" }
@@ -501,14 +800,14 @@ module N64Game
       issues << "anm.echo.quarrune reserved Tiny3D roles differ from the exact header/stream/binding mapping" unless
         actual_animation_reserved.sort == expected_animation_reserved.sort
 
-      relevant = model_t3d + animation_t3d + animation_streams + bindings
+      relevant = model_t3d + model_sprites + runtime_bindings + animation_t3d + animation_streams + bindings
       relevant.each do |entry|
         issues << "#{entry[:path]} manifest build differs from the pair build" unless entry[:build] == model_build_id
         issues << "#{entry[:path]} must use capture:-" unless entry[:capture] == "-"
         issues << "#{entry[:path]} digest is malformed" unless entry[:digest].match?(/\A[0-9a-f]{64}\z/)
         issues << "#{entry[:path]} byte count is invalid" unless entry[:count] >= 0
         issues << "#{entry[:path]} must use mode 100644" unless entry[:mode] == "100644"
-        expected_kind = entry[:path] == SKELETON_BINDING_PATH ? "git" : "lfs"
+        expected_kind = [SKELETON_BINDING_PATH, RUNTIME_BINDING_PATH].include?(entry[:path]) ? "git" : "lfs"
         issues << "#{entry[:path]} storage kind must be #{expected_kind}" unless entry[:kind] == expected_kind
       end
       if model_t3d.length == 2 && model_t3d.map { |entry| entry[:digest] }.uniq.length != 2
@@ -648,14 +947,24 @@ module N64Game
           file.reader.s16(position_offset + axis * 2, "object #{object_index} source vertex position")
         end
       end
+      source_uvs_by_vertex = source_vertices.uniq.to_h do |vertex_index|
+        pair_offset = vertex_chunk[:offset] + (vertex_index / 2) * 32
+        uv_offset = pair_offset + (vertex_index.odd? ? 28 : 24)
+        [vertex_index, [
+          file.reader.s16(uv_offset, "object #{object_index} source vertex S"),
+          file.reader.s16(uv_offset + 2, "object #{object_index} source vertex T")
+        ]]
+      end
       position_minimum = 3.times.map { |axis| positions.map { |position| position[axis] }.min }
       position_maximum = 3.times.map { |axis| positions.map { |position| position[axis] }.max }
       unless minimum == position_minimum && maximum == position_maximum
         raise ParseError, "#{file.label}: object #{object_index} AABB differs from its exact source vertices"
       end
       {
-        name: name, triangle_count: triangle_count, parts: parts,
-        minimum: minimum, maximum: maximum, source_vertices: source_vertices
+        name: name, material: material, triangle_count: triangle_count, parts: parts,
+        minimum: minimum, maximum: maximum, source_vertices: source_vertices,
+        source_uvs: source_uvs_by_vertex.values,
+        source_uvs_by_vertex: source_uvs_by_vertex
       }
     end
 
@@ -664,11 +973,16 @@ module N64Game
       main_indices = 0
       objects.each_with_index do |object, object_index|
         loaded_slots = Set.new
+        slot_sources = {}
+        drawn_source_vertices = Set.new
         decoded_triangles = 0
         object[:parts].each do |part|
           part[:vertex_count].times do |offset|
             slot = part[:vertex_destination] + offset
-            loaded_slots << slot if slot < 70
+            next unless slot < 70
+
+            loaded_slots << slot
+            slot_sources[slot] = part[:vertex_offset] / 16 + offset
           end
           unless part[:index_offset] == cursor
             raise ParseError, "#{file.label}: object-part index ranges are not writer-contiguous"
@@ -684,6 +998,7 @@ module N64Game
               raise ParseError, "#{file.label}: indexed draw contains a degenerate triangle"
             end
           end
+          triangle_indices.each_byte { |slot| drawn_source_vertices << slot_sources.fetch(slot) }
           cursor += part[:index_count]
           main_indices += part[:index_count]
           decoded_triangles += part[:index_count] / 3
@@ -696,6 +1011,7 @@ module N64Game
           unless sequence_slots.all? { |slot| slot < 70 && loaded_slots.include?(slot) }
             raise ParseError, "#{file.label}: unindexed triangle sequence targets an unloaded vertex-cache slot"
           end
+          sequence_slots.each { |slot| drawn_source_vertices << slot_sources.fetch(slot) }
           decoded_triangles += part[:sequence_count]
 
           strip_groups = []
@@ -719,11 +1035,22 @@ module N64Game
             decoded_triangles += validate_strip_group(
               file, words, strip_groups[group_index..-1], loaded_slots
             )
+            words.each { |word| drawn_source_vertices << slot_sources.fetch(word & 0x7FFF) }
           end
-          loaded_slots.clear if part[:draws]
+          if part[:draws]
+            loaded_slots.clear
+            slot_sources.clear
+          end
         end
         unless decoded_triangles == object[:triangle_count]
           raise ParseError, "#{file.label}: object #{object_index} triangle count differs from its exact draw commands"
+        end
+        if drawn_source_vertices.empty?
+          raise ParseError, "#{file.label}: object #{object_index} draw commands reach no source vertices"
+        end
+        object[:drawn_source_vertices] = drawn_source_vertices.to_a.sort
+        object[:drawn_source_uvs] = object[:drawn_source_vertices].map do |vertex_index|
+          object[:source_uvs_by_vertex].fetch(vertex_index)
         end
       end
       raise ParseError, "#{file.label}: totalIndexCount differs from object parts" unless main_indices == file.total_indices
@@ -846,18 +1173,26 @@ module N64Game
     end
 
     def parse_materials(file, chunks)
-      chunks.each_with_index do |chunk, index|
+      chunks.each_with_index.map do |chunk, index|
         base = chunk[:offset]
         file.require_zero_tail(chunk, 0x8C, "material #{index}")
+        color_combiner = file.reader.u64(base, "material color combiner")
+        other_mode_value = file.reader.u64(base + 8, "material other-mode value")
+        other_mode_mask = file.reader.u64(base + 16, "material other-mode mask")
+        blend_mode = file.reader.u32(base + 24, "material blend mode")
+        draw_flags = file.reader.u32(base + 28, "material draw flags")
         raise ParseError, "#{file.label}: material #{index} reserved byte is nonzero" unless file.reader.u8(base + 0x20, "material reserved").zero?
         fog = file.reader.u8(base + 0x21, "material fog mode")
         flags = file.reader.u8(base + 0x22, "material color flags")
         vertex_fx = file.reader.u8(base + 0x23, "material vertex effect")
+        prim_color = file.reader.raw(base + 0x24, 4, "material primitive color").bytes
+        env_color = file.reader.raw(base + 0x28, 4, "material environment color").bytes
+        blend_color = file.reader.raw(base + 0x2C, 4, "material blend color").bytes
         raise ParseError, "#{file.label}: material #{index} fog mode is invalid" unless fog <= 2
         raise ParseError, "#{file.label}: material #{index} color flags are invalid" unless flags <= 7
         raise ParseError, "#{file.label}: material #{index} vertex effect is invalid" unless vertex_fx <= 5
-        file.string_at(file.reader.u32(base + 0x30, "material name"), "material #{index} name")
-        [0x34, 0x60].each_with_index do |relative, texture_index|
+        name = file.string_at(file.reader.u32(base + 0x30, "material name"), "material #{index} name")
+        textures = [0x34, 0x60].each_with_index.map do |relative, texture_index|
           texture = base + relative
           path_offset = file.reader.u32(texture + 4, "material texture path")
           texture_reference = file.reader.u32(texture, "material texture reference")
@@ -866,6 +1201,7 @@ module N64Game
           width = file.reader.u16(texture + 16, "material texture width")
           height = file.reader.u16(texture + 18, "material texture height")
           raise ParseError, "#{file.label}: material texture runtime pointer is nonzero" unless runtime_pointer.zero?
+          path = nil
           if path_offset.zero?
             unless texture_hash == texture_reference
               raise ParseError, "#{file.label}: unbound texture hash differs from its writer reference"
@@ -885,17 +1221,30 @@ module N64Game
               raise ParseError, "#{file.label}: material texture dimensions are invalid"
             end
           end
-          [20, 32].each do |axis_offset|
+          axes = [20, 32].map do |axis_offset|
             low = file.reader.f32(texture + axis_offset, "material tile low")
             high = file.reader.f32(texture + axis_offset + 4, "material tile high")
+            mask = file.reader.s8(texture + axis_offset + 8, "material tile mask")
             shift = file.reader.s8(texture + axis_offset + 9, "material tile shift")
             mirror = file.reader.u8(texture + axis_offset + 10, "material tile mirror")
             clamp = file.reader.u8(texture + axis_offset + 11, "material tile clamp")
             unless low.finite? && high.finite? && shift.between?(-5, 10) && mirror <= 1 && clamp <= 1
               raise ParseError, "#{file.label}: material tile parameters are invalid"
             end
+            { low: low, high: high, mask: mask, shift: shift, mirror: mirror, clamp: clamp }
           end
+          {
+            reference: texture_reference, path: path, hash: texture_hash,
+            width: width, height: height, axes: axes
+          }
         end
+        {
+          name: name, textures: textures, color_combiner: color_combiner,
+          other_mode_value: other_mode_value, other_mode_mask: other_mode_mask,
+          blend_mode: blend_mode, draw_flags: draw_flags, fog: fog,
+          color_flags: flags, vertex_fx: vertex_fx, prim_color: prim_color,
+          env_color: env_color, blend_color: blend_color
+        }
       end
     end
 
@@ -1021,6 +1370,14 @@ module N64Game
     end
 
     def parse_binding(bytes, label)
+      parse_ordered_binding(bytes, label, BINDING_KEYS)
+    end
+
+    def parse_runtime_binding(bytes, label)
+      parse_ordered_binding(bytes, label, RUNTIME_BINDING_KEYS)
+    end
+
+    def parse_ordered_binding(bytes, label, expected_keys)
       raise ParseError, "#{label}: binding bytes are missing" unless bytes.is_a?(String)
       raise ParseError, "#{label}: binding has BOM" if bytes.start_with?("\xEF\xBB\xBF".b)
       raise ParseError, "#{label}: binding must use LF only" if bytes.include?("\r")
@@ -1037,9 +1394,43 @@ module N64Game
         fields
       end
       keys = pairs.map(&:first)
-      raise ParseError, "#{label}: binding keys/order differ" unless keys == BINDING_KEYS
+      raise ParseError, "#{label}: binding keys/order differ" unless keys == expected_keys
       raise ParseError, "#{label}: binding contains an empty value" if pairs.any? { |pair| pair[1].empty? }
       pairs.to_h
+    end
+
+    def expected_runtime_binding(model_entries, build_id)
+      by_path = model_entries.each_with_object({}) { |entry, values| values[entry[:path]] = entry }
+      {
+        "schema" => RUNTIME_BINDING_SCHEMA,
+        "libdragon_commit" => N64Game::LibdragonSpriteContract::LIBDRAGON_COMMIT,
+        "tiny3d_commit" => TINY3D_COMMIT,
+        "runtime_helper_paths" => RUNTIME_HELPER_PATHS.join(","),
+        "runtime_helper_bundle_sha256" => APPROVED_RUNTIME_HELPER_BUNDLE_SHA256,
+        "production_id" => MODEL_PRODUCTION_ID,
+        "body_sprite_path" => BODY_TEXTURE_PATH,
+        "body_sprite_sha256" => by_path.fetch(BODY_TEXTURE_PATH)[:digest],
+        "body_rom_path" => BODY_TEXTURE_ROM_PATH,
+        "body_top_reference" => format("0x%08X", BODY_TOP_REFERENCE),
+        "body_top_rect_px" => BODY_DYNAMIC_BINDINGS[0][:rect].join(","),
+        "body_bottom_reference" => format("0x%08X", BODY_BOTTOM_REFERENCE),
+        "body_bottom_rect_px" => BODY_DYNAMIC_BINDINGS[1][:rect].join(","),
+        "body_reference_size_px" => "64,32",
+        "body_upload_mode" => "surface_make_sub+rdpq_tex_upload+tlut_every_bind",
+        "material_profile" => "TILE0_TEX0_X_SHADE_POINT",
+        "accent_sprite_path" => ACCENT_TEXTURE_PATH,
+        "accent_sprite_sha256" => by_path.fetch(ACCENT_TEXTURE_PATH)[:digest],
+        "accent_rom_path" => ACCENT_TEXTURE_ROM_PATH,
+        "blob_shadow_sprite_path" => BLOB_SHADOW_PATH,
+        "blob_shadow_sprite_sha256" => by_path.fetch(BLOB_SHADOW_PATH)[:digest],
+        "blob_shadow_rom_path" => BLOB_SHADOW_ROM_PATH,
+        "blob_shadow_format" => "IA8",
+        "blob_shadow_size_px" => "32,32",
+        "footprint_mm" => "1250,800",
+        "footprint_offset_mm" => "0,0",
+        "base_opacity_q8" => "176",
+        "build_id" => build_id
+      }
     end
 
     def expected_binding(model_entries, animation_entries, signature, build_id)

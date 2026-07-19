@@ -9,6 +9,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_libdragon_sprite_contract import accent_sprite, body_sprite, ext_offset, shadow_sprite
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUBY = "/usr/bin/ruby"
@@ -20,6 +22,18 @@ MODEL_PATHS = [
 ]
 ANIMATION_HEADER_PATH = "review/anm.echo.quarrune/g5/anm_echo_quarrune.t3dm"
 BINDING_PATH = "review/anm.echo.quarrune/g5/SKELETON_BINDING.tsv"
+BODY_TEXTURE_PATH = "review/echo.quarrune/g5/tex_quarrune_body_ci8_64x64.sprite"
+ACCENT_TEXTURE_PATH = "review/echo.quarrune/g5/tex_quarrune_accent_ci4_32x32.sprite"
+BLOB_SHADOW_PATH = "review/echo.quarrune/g5/tex_quarrune_blob_shadow_ia8_32x32.sprite"
+RUNTIME_BINDING_PATH = "review/echo.quarrune/g5/RUNTIME_BINDING.tsv"
+BODY_TEXTURE_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.sprite"
+ACCENT_TEXTURE_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite"
+BLOB_SHADOW_ROM_PATH = "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite"
+BODY_TOP_REFERENCE = 0x51554230
+BODY_BOTTOM_REFERENCE = 0x51554231
+QUARRUNE_TEX_SHADE_COMBINER = 0x001218248833FFFF
+QUARRUNE_OTHER_MODE_VALUE = 0x0000000000000000
+QUARRUNE_OTHER_MODE_MASK = 0x0000300000000000
 ANIMATION_NAMES = [
     "brace_relay",
     "entrance",
@@ -56,6 +70,16 @@ BINDING_KEYS = [
     "animation_names",
     "build_id",
 ]
+RUNTIME_BINDING_KEYS = [
+    "schema", "libdragon_commit", "tiny3d_commit", "runtime_helper_paths",
+    "runtime_helper_bundle_sha256", "production_id", "body_sprite_path",
+    "body_sprite_sha256", "body_rom_path", "body_top_reference", "body_top_rect_px",
+    "body_bottom_reference", "body_bottom_rect_px", "body_reference_size_px", "body_upload_mode",
+    "material_profile", "accent_sprite_path", "accent_sprite_sha256",
+    "accent_rom_path", "blob_shadow_sprite_path", "blob_shadow_sprite_sha256", "blob_shadow_rom_path",
+    "blob_shadow_format", "blob_shadow_size_px", "footprint_mm", "footprint_offset_mm",
+    "base_opacity_q8", "build_id",
+]
 
 
 def align(value: int, alignment: int) -> int:
@@ -73,14 +97,19 @@ def chunk_offsets(data: bytes, chunk_type: str) -> list[int]:
 
 def packed_vertices(total_vertices: int, marker: int,
                     minimum: tuple[int, int, int] = (-8, -4, -8),
-                    maximum: tuple[int, int, int] = (8, 12, 8)) -> bytes:
+                    maximum: tuple[int, int, int] = (8, 12, 8),
+                    uvs: list[tuple[int, int]] | None = None) -> bytes:
     assert total_vertices >= 2 and total_vertices % 2 == 0
     positions = [minimum, maximum] + [minimum] * (total_vertices - 2)
     output = bytearray(total_vertices * 16)
+    uvs = uvs or [(0, 0)] * total_vertices
+    assert len(uvs) == total_vertices
     for index, position in enumerate(positions):
         pair = (index // 2) * 32
         struct.pack_into(">3h", output, pair + (8 if index % 2 else 0), *position)
-    output[16] = marker  # RGBA byte: distinct artifacts without falsifying geometry.
+        struct.pack_into(">I", output, pair + (20 if index % 2 else 16),
+                         ((0x90 + marker) & 0xFF) << 24 | 0xA0B0FF)
+        struct.pack_into(">2h", output, pair + (28 if index % 2 else 24), *uvs[index])
     return bytes(output)
 
 
@@ -212,6 +241,98 @@ def model_file(
     output[vertex_offset:vertex_offset + len(vertices)] = vertices
     output[index_offset:index_offset + len(indices)] = indices
     output[material_offset:material_offset + len(material)] = material
+    output[skeleton_offset:skeleton_offset + len(skeleton)] = skeleton
+    output.extend(strings.data)
+    return bytes(output), signature
+
+
+def production_model_file(variant: str, triangle_total: int | None = None) -> tuple[bytes, str]:
+    strings = StringTable()
+    skeleton, signature = skeleton_payload(strings)
+    triangle_total = triangle_total if triangle_total is not None else (500 if variant == "distance" else 900)
+    assert triangle_total >= 3
+    triangle_counts = [triangle_total // 3, triangle_total // 3, triangle_total - 2 * (triangle_total // 3)]
+    bounds = [((-8, -4, -8), (-3, 4, -3)), ((-2, -2, -2), (2, 12, 2)), ((3, -3, 3), (8, 6, 8))]
+
+    materials: list[bytes] = []
+    texture_specs = (
+        (BODY_TOP_REFERENCE, None, 64, 32),
+        (BODY_BOTTOM_REFERENCE, None, 64, 32),
+        (0, ACCENT_TEXTURE_ROM_PATH, 32, 32),
+    )
+    for index, (reference, path, width, height) in enumerate(texture_specs):
+        material = bytearray(0x8C)
+        struct.pack_into(">QQQII", material, 0, QUARRUNE_TEX_SHADE_COMBINER,
+                         QUARRUNE_OTHER_MODE_VALUE, QUARRUNE_OTHER_MODE_MASK, 0, 0x07)
+        struct.pack_into(">I", material, 0x30, strings.add(f"quarrune_{variant}_mat_{index}"))
+        path_offset = strings.add(path) if path else 0
+        texture_hash = tiny3d_string_hash(path) if path else reference
+        struct.pack_into(">IIIIHH", material, 0x34, reference, path_offset, texture_hash, 0, width, height)
+        struct.pack_into(">ffbbBB", material, 0x34 + 20, 0.0, float(width - 1), 0, 0, 0, 1)
+        struct.pack_into(">ffbbBB", material, 0x34 + 32, 0.0, float(height - 1), 0, 0, 0, 1)
+        materials.append(bytes(material))
+
+    objects: list[bytes] = []
+    vertices = bytearray()
+    indices = bytearray()
+    for index, (minimum, maximum) in enumerate(bounds):
+        texture_width = texture_specs[index][2]
+        texture_height = texture_specs[index][3]
+        triangle_count = triangle_counts[index]
+        obj = bytearray()
+        obj.extend(struct.pack(">IHHIII", strings.add(f"quarrune_{variant}_part_{index}"),
+                               1, triangle_count, index, 0, 0))
+        obj.extend(struct.pack(">3h3h", *minimum, *maximum))
+        obj.extend(struct.pack(">IHHIHH4BBB2B", index * 64, 4, 0, len(indices), triangle_count * 3,
+                               index, 0, 0, 0, 0, 0, 0, 0, 0))
+        objects.append(bytes(obj))
+        vertices.extend(packed_vertices(
+            4, 0x41 + index + (4 if variant == "hero" else 0), minimum, maximum,
+            [
+                (0, 0), (texture_width * 32, 0), (0, texture_height * 32),
+                (texture_width * 32, texture_height * 32),
+            ],
+        ))
+        triangle_patterns = ((0, 1, 2), (0, 2, 3))
+        for triangle_index in range(triangle_count):
+            indices.extend(triangle_patterns[triangle_index % len(triangle_patterns)])
+
+    chunk_count = 9
+    table_end = 0x2C + chunk_count * 4
+    object_offsets: list[int] = []
+    cursor = table_end
+    for obj in objects:
+        cursor = align(cursor, 8)
+        object_offsets.append(cursor)
+        cursor += len(obj)
+    vertex_offset = align(cursor, 16)
+    index_offset = align(vertex_offset + len(vertices), 4)
+    material_offsets: list[int] = []
+    cursor = index_offset + len(indices)
+    for material in materials:
+        cursor = align(cursor, 8)
+        material_offsets.append(cursor)
+        cursor += len(material)
+    skeleton_offset = align(cursor, 8)
+    string_offset = align(skeleton_offset + len(skeleton), 4)
+    output = bytearray(string_offset)
+    output[0:4] = b"T3M\x04"
+    struct.pack_into(">IHHIIIII3h3h", output, 4, chunk_count, 12, len(indices), 3, 4, 5,
+                     string_offset, 0, -8, -4, -8, 8, 12, 8)
+    chunks = [(b"O", offset) for offset in object_offsets]
+    chunks.extend([(b"V", vertex_offset), (b"I", index_offset)])
+    chunks.extend((b"M", offset) for offset in material_offsets)
+    chunks.append((b"S", skeleton_offset))
+    for index, (chunk_type, offset) in enumerate(chunks):
+        table = 0x2C + index * 4
+        output[table] = chunk_type[0]
+        output[table + 1:table + 4] = offset.to_bytes(3, "big")
+    for obj, offset in zip(objects, object_offsets):
+        output[offset:offset + len(obj)] = obj
+    output[vertex_offset:vertex_offset + len(vertices)] = vertices
+    output[index_offset:index_offset + len(indices)] = indices
+    for material, offset in zip(materials, material_offsets):
+        output[offset:offset + len(material)] = material
     output[skeleton_offset:skeleton_offset + len(skeleton)] = skeleton
     output.extend(strings.data)
     return bytes(output), signature
@@ -378,6 +499,41 @@ def binding_bytes(model_entries: list[dict[str, object]], animation_entries: lis
     return "".join(f"{key}\t{values[key]}\n" for key in BINDING_KEYS).encode()
 
 
+def runtime_binding_bytes(model_entries: list[dict[str, object]], build_id: str = BUILD_ID) -> bytes:
+    by_path = {str(value["path"]): value for value in model_entries}
+    values = {
+        "schema": "n64game-quarrune-runtime-binding-v1",
+        "libdragon_commit": "f13b48985edbf4310f07779c76d9a68c7605037b",
+        "tiny3d_commit": TINY3D_COMMIT,
+        "runtime_helper_paths": "src/quarrune_render_assets.c,src/quarrune_render_assets.h",
+        "runtime_helper_bundle_sha256": "b9125d3375842e75dc4d0227abbf2158126e1b9ba684842c9f9326071c7b7853",
+        "production_id": "echo.quarrune",
+        "body_sprite_path": BODY_TEXTURE_PATH,
+        "body_sprite_sha256": str(by_path[BODY_TEXTURE_PATH]["digest"]),
+        "body_rom_path": BODY_TEXTURE_ROM_PATH,
+        "body_top_reference": f"0x{BODY_TOP_REFERENCE:08X}",
+        "body_top_rect_px": "0,0,64,32",
+        "body_bottom_reference": f"0x{BODY_BOTTOM_REFERENCE:08X}",
+        "body_bottom_rect_px": "0,32,64,64",
+        "body_reference_size_px": "64,32",
+        "body_upload_mode": "surface_make_sub+rdpq_tex_upload+tlut_every_bind",
+        "material_profile": "TILE0_TEX0_X_SHADE_POINT",
+        "accent_sprite_path": ACCENT_TEXTURE_PATH,
+        "accent_sprite_sha256": str(by_path[ACCENT_TEXTURE_PATH]["digest"]),
+        "accent_rom_path": ACCENT_TEXTURE_ROM_PATH,
+        "blob_shadow_sprite_path": BLOB_SHADOW_PATH,
+        "blob_shadow_sprite_sha256": str(by_path[BLOB_SHADOW_PATH]["digest"]),
+        "blob_shadow_rom_path": BLOB_SHADOW_ROM_PATH,
+        "blob_shadow_format": "IA8",
+        "blob_shadow_size_px": "32,32",
+        "footprint_mm": "1250,800",
+        "footprint_offset_mm": "0,0",
+        "base_opacity_q8": "176",
+        "build_id": build_id,
+    }
+    return "".join(f"{key}\t{values[key]}\n" for key in RUNTIME_BINDING_KEYS).encode()
+
+
 def refresh_entry(values: dict[str, object], path: str) -> None:
     entries = values["model_entries"] + values["animation_entries"]  # type: ignore[operator]
     target = next(item for item in entries if item["path"] == path)
@@ -386,14 +542,29 @@ def refresh_entry(values: dict[str, object], path: str) -> None:
     target["count"] = len(data)
 
 
-def fixture() -> dict[str, object]:
-    distance, signature = model_file("distance")
-    hero, hero_signature = model_file("hero")
+def fixture(*, hero_triangles: int = 900, distance_triangles: int = 500) -> dict[str, object]:
+    distance, signature = production_model_file("distance", distance_triangles)
+    hero, hero_signature = production_model_file("hero", hero_triangles)
     animation, streams, animation_signature = animation_file()
     assert signature == hero_signature == animation_signature
-    values: dict[str, bytes] = {MODEL_PATHS[0]: distance, MODEL_PATHS[1]: hero, ANIMATION_HEADER_PATH: animation}
+    values: dict[str, bytes] = {
+        MODEL_PATHS[0]: distance,
+        MODEL_PATHS[1]: hero,
+        BODY_TEXTURE_PATH: body_sprite(),
+        ACCENT_TEXTURE_PATH: accent_sprite(),
+        BLOB_SHADOW_PATH: shadow_sprite(),
+        ANIMATION_HEADER_PATH: animation,
+    }
     values.update(streams)
     model_entries = [entry(path, "output.tiny3d.model", values[path], "lfs") for path in MODEL_PATHS]
+    model_entries.extend((
+        entry(BODY_TEXTURE_PATH, "output.texture.body", values[BODY_TEXTURE_PATH], "lfs"),
+        entry(ACCENT_TEXTURE_PATH, "output.texture.accent", values[ACCENT_TEXTURE_PATH], "lfs"),
+        entry(BLOB_SHADOW_PATH, "output.blob_shadow.sprite", values[BLOB_SHADOW_PATH], "lfs"),
+    ))
+    runtime_binding = runtime_binding_bytes(model_entries)
+    values[RUNTIME_BINDING_PATH] = runtime_binding
+    model_entries.append(entry(RUNTIME_BINDING_PATH, "output.runtime_binding", runtime_binding, "git"))
     animation_entries = [entry(ANIMATION_HEADER_PATH, "output.tiny3d.animation_header", animation, "lfs")]
     animation_entries.extend(entry(path, "output.tiny3d.animation_stream", streams[path], "lfs") for path in STREAM_PATHS)
     binding = binding_bytes(model_entries, animation_entries, signature)
@@ -405,6 +576,12 @@ def fixture() -> dict[str, object]:
         "bytes": values,
         "signature": signature,
     }
+
+
+def refresh_runtime_binding(values: dict[str, object]) -> None:
+    binding = runtime_binding_bytes(values["model_entries"])  # type: ignore[arg-type]
+    values["bytes"][RUNTIME_BINDING_PATH] = binding  # type: ignore[index]
+    refresh_entry(values, RUNTIME_BINDING_PATH)
 
 
 class Tiny3DPackageContractTests(unittest.TestCase):
@@ -486,6 +663,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
         self.assertEqual(result["issues"], [])
         self.assertEqual(result["model"]["bone_count"], 20)
         self.assertEqual(result["model"]["skeleton_signature"], values["signature"])
+        self.assertEqual(result["model"]["objects"][0]["drawn_source_vertices"], [0, 1, 2, 3])
         self.assertEqual(result["animation"]["animation_names"], ANIMATION_NAMES)
         self.assertEqual(result["animation"]["stream_count"], 9)
         self.assertEqual(result["animation"]["skeleton_signature"], values["signature"])
@@ -506,6 +684,15 @@ class Tiny3DPackageContractTests(unittest.TestCase):
         decoded = self.ruby("model", {"bytes": {"subject": variants["two_object_internal_bvh"]}})["decoded"]
         self.assertEqual(decoded["object_count"], 2)
         self.assertTrue(decoded["has_bvh"])
+        expected_drawn_sources = {
+            "load_only_bone_prefix": [0, 1, 2],
+            "three_triangle_sequence": list(range(9)),
+            "strip_with_restart": list(range(8)),
+        }
+        for name, expected in expected_drawn_sources.items():
+            with self.subTest(drawn_sources=name):
+                decoded = self.ruby("model", {"bytes": {"subject": variants[name]}})["decoded"]
+                self.assertEqual(decoded["objects"][0]["drawn_source_vertices"], expected)
 
     def test_material_texture_binding_and_runtime_fields_are_checked(self) -> None:
         clean, _signature = model_file("hero", with_texture=True)
@@ -702,7 +889,7 @@ class Tiny3DPackageContractTests(unittest.TestCase):
 
     def test_pair_rejects_ownership_build_storage_and_binding_mutations(self) -> None:
         cases: dict[str, tuple[callable, str]] = {
-            "missing_model": (lambda value: value["model_entries"].pop(), "exactly the hero and distance"),
+            "missing_model": (lambda value: value["model_entries"].pop(0), "exactly the hero and distance"),
             "wrong_model_role": (lambda value: value["model_entries"][0].__setitem__("role", "output.texture"), "wrong model role"),
             "model_stream": (lambda value: value["model_entries"].append(entry(STREAM_PATHS[0], "output.tiny3d.animation_stream", value["bytes"][STREAM_PATHS[0]], "lfs")), "must not own animation streams"),
             "missing_stream": (lambda value: value["animation_entries"].pop(1), "exact nine canonical streams"),
@@ -733,6 +920,37 @@ class Tiny3DPackageContractTests(unittest.TestCase):
                 "role may name only the canonical header",
             ),
             "binding_signature": (lambda value: value["bytes"].__setitem__(BINDING_PATH, value["bytes"][BINDING_PATH].replace(value["signature"].encode(), b"0" * 64)), "SHA-256 differs"),
+            "missing_sprite": (
+                lambda value: value["model_entries"].__delitem__(2),
+                "exactly the body, accent, and blob-shadow sprites",
+            ),
+            "wrong_sprite_role": (
+                lambda value: value["model_entries"][2].__setitem__("role", "output.binary"),
+                "wrong sprite role",
+            ),
+            "ordinary_git_sprite": (
+                lambda value: value["model_entries"][2].__setitem__("kind", "git"),
+                "storage kind must be lfs",
+            ),
+            "executable_sprite": (
+                lambda value: value["model_entries"][2].__setitem__("mode", "100755"),
+                "mode 100644",
+            ),
+            "extra_sprite": (
+                lambda value: value["model_entries"].append(
+                    entry("review/echo.quarrune/g5/unreviewed.sprite", "output.binary",
+                          value["bytes"][BODY_TEXTURE_PATH], "lfs")
+                ),
+                "exactly the body, accent, and blob-shadow sprites",
+            ),
+            "missing_runtime_binding": (
+                lambda value: value["model_entries"].pop(),
+                "exactly one canonical runtime binding",
+            ),
+            "wrong_runtime_binding_role": (
+                lambda value: value["model_entries"][-1].__setitem__("role", "output.binary"),
+                "wrong runtime-binding role",
+            ),
         }
         for name, (mutate, expected) in cases.items():
             with self.subTest(mutation=name):
@@ -747,6 +965,233 @@ class Tiny3DPackageContractTests(unittest.TestCase):
         payload["animation_build_id"] = "other-build"
         result = self.ruby("pair", payload)
         self.assertTrue(any("shared substantive build ID" in issue for issue in result["issues"]))
+
+    def test_production_pair_enforces_budgets_material_use_and_dynamic_regions(self) -> None:
+        budget_cases = (
+            ("hero_low", {"hero_triangles": 849}, "850-1250 hero budget"),
+            ("hero_high", {"hero_triangles": 1251}, "850-1250 hero budget"),
+            ("distance_high", {"hero_triangles": 1100, "distance_triangles": 651}, "45-60 percent"),
+            ("ratio_low", {"distance_triangles": 400}, "45-60 percent"),
+            ("ratio_high", {"distance_triangles": 541}, "45-60 percent"),
+        )
+        for name, kwargs, expected in budget_cases:
+            with self.subTest(case=name):
+                result = self.ruby("pair", self.pair_payload(fixture(**kwargs)))
+                self.assertTrue(any(expected in issue for issue in result["issues"]), result)
+
+        def run_model_mutation(mutate: callable, expected: str) -> None:
+            values = fixture()
+            hero = bytearray(values["bytes"][MODEL_PATHS[1]])
+            mutate(hero)
+            values["bytes"][MODEL_PATHS[1]] = bytes(hero)
+            refresh_entry(values, MODEL_PATHS[1])
+            result = self.ruby("pair", self.pair_payload(values))
+            self.assertTrue(any(expected in issue for issue in result["issues"]), result)
+
+        clean = fixture()["bytes"][MODEL_PATHS[1]]
+        object_offsets = chunk_offsets(clean, "O")
+        material_offsets = chunk_offsets(clean, "M")
+        vertex_offset = chunk_offsets(clean, "V")[0]
+
+        def collapse_accent_uvs(data: bytearray) -> None:
+            for vertex_index in range(8, 12):
+                pair = vertex_offset + (vertex_index // 2) * 32
+                uv = pair + (28 if vertex_index % 2 else 24)
+                struct.pack_into(">2h", data, uv, 0, 0)
+
+        def hide_uv_span_on_unindexed_vertex(data: bytearray) -> None:
+            first_index_offset = chunk_offsets(data, "I")[0]
+            first_index_count = struct.unpack_from(">H", data, object_offsets[0] + 32 + 12)[0]
+            data[first_index_offset:first_index_offset + first_index_count] = (
+                bytes((0, 1, 2)) * (first_index_count // 3)
+            )
+            for vertex_index in range(3):
+                pair = vertex_offset + (vertex_index // 2) * 32
+                uv = pair + (28 if vertex_index % 2 else 24)
+                struct.pack_into(">2h", data, uv, 0, 0)
+
+        def mutate_primitive_color(data: bytearray) -> None:
+            data[material_offsets[0] + 0x22] = 1
+            data[material_offsets[0] + 0x24:material_offsets[0] + 0x28] = b"\xFF\xFF\xFF\xFF"
+
+        model_cases: dict[str, tuple[callable, str]] = {
+            "unused_material": (
+                lambda data: struct.pack_into(">I", data, object_offsets[2] + 8, 1),
+                "exactly three materials and use every one",
+            ),
+            "unknown_body_reference": (
+                lambda data: (
+                    struct.pack_into(">I", data, material_offsets[1] + 0x34, 0x51554232),
+                    struct.pack_into(">I", data, material_offsets[1] + 0x34 + 8, 0x51554232),
+                ),
+                "exact two pathless CI8 region references",
+            ),
+            "wrong_region_height": (
+                lambda data: struct.pack_into(">H", data, material_offsets[0] + 0x34 + 18, 64),
+                "dimensions/tile parameters are not canonical",
+            ),
+            "wrong_region_axis": (
+                lambda data: struct.pack_into(">f", data, material_offsets[0] + 0x34 + 24, 62.0),
+                "dimensions/tile parameters are not canonical",
+            ),
+            "second_active_texture": (
+                lambda data: (
+                    struct.pack_into(">I", data, material_offsets[0] + 0x60, 0x5155427F),
+                    struct.pack_into(">I", data, material_offsets[0] + 0x60 + 8, 0x5155427F),
+                    struct.pack_into(">HH", data, material_offsets[0] + 0x60 + 16, 16, 16),
+                ),
+                "exactly one texture",
+            ),
+            "blank_combiner": (
+                lambda data: struct.pack_into(">Q", data, material_offsets[0], 0),
+                "TEX0 x SHADE",
+            ),
+            "unshaded_draw_flags": (
+                lambda data: struct.pack_into(">I", data, material_offsets[0] + 28, 0x03),
+                "depth/textured/shaded",
+            ),
+            "bilinear_filter": (
+                lambda data: struct.pack_into(">Q", data, material_offsets[0] + 8,
+                                              0x0000200000000000),
+                "point filtering",
+            ),
+            "texture_lod": (
+                lambda data: struct.pack_into(">Q", data, material_offsets[0] + 8,
+                                              0x0001000000000000),
+                "point filtering",
+            ),
+            "unreviewed_other_mode_mask": (
+                lambda data: struct.pack_into(">Q", data, material_offsets[0] + 16,
+                                              QUARRUNE_OTHER_MODE_MASK | 1),
+                "point filtering",
+            ),
+            "unknown_blend_mode": (
+                lambda data: struct.pack_into(">I", data, material_offsets[0] + 24, 0xFFFFFFFF),
+                "opaque blending",
+            ),
+            "active_fog": (
+                lambda data: data.__setitem__(material_offsets[0] + 0x21, 2),
+                "default fog/colors",
+            ),
+            "primitive_color": (
+                mutate_primitive_color,
+                "default fog/colors",
+            ),
+            "uv_out_of_region": (
+                lambda data: struct.pack_into(">h", data, vertex_offset + 26, 1025),
+                "packed UVs leave its region-local texture bounds",
+            ),
+            "negative_point_uv": (
+                lambda data: struct.pack_into(">h", data, vertex_offset + 24, -1),
+                "packed UVs leave its region-local texture bounds",
+            ),
+            "span_only_on_unindexed_vertex": (
+                hide_uv_span_on_unindexed_vertex,
+                "UV island is too collapsed",
+            ),
+            "collapsed_accent_uvs": (
+                collapse_accent_uvs,
+                "UV island is too collapsed",
+            ),
+        }
+        for name, (mutate, expected) in model_cases.items():
+            with self.subTest(case=name):
+                run_model_mutation(mutate, expected)
+
+    def test_sprite_content_and_runtime_binding_fail_closed_semantically(self) -> None:
+        def run_sprite_mutation(path: str, mutate: callable, expected: str) -> None:
+            values = fixture()
+            sprite = bytearray(values["bytes"][path])
+            mutate(sprite)
+            values["bytes"][path] = bytes(sprite)
+            refresh_entry(values, path)
+            refresh_runtime_binding(values)
+            result = self.ruby("pair", self.pair_payload(values))
+            self.assertTrue(any(expected in issue for issue in result["issues"]), result)
+
+        body = body_sprite()
+        body_palette = ext_offset(body) + 128
+        accent = accent_sprite()
+        accent_ext = ext_offset(accent)
+        accent_palette = accent_ext + 128
+        sprite_cases: dict[str, tuple[str, callable, str]] = {
+            "transparent_body_palette": (
+                BODY_TEXTURE_PATH,
+                lambda data: struct.pack_into(">H", data, body_palette,
+                                              struct.unpack_from(">H", data, body_palette)[0] & 0xFFFE),
+                "unique and opaque",
+            ),
+            "duplicate_body_palette": (
+                BODY_TEXTURE_PATH,
+                lambda data: data.__setitem__(slice(body_palette + 2, body_palette + 4),
+                                              data[body_palette:body_palette + 2]),
+                "unique and opaque",
+            ),
+            "blank_accent": (
+                ACCENT_TEXTURE_PATH,
+                lambda data: (
+                    data.__setitem__(slice(8, accent_ext), bytes(accent_ext - 8)),
+                    data.__setitem__(accent_ext + 66, 1),
+                ),
+                "at least 8 colors",
+            ),
+            "flat_accent_values": (
+                ACCENT_TEXTURE_PATH,
+                lambda data: [struct.pack_into(">H", data, accent_palette + index * 2,
+                                                   (index << 1) | 1) for index in range(16)],
+                "readable value range",
+            ),
+            "shadow_perimeter": (
+                BLOB_SHADOW_PATH,
+                lambda data: data.__setitem__(8, 15),
+                "perimeter must be transparent",
+            ),
+            "shadow_island": (
+                BLOB_SHADOW_PATH,
+                lambda data: data.__setitem__(8 + 33, 15),
+                "disconnected islands",
+            ),
+        }
+        for name, (path, mutate, expected) in sprite_cases.items():
+            with self.subTest(case=name):
+                run_sprite_mutation(path, mutate, expected)
+
+        binding_cases = (
+            (
+                "wrong_runtime_helper",
+                lambda data: data.replace(
+                    b"runtime_helper_bundle_sha256\tb9125d3375842e75dc4d0227abbf2158126e1b9ba684842c9f9326071c7b7853\n",
+                    b"runtime_helper_bundle_sha256\t" + b"0" * 64 + b"\n",
+                ),
+                "runtime_helper_bundle_sha256 binding mismatch",
+            ),
+            (
+                "wrong_rect",
+                lambda data: data.replace(b"body_bottom_rect_px\t0,32,64,64\n",
+                                          b"body_bottom_rect_px\t0,31,64,64\n"),
+                "body_bottom_rect_px binding mismatch",
+            ),
+            (
+                "wrong_opacity",
+                lambda data: data.replace(b"base_opacity_q8\t176\n", b"base_opacity_q8\t177\n"),
+                "base_opacity_q8 binding mismatch",
+            ),
+            (
+                "key_order",
+                lambda data: b"".join(
+                    [data.splitlines(keepends=True)[1], data.splitlines(keepends=True)[0]]
+                    + data.splitlines(keepends=True)[2:]
+                ),
+                "binding keys/order differ",
+            ),
+        )
+        for name, mutate, expected in binding_cases:
+            with self.subTest(case=name):
+                values = fixture()
+                values["bytes"][RUNTIME_BINDING_PATH] = mutate(values["bytes"][RUNTIME_BINDING_PATH])
+                refresh_entry(values, RUNTIME_BINDING_PATH)
+                result = self.ruby("pair", self.pair_payload(values))
+                self.assertTrue(any(expected in issue for issue in result["issues"]), result)
 
     def test_pair_reaches_cross_file_skeleton_and_semantic_binding_checks(self) -> None:
         values = fixture()

@@ -626,6 +626,16 @@ class PublicConceptAuthorityTests(unittest.TestCase):
         self.assertIn(
             'require ROOT.join("lib/n64game/public_commit_authority").to_s', validator
         )
+        execution_paths_match = re.search(
+            r"PUBLIC_AUTHORITY_EXECUTION_PATHS\s*=\s*%w\[(.*?)\]\.freeze",
+            validator,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(execution_paths_match)
+        self.assertIn(
+            "lib/n64game/libdragon_sprite_contract.rb",
+            execution_paths_match.group(1).split(),
+        )
         adapter_match = re.search(
             r"^def prepare_fresh_advertised_public_head\b.*?(?=^def validate_staged_control_transaction\b)",
             validator,

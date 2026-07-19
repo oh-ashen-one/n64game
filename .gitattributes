@@ -13,8 +13,10 @@ review/**/*.png filter=lfs diff=lfs merge=lfs -text
 review/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
 review/**/*.t3dm filter=lfs diff=lfs merge=lfs -text
 review/**/*.sdata filter=lfs diff=lfs merge=lfs -text
+review/**/*.sprite filter=lfs diff=lfs merge=lfs -text
 review/**/AUTHORING_STACK_RECEIPT.txt text eol=lf
 review/**/SKELETON_BINDING.tsv text eol=lf
+review/**/RUNTIME_BINDING.tsv text eol=lf
 config/toolchain.lock.json text eol=lf
 scripts/check-authoring-stack text eol=lf
 scripts/record-authoring-stack-receipt text eol=lf
@@ -25,6 +27,7 @@ tools/n64game_authoring_receipt.py text eol=lf
 lib/n64game/authoring_stack_receipt.rb text eol=lf
 lib/n64game/public_commit_authority.rb text eol=lf
 lib/n64game/tiny3d_package_contract.rb text eol=lf
+lib/n64game/libdragon_sprite_contract.rb text eol=lf
 
 # Keep text artifacts reviewable across platforms.
 *.md text eol=lf

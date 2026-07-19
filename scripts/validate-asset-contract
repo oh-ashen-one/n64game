@@ -17,6 +17,7 @@ ROOT = Pathname.new(__dir__).join("..").expand_path
 require ROOT.join("lib/n64game/asset_lifecycle_contract").to_s
 require ROOT.join("lib/n64game/authoring_stack_receipt").to_s
 require ROOT.join("lib/n64game/public_commit_authority").to_s
+require ROOT.join("lib/n64game/libdragon_sprite_contract").to_s
 require ROOT.join("lib/n64game/tiny3d_package_contract").to_s
 ERRORS = []
 
@@ -387,6 +388,7 @@ PUBLIC_AUTHORITY_EXECUTION_PATHS = %w[
   scripts/validate-asset-contract
   lib/n64game/asset_lifecycle_contract.rb
   lib/n64game/authoring_stack_receipt.rb
+  lib/n64game/libdragon_sprite_contract.rb
   lib/n64game/public_commit_authority.rb
   lib/n64game/tiny3d_package_contract.rb
 ].freeze
@@ -498,7 +500,7 @@ COMPLETE_SUBSET_IDS = Set.new(%w[
 ]).freeze
 INVENTORY_PRODUCTION_ID_COUNT = 381
 INVENTORY_PRODUCTION_ID_SET_SHA256 = "b32202371a31494d5f9a755c543042f7fa6fe624f2a074902fdee5e9b4db5688"
-BINARY_LFS_EXTENSIONS = %w[.blend .fbx .glb .gltf .psd .kra .xcf .png .jpg .jpeg .webp .qoi .mp4 .mov .mkv .wav .flac .aiff .ogg .t3dm .sdata].freeze
+BINARY_LFS_EXTENSIONS = %w[.blend .fbx .glb .gltf .psd .kra .xcf .png .jpg .jpeg .webp .qoi .mp4 .mov .mkv .wav .flac .aiff .ogg .t3dm .sdata .sprite].freeze
 CAPTURE_NAMES = %w[attack_anticipation dialogue exploration impact support target_selection].freeze
 EVIDENCE_SPECS = {
   "ev.benchmark.native" => {
@@ -5479,6 +5481,29 @@ def validate_quarrune_tiny3d_pair(model_output:, animation_output:, payload_cont
     return
   end
 
+  runtime_helper_members = {}
+  N64Game::Tiny3DPackageContract::RUNTIME_HELPER_PATHS.each do |path|
+    material = materialized_commit_file(
+      path, commit, "#{label} runtime helper #{path}",
+      fresh_clone: fresh_clone, allow_lfs: false
+    )
+    next unless material
+
+    unless material[:kind] == :git && material[:mode] == "100644"
+      error("#{label}: runtime helper must be ordinary Git mode 100644: #{path}")
+      next
+    end
+    runtime_helper_members[path] = material[:bytes]
+  end
+  runtime_helper_bundle_sha256 =
+    N64Game::Tiny3DPackageContract.runtime_helper_bundle_sha256(runtime_helper_members)
+  if runtime_helper_bundle_sha256 &&
+     runtime_helper_bundle_sha256 != N64Game::Tiny3DPackageContract::APPROVED_RUNTIME_HELPER_BUNDLE_SHA256
+    error("#{label}: reviewed runtime-helper bundle SHA-256 differs from the approved contract")
+  elsif runtime_helper_bundle_sha256.nil?
+    error("#{label}: reviewed runtime-helper bundle is incomplete or malformed")
+  end
+
   expected_paths = {
     model_output => "review/echo.quarrune/g5/OUTPUT_MANIFEST.sha256",
     animation_output => "review/anm.echo.quarrune/g5/OUTPUT_MANIFEST.sha256"
@@ -5503,13 +5528,20 @@ def validate_quarrune_tiny3d_pair(model_output:, animation_output:, payload_cont
     direct_paths = direct_entries.map { |entry| entry[:path] }.to_set
     manifest_owned_paths(context, expected_path).each do |path|
       entry = context[:entries][path]
-      relevant = %w[.t3dm .sdata].include?(File.extname(path).downcase) ||
-                 path == N64Game::Tiny3DPackageContract::SKELETON_BINDING_PATH ||
+      relevant = %w[.t3dm .sdata .sprite].include?(File.extname(path).downcase) ||
+                 [
+                   N64Game::Tiny3DPackageContract::SKELETON_BINDING_PATH,
+                   N64Game::Tiny3DPackageContract::RUNTIME_BINDING_PATH
+                 ].include?(path) ||
                  entry && [
                    N64Game::Tiny3DPackageContract::MODEL_ROLE,
                    N64Game::Tiny3DPackageContract::ANIMATION_HEADER_ROLE,
                    N64Game::Tiny3DPackageContract::ANIMATION_STREAM_ROLE,
-                   N64Game::Tiny3DPackageContract::SKELETON_BINDING_ROLE
+                   N64Game::Tiny3DPackageContract::SKELETON_BINDING_ROLE,
+                   N64Game::Tiny3DPackageContract::BODY_TEXTURE_ROLE,
+                   N64Game::Tiny3DPackageContract::ACCENT_TEXTURE_ROLE,
+                   N64Game::Tiny3DPackageContract::BLOB_SHADOW_ROLE,
+                   N64Game::Tiny3DPackageContract::RUNTIME_BINDING_ROLE
                  ].include?(entry[:role])
       error("#{label}: Tiny3D package member must be a direct output-manifest member: #{path}") if
         relevant && !direct_paths.include?(path)
@@ -6304,7 +6336,7 @@ inventory = read("docs/ASSET_INVENTORY.md")
 ledger = read("docs/ASSET_LEDGER.md")
 reviews = read("docs/ASSET_REVIEW_TEMPLATES.md")
 benchmark = read("docs/VISUAL_BENCHMARK_APPROVAL.md")
-error("Gate 5 must remain locked until the remaining texture/blob-shadow contract and audited exporter are implemented, pinned, and deliberately enabled") unless
+error("Gate 5 must remain locked until the runtime callback, deterministic exporter, real art, and review evidence are implemented, pinned, and deliberately enabled") unless
   N64Game::AuthoringStackReceipt::GATE5_EXPORT_IMPLEMENTED == false &&
   N64Game::AuthoringStackReceipt::APPROVED_GATE5_EXPORTER_SHA256 == "PENDING"
 toolchain = read("docs/TOOLCHAIN.md")
