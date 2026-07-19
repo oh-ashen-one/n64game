@@ -94,6 +94,7 @@ def path_findings(path)
   normalized_casefold = normalized.downcase
   extension = File.extname(normalized).downcase
   findings = []
+  findings << "control character in public pathname" if normalized.match?(/[\x00-\x1F\x7F]/)
   findings << "forbidden public artifact extension #{extension}" if BANNED_EXTENSIONS.include?(extension)
   if BANNED_PUBLIC_PATH_PREFIXES.any? { |prefix| normalized_casefold.start_with?(prefix) }
     findings << "forbidden generated-build path"
@@ -109,13 +110,16 @@ def artifact_findings(path, bytes, scan_rejected_names: true)
   magic_labels(bytes).each { |label| findings << label }
 
   text = decode_text(bytes)
-  if text
+  if text.nil? && (bytes.start_with?("\xFF\xFE".b) || bytes.start_with?("\xFE\xFF".b))
+    findings << "malformed BOM-marked UTF-16 content"
+  end
+  [bytes, text].compact.each do |content|
     SECRET_PATTERNS.each do |label, pattern|
-      findings << "possible #{label}" if text.match?(pattern)
+      findings << "possible #{label}" if content.match?(pattern)
     end
     if scan_rejected_names && !REJECTED_NAME_EXEMPT_PATHS.include?(path.to_s)
       REJECTED_NAMES.each do |name|
-        findings << "rejected working name remains: #{name}" if text.match?(/\b#{Regexp.escape(name)}\b/i)
+        findings << "rejected working name remains: #{name}" if content.match?(/\b#{Regexp.escape(name)}\b/i)
       end
     end
   end
@@ -129,19 +133,29 @@ def add_artifact_findings(errors, label, path, bytes, scan_rejected_names: true)
 end
 
 def reachable_blob_records(root, errors)
-  objects, stderr, success = git_capture(root, "rev-list", "--objects", "--all")
+  # Enumerate object IDs without path decorations. Git pathnames may contain
+  # newlines, so line-parsing `rev-list --objects` output can otherwise detach
+  # an OID from its path and silently omit a reachable blob. Path policy is
+  # checked separately through NUL-delimited history traversal below.
+  objects, stderr, success = git_capture(
+    root, "rev-list", "--objects", "--all", "--no-object-names"
+  )
   unless success
     errors << "history: cannot enumerate reachable objects: #{stderr.strip}"
     return []
   end
-  paths_by_oid = Hash.new { |hash, key| hash[key] = [] }
-  objects.each_line do |line|
-    oid, path = line.chomp.split(" ", 2)
-    paths_by_oid[oid] << path if path && !path.empty?
+  object_ids = []
+  objects.each_line.with_index do |line, index|
+    oid = line.chomp
+    if oid.match?(/\A[0-9a-f]+\z/)
+      object_ids << oid
+    else
+      errors << "history: malformed reachable object ID at row #{index + 1}"
+    end
   end
-  return [] if paths_by_oid.empty?
+  object_ids.uniq!
+  return [] if object_ids.empty?
 
-  object_ids = paths_by_oid.keys
   checked, check_error, check_ok = git_capture(
     root,
     "cat-file",
@@ -156,7 +170,63 @@ def reachable_blob_records(root, errors)
     oid, type, size_text = line.split
     next unless type == "blob"
 
-    records << { oid: oid, size: Integer(size_text, 10), paths: paths_by_oid.fetch(oid, []) }
+    records << { oid: oid, size: Integer(size_text, 10), paths: [] }
+  end
+end
+
+def validate_public_ref_roots(root, errors)
+  output, stderr, success = git_capture(root, "for-each-ref", "--format=%(refname)")
+  unless success
+    errors << "refs: cannot enumerate public history roots: #{stderr.strip}"
+    return
+  end
+
+  output.each_line.map(&:chomp).reject(&:empty?).sort.each do |refname|
+    _commit, _peel_error, peel_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{refname}^{commit}"
+    )
+    next if peel_ok
+
+    errors << "ref #{refname}: public history root does not recursively peel to a commit"
+  end
+
+  _head_commit, _head_error, head_ok = git_capture(
+    root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"
+  )
+  errors << "HEAD: public history root does not recursively peel to a commit" unless head_ok
+end
+
+def validate_public_worktree_heads(root, errors)
+  output, stderr, success = git_capture(root, "worktree", "list", "--porcelain", "-z")
+  unless success
+    errors << "worktree roots: cannot enumerate linked HEADs: #{stderr.strip}"
+    return
+  end
+
+  records = output.b.split("\0\0").reject(&:empty?)
+  records.each_with_index do |record, index|
+    fields = record.split("\0")
+    path_field = fields.find { |field| field.start_with?("worktree ".b) }
+    head_fields = fields.select { |field| field.start_with?("HEAD ".b) }
+    path_bytes = path_field&.byteslice("worktree ".bytesize..-1)
+    path_text = path_bytes&.dup&.force_encoding(Encoding::UTF_8)
+    path_label = path_text&.valid_encoding? ? path_text : "<worktree-row-#{index + 1}>"
+    unless head_fields.length == 1
+      errors << "worktree HEAD #{path_label.inspect}: expected exactly one HEAD object"
+      next
+    end
+
+    oid = head_fields.first.byteslice("HEAD ".bytesize..-1)
+    unless oid.match?(/\A[0-9a-f]+\z/)
+      errors << "worktree HEAD #{path_label.inspect}: malformed object ID"
+      next
+    end
+    _commit, _peel_error, peel_ok = git_capture(
+      root, "rev-parse", "--verify", "--quiet", "#{oid}^{commit}"
+    )
+    next if peel_ok
+
+    errors << "worktree HEAD #{path_label.inspect}: public history root does not recursively peel to a commit"
   end
 end
 
@@ -180,6 +250,11 @@ def validate_reachable_history_paths(root, errors)
 end
 
 def validate_reachable_history(root, errors)
+  # Commit-backed refs let the NUL-delimited diff walk enumerate every path.
+  # A ref rooted directly at a tree/blob has no commit diff, so reject that
+  # uncommon shape rather than pretending its entry names were inspected.
+  validate_public_ref_roots(root, errors)
+  validate_public_worktree_heads(root, errors)
   validate_reachable_history_paths(root, errors)
   reachable_blob_records(root, errors).each do |record|
     path_label = record[:paths].empty? ? "<unknown-path>" : record[:paths].sort.join(",")
@@ -265,6 +340,7 @@ def streamed_file_findings(relative, absolute)
   decoded_overlap = +""
   utf16_converter = nil
   utf16_checked = false
+  utf16_decode_failed = false
   secret_labels = Set.new
   rejected_labels = Set.new
   scan_rejected_names = !REJECTED_NAME_EXEMPT_PATHS.include?(relative.to_s)
@@ -298,7 +374,8 @@ def streamed_file_findings(relative, absolute)
                                            STREAM_SCAN_TEXT_OVERLAP_CHARS] || decoded_window
         rescue EncodingError
           # Match decode_text semantics for malformed BOM-marked text: retain
-          # any earlier findings but stop treating subsequent bytes as text.
+          # any earlier findings, fail closed, and stop decoding later bytes.
+          utf16_decode_failed = true
           utf16_converter = nil
         end
       end
@@ -314,11 +391,13 @@ def streamed_file_findings(relative, absolute)
     rescue EncodingError
       # A trailing partial UTF-16 code unit makes the text malformed; raw-byte
       # and prior complete decoded-window findings still remain authoritative.
+      utf16_decode_failed = true
     end
   end
   magic_labels(prefix + suffix).each { |label| findings << label }
   secret_labels.each { |label| findings << "possible #{label}" }
   rejected_labels.each { |name| findings << "rejected working name remains: #{name}" }
+  findings << "malformed BOM-marked UTF-16 content" if utf16_decode_failed
   findings.uniq
 end
 
@@ -409,6 +488,23 @@ def run_public_hygiene_self_tests
     artifact_findings("notes", "credential=#{token}\n").include?("possible GitHub token"),
     "detects extensionless textual secrets by content"
   )
+  binary_findings = artifact_findings("binary-payload", "\x00#{token}\x00Mara Quill\x00".b)
+  assert.call(
+    binary_findings.include?("possible GitHub token") &&
+      binary_findings.include?("rejected working name remains: Mara Quill"),
+    "detects ASCII policy patterns embedded in otherwise binary bytes"
+  )
+  {
+    "UTF-16LE" => ["\xFF\xFE".b, Encoding::UTF_16LE],
+    "UTF-16BE" => ["\xFE\xFF".b, Encoding::UTF_16BE]
+  }.each do |label, (bom, encoding)|
+    malformed = bom + token.encode(encoding).b + "\x00".b
+    assert.call(
+      artifact_findings("malformed-#{label.downcase}", malformed)
+        .include?("malformed BOM-marked UTF-16 content"),
+      "fails closed on malformed small #{label} content"
+    )
+  end
   assert.call(
     artifact_findings("release.rom", "plain text").any? { |finding| finding.include?("forbidden public artifact extension") },
     "detects common ROM extensions without relying on magic"
@@ -445,6 +541,10 @@ def run_public_hygiene_self_tests
     utf16_text = ("A" * 100_000) + "\n#{token}\nMara Quill\n" + ("B" * 450_000)
     fixture_write(root, "payload-le.dat", "\xFF\xFE".b + utf16_text.encode(Encoding::UTF_16LE).b)
     fixture_write(root, "payload-be.dat", "\xFE\xFF".b + utf16_text.encode(Encoding::UTF_16BE).b)
+    malformed_le = "\xFF\xFE\x00\xD8".b + utf16_text.encode(Encoding::UTF_16LE).b
+    malformed_be = "\xFE\xFF\xD8\x00".b + utf16_text.encode(Encoding::UTF_16BE).b
+    fixture_write(root, "payload-malformed-le.dat", malformed_le)
+    fixture_write(root, "payload-malformed-be.dat", malformed_be)
     fixture_commit!(root, "large LFS middle-content fixture")
     status_out, status_error, status_success = git_capture(root, "status", "--porcelain=v1")
     raise "large LFS fixture is not clean: #{status_error}" unless status_success && status_out.empty?
@@ -471,6 +571,19 @@ def run_public_hygiene_self_tests
         errors.join("; ")
       )
     end
+    %w[payload-malformed-le.dat payload-malformed-be.dat].each do |relative|
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("malformed BOM-marked UTF-16 content")
+        end && errors.none? do |message|
+          message.include?("worktree:#{relative}") &&
+            message.include?("not a canonical staged Git LFS materialization")
+        end,
+        "fails closed on malformed large canonical #{relative.include?('-le') ? 'UTF-16LE' : 'UTF-16BE'} LFS text",
+        errors.join("; ")
+      )
+    end
   end
 
   with_fixture_repo do |root|
@@ -483,6 +596,106 @@ def run_public_hygiene_self_tests
     assert.call(
       errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") },
       "rejects a secret retained only in reachable history",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe linked-worktree baseline")
+    baseline = git_capture(root, "rev-parse", "HEAD").first.strip
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign linked HEAD bytes\n"
+    )
+    raise "cannot create linked-HEAD fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create linked-HEAD fixture: #{tree_error}" unless tree_ok
+    Dir.mktmpdir("n64game-linked-head-") do |linked_container|
+      linked_directory = File.join(linked_container, "linked")
+      fixture_git!(root, "worktree", "add", "-q", "--detach", linked_directory, baseline)
+      linked_root = Pathname.new(linked_directory)
+      admin_out, admin_error, admin_ok = git_capture(linked_root, "rev-parse", "--git-dir")
+      raise "cannot locate linked-worktree admin directory: #{admin_error}" unless admin_ok
+      admin_root = Pathname.new(admin_out.strip)
+      fixture_write(admin_root, "HEAD", "#{tree_out.strip}\n")
+      errors = validate_public_hygiene(root)
+      assert.call(
+        errors.any? do |message|
+          message.include?("worktree HEAD") &&
+            message.include?("does not recursively peel to a commit")
+        end,
+        "fails closed when a linked-worktree HEAD roots history at a standalone tree",
+        errors.join("; ")
+      )
+      fixture_write(admin_root, "HEAD", "#{baseline}\n")
+      fixture_git!(root, "worktree", "remove", "--force", linked_directory)
+    end
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe HEAD baseline")
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign standalone HEAD bytes\n"
+    )
+    raise "cannot create standalone-HEAD fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create standalone-HEAD fixture: #{tree_error}" unless tree_ok
+    fixture_write(root, ".git/HEAD", "#{tree_out.strip}\n")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.include?("HEAD: public history root does not recursively peel to a commit"),
+      "fails closed when HEAD roots public history at a standalone tree",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "\nhistorical_payload", "credential=#{token}\n")
+    fixture_commit!(root, "leading-newline historical path fixture")
+    FileUtils.rm(root.join("\nhistorical_payload"))
+    fixture_commit!(root, "delete leading-newline historical path fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? { |message| message.include?("history blob") && message.include?("possible GitHub token") } &&
+        errors.any? { |message| message.include?("history path") && message.include?("control character") },
+      "scans every reachable blob even when its historical path begins with a newline",
+      errors.join("; ")
+    )
+  end
+
+  with_fixture_repo do |root|
+    fixture_write(root, "safe.txt", "safe public text\n")
+    fixture_commit!(root, "safe commit-backed baseline")
+    blob_out, blob_error, blob_ok = git_capture(
+      root, "hash-object", "-w", "--stdin", stdin_data: "benign standalone tree bytes\n"
+    )
+    raise "cannot create standalone-tree fixture blob: #{blob_error}" unless blob_ok
+    tree_out, tree_error, tree_ok = git_capture(
+      root,
+      "mktree",
+      "-z",
+      stdin_data: "100644 blob #{blob_out.strip}\trelease.rom\0"
+    )
+    raise "cannot create standalone-tree fixture: #{tree_error}" unless tree_ok
+    fixture_git!(root, "tag", "-a", "standalone-tree", tree_out.strip, "-m", "standalone tree fixture")
+    errors = validate_public_hygiene(root)
+    assert.call(
+      errors.any? do |message|
+        message.include?("ref refs/tags/standalone-tree") &&
+          message.include?("does not recursively peel to a commit")
+      end,
+      "fails closed when a public ref roots history at a standalone tree",
       errors.join("; ")
     )
   end
