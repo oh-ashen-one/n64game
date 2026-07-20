@@ -1949,6 +1949,24 @@ static void draw_name_entry(const N64GameCore *game)
     centered(214.0f, STYLE_MUTED, "D-PAD SELECT / A ENTER / B ERASE");
 }
 
+static void draw_signal_diamond(int center_x, int center_y, color_t color)
+{
+    fill_rect(center_x - 2, center_y - 5, center_x + 2, center_y + 5, color);
+    fill_rect(center_x - 4, center_y - 3, center_x + 4, center_y + 3, color);
+}
+
+static void draw_signal_brackets(color_t color)
+{
+    fill_rect(12, 14, 52, 16, color);
+    fill_rect(12, 14, 14, 34, color);
+    fill_rect(268, 14, 308, 16, color);
+    fill_rect(306, 14, 308, 34, color);
+    fill_rect(12, 224, 52, 226, color);
+    fill_rect(12, 206, 14, 226, color);
+    fill_rect(268, 224, 308, 226, color);
+    fill_rect(306, 206, 308, 226, color);
+}
+
 void n64game_renderer_draw_loading(
     const N64GameRenderer *renderer,
     N64GameLoadingStage stage
@@ -1966,30 +1984,48 @@ void n64game_renderer_draw_loading(
     }
 
     rdpq_attach(display_get(), display_get_zbuf());
-    clear_2d(RGBA32(4, 11, 19, 255));
+    clear_2d(RGBA32(3, 10, 17, 255));
     fill_rect(0, 0, 320, 5, RGBA32(184, 67, 151, 255));
-    fill_rect(0, 235, 320, 240, RGBA32(24, 82, 91, 255));
-    centered(24.0f, STYLE_ACCENT, "N64GAME");
-    centered(43.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
+    fill_rect(0, 5, 320, 7, RGBA32(72, 29, 75, 255));
+    fill_rect(0, 233, 320, 235, RGBA32(18, 55, 65, 255));
+    fill_rect(0, 235, 320, 240, RGBA32(31, 104, 110, 255));
+    fill_rect(18, 13, 302, 15, RGBA32(20, 63, 73, 255));
+    fill_rect(18, 15, 20, 52, RGBA32(20, 63, 73, 255));
+    fill_rect(300, 15, 302, 52, RGBA32(20, 63, 73, 255));
+    centered(19.0f, STYLE_ACCENT, "N64GAME");
+    centered(37.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
+    centered(52.0f, STYLE_MUTED, "ANNEX RELAY / COLD START");
 
-    /* A small relay beacon reads clearly at native 320x240 without a texture. */
-    fill_rect(156, 72, 164, 108, RGBA32(34, 91, 101, 255));
-    fill_rect(151, 78, 169, 102, RGBA32(12, 31, 41, 255));
-    fill_rect(156, 83, 164, 97, RGBA32(91, 231, 204, 255));
-    fill_rect(146, 88, 151, 92, RGBA32(57, 147, 151, 255));
-    fill_rect(169, 88, 174, 92, RGBA32(57, 147, 151, 255));
-    fill_rect(137, 86, 142, 94, RGBA32(29, 82, 93, 255));
-    fill_rect(178, 86, 183, 94, RGBA32(29, 82, 93, 255));
+    draw_signal_diamond(148, 68, RGBA32(42, 126, 132, 255));
+    draw_signal_diamond(160, 65, RGBA32(91, 231, 204, 255));
+    draw_signal_diamond(172, 68, RGBA32(42, 126, 132, 255));
 
-    panel(42, 126, 278, 187);
+    /* The relay is built from crisp native-resolution geometry, never a placeholder texture. */
+    fill_rect(154, 78, 166, 114, RGBA32(36, 105, 111, 255));
+    fill_rect(151, 84, 169, 108, RGBA32(8, 26, 35, 255));
+    fill_rect(156, 87, 164, 103, RGBA32(91, 231, 204, 255));
+    fill_rect(143, 89, 151, 103, RGBA32(22, 64, 73, 255));
+    fill_rect(169, 89, 177, 103, RGBA32(22, 64, 73, 255));
+    fill_rect(135, 93, 143, 99, RGBA32(43, 121, 126, 255));
+    fill_rect(177, 93, 185, 99, RGBA32(43, 121, 126, 255));
+    fill_rect(128, 95, 135, 97, RGBA32(31, 87, 96, 255));
+    fill_rect(185, 95, 192, 97, RGBA32(31, 87, 96, 255));
+    fill_rect(157, 114, 163, 120, RGBA32(120, 69, 45, 255));
+
+    fill_rect(37, 126, 283, 189, RGBA32(17, 47, 57, 255));
+    fill_rect(39, 128, 281, 187, RGBA32(7, 21, 30, 255));
+    fill_rect(43, 132, 277, 183, RGBA32(13, 32, 42, 255));
     centered(139.0f, STYLE_MUTED, STATUS[(size_t)stage]);
     for (int segment = 0; segment < 4; ++segment) {
         const int x0 = 68 + segment * 47;
         const color_t color = segment <= (int)stage ?
             RGBA32(87, 226, 203, 255) : RGBA32(24, 53, 63, 255);
-        fill_rect(x0, 162, x0 + 39, 169, color);
+        fill_rect(x0, 160, x0 + 39, 168, RGBA32(7, 18, 26, 255));
+        fill_rect(x0 + 2, 162, x0 + 37, 166, color);
     }
-    centered(203.0f, STYLE_MUTED, "RESONANCE LINK / ORIGINAL N64 BUILD");
+    centered(178.0f, STYLE_ACCENT, "01 / 02 / 03 / READY");
+    fill_rect(58, 204, 262, 205, RGBA32(24, 71, 79, 255));
+    centered(211.0f, STYLE_MUTED, "RESONANCE LINK / ORIGINAL N64 BUILD");
     rdpq_detach_show();
 }
 
@@ -1997,24 +2033,46 @@ static void draw_opening(const N64GameCore *game, bool continue_available)
 {
     clear_2d(RGBA32(6, 15, 24, 255));
     if (game->scene == N64GAME_SCENE_BOOT) {
-        centered(72.0f, STYLE_ACCENT, "N64GAME");
+        fill_rect(18, 18, 302, 222, RGBA32(8, 22, 31, 255));
+        fill_rect(20, 20, 300, 220, RGBA32(5, 14, 23, 255));
+        draw_signal_brackets(RGBA32(41, 120, 126, 255));
+        draw_signal_diamond(148, 58, RGBA32(42, 126, 132, 255));
+        draw_signal_diamond(160, 55, RGBA32(91, 231, 204, 255));
+        draw_signal_diamond(172, 58, RGBA32(42, 126, 132, 255));
+        centered(73.0f, STYLE_ACCENT, "N64GAME");
         centered(96.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
         const int phase = (int)(game->scene_ticks % 20U);
         const int pulse = phase <= 10 ? phase : 20 - phase;
-        fill_rect(154, 126, 166, 138, RGBA32(87, 226, 203, 255));
-        fill_rect(136 - pulse, 130, 148 - pulse, 134, RGBA32(45, 126, 132, 255));
-        fill_rect(172 + pulse, 130, 184 + pulse, 134, RGBA32(45, 126, 132, 255));
-        centered(150.0f, STYLE_MUTED, "AN ORIGINAL N64 CHAPTER");
+        fill_rect(154, 122, 166, 144, RGBA32(24, 70, 78, 255));
+        fill_rect(157, 126, 163, 140, RGBA32(87, 226, 203, 255));
+        fill_rect(136 - pulse, 130, 149 - pulse, 136, RGBA32(45, 126, 132, 255));
+        fill_rect(171 + pulse, 130, 184 + pulse, 136, RGBA32(45, 126, 132, 255));
+        fill_rect(127 - pulse, 132, 133 - pulse, 134, RGBA32(26, 75, 84, 255));
+        fill_rect(187 + pulse, 132, 193 + pulse, 134, RGBA32(26, 75, 84, 255));
+        centered(163.0f, STYLE_MUTED, "AN ORIGINAL N64 CHAPTER");
+        fill_rect(86, 187, 234, 188, RGBA32(61, 34, 67, 255));
+        centered(198.0f, STYLE_MUTED, "30 HZ SIGNAL ACQUISITION");
     } else {
-        fill_rect(18, 18, 302, 222, RGBA32(22, 32, 44, 255));
-        fill_rect(18, 18, 302, 22, RGBA32(183, 72, 154, 255));
-        centered(84.0f, STYLE_WARNING, "INSERT CUTSCENE HERE");
-        centered(110.0f, STYLE_TEXT, "SOLACE INTERCEPTION / 4:3 PLAYBACK SLOT");
+        fill_rect(8, 8, 312, 232, RGBA32(15, 39, 49, 255));
+        fill_rect(11, 11, 309, 229, RGBA32(5, 13, 22, 255));
+        fill_rect(14, 14, 306, 18, RGBA32(183, 72, 154, 255));
+        fill_rect(14, 222, 306, 226, RGBA32(30, 99, 105, 255));
+        draw_signal_brackets(RGBA32(62, 142, 144, 255));
+        draw_signal_diamond(148, 45, RGBA32(60, 130, 137, 255));
+        draw_signal_diamond(160, 42, RGBA32(184, 67, 151, 255));
+        draw_signal_diamond(172, 45, RGBA32(60, 130, 137, 255));
+        centered(60.0f, STYLE_MUTED, "PLAYBACK WINDOW / 4:3 / 54.5 SEC");
+        fill_rect(45, 79, 275, 81, RGBA32(52, 30, 61, 255));
+        fill_rect(45, 118, 275, 120, RGBA32(20, 62, 71, 255));
+        centered(88.0f, STYLE_WARNING, "INSERT CUTSCENE HERE");
+        centered(108.0f, STYLE_TEXT, "SOLACE INTERCEPTION");
+        centered(129.0f, STYLE_MUTED, "DESERT DUSK / FRACTURE STORM / BEACON FALL");
         centered(
-            178.0f,
+            181.0f,
             STYLE_MUTED,
             continue_available ? "START CONTINUE / A NEW FILE" : "A OR START TO BEGIN"
         );
+        centered(205.0f, STYLE_ACCENT, "STORYBOARD PACKAGE INCLUDED");
         uint8_t fade_alpha = 0U;
         if (game->scene_ticks < 8U) {
             fade_alpha = (uint8_t)(
