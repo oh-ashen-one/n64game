@@ -1603,6 +1603,74 @@ def canonicalize_glb(path: Path, *, expected_animations: Sequence[str] | None) -
     path.write_bytes(output)
 
 
+def canonicalize_sprite(path: Path) -> None:
+    """Zero only inactive libdragon v6 sprite extension fields.
+
+    The pinned ``mksprite`` writes default texparms values even when neither
+    texparms nor detail textures are enabled.  They are ignored by libdragon,
+    but keeping them makes the reviewed output depend on inert writer state.
+    Parse the exact uncompressed one-image layout, fail if any related feature
+    is active, and canonicalize the otherwise-unused tail of ``sprite_ext_t``.
+    """
+    if not path.is_file() or path.is_symlink():
+        raise Gate5ExportError(f"sprite output is missing or is a symlink: {path}")
+    data = bytearray(path.read_bytes())
+    if len(data) < 8 or len(data) > 1024 * 1024:
+        raise Gate5ExportError(f"sprite output has an invalid file size: {path}")
+    if data.startswith(b"DCA") or data.startswith(b"\0\0\0\0BC1Q") or data.startswith(b"\0\0\0\0H264"):
+        raise Gate5ExportError(f"sprite output is compressed or lossy: {path}")
+
+    width, height = struct.unpack_from(">HH", data, 0)
+    deprecated_bitdepth, flags, hslices, vslices = data[4:8]
+    format_code = flags & 0x1F
+    format_bits = {8: 4, 9: 8, 13: 8}
+    if not (0 < width <= 1024 and 0 < height <= 1024):
+        raise Gate5ExportError(f"sprite output dimensions are invalid: {path}")
+    if deprecated_bitdepth != 0 or format_code not in format_bits:
+        raise Gate5ExportError(f"sprite output format is outside the canonical contract: {path}")
+    if flags != 0x80 | format_code:
+        raise Gate5ExportError(f"sprite output has active runtime or redirected-data flags: {path}")
+    if (hslices, vslices) != (1, 1):
+        raise Gate5ExportError(f"sprite output is tiled instead of one image: {path}")
+
+    row_bytes = (width * format_bits[format_code] + 7) // 8
+    pixel_end = 8 + row_bytes * height
+    ext_offset = (pixel_end + 7) // 8 * 8
+    ext_end = ext_offset + 128
+    if ext_end > len(data):
+        raise Gate5ExportError(f"sprite output has a truncated extended header: {path}")
+    if any(data[pixel_end:ext_offset]):
+        raise Gate5ExportError(f"sprite output has nonzero pixel alignment padding: {path}")
+    ext_size, ext_version = struct.unpack_from(">HH", data, ext_offset)
+    if ext_size != 128 or ext_version != 6:
+        raise Gate5ExportError(f"sprite output has an unsupported extended header: {path}")
+    if any(data[ext_offset + 8:ext_offset + 64]):
+        raise Gate5ExportError(f"sprite output has active LOD records: {path}")
+
+    ext_flags = struct.unpack_from(">H", data, ext_offset + 64)[0]
+    expected_tmem_bytes = ((row_bytes + 7) // 8 * 8) * height
+    if format_code in (8, 9):
+        expected_tmem_bytes += 2048
+    expected_flags = 0x20 if expected_tmem_bytes <= 4096 else 0
+    if ext_flags != expected_flags:
+        raise Gate5ExportError(
+            f"sprite output has active LOD, texparms, detail, SHQ, or false TMEM flags: {path}"
+        )
+    if data[ext_offset + 67] != 0:
+        raise Gate5ExportError(f"sprite output has nonzero extended-header padding: {path}")
+
+    palette_offset = struct.unpack_from(">I", data, ext_offset + 4)[0]
+    palette_colors = {8: 16, 9: 256, 13: 0}[format_code]
+    if palette_colors:
+        if palette_offset != ext_end or len(data) != ext_end + palette_colors * 2:
+            raise Gate5ExportError(f"sprite output has a noncanonical palette layout: {path}")
+    elif palette_offset != 0 or data[ext_offset + 66] != 0 or len(data) != ext_end:
+        raise Gate5ExportError(f"sprite output has invalid non-paletted metadata: {path}")
+
+    data[ext_offset + 68:ext_end] = bytes(60)
+    path.write_bytes(data)
+
+
 def run_tool(command: Sequence[str], *, root: Path, run: CommandRunner) -> None:
     environment = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
@@ -1851,6 +1919,12 @@ def production_generate(
     canonicalize_glb(intermediate / "anm_echo_quarrune.glb", expected_animations=ANIMATION_NAMES)
     for command in commands[2:]:
         run_tool(command, root=stage, run=run)
+    for sprite_name in (
+        "tex_quarrune_body_ci8_64x64.sprite",
+        "tex_quarrune_accent_ci4_32x32.sprite",
+        "tex_quarrune_blob_shadow_ia8_32x32.sprite",
+    ):
+        canonicalize_sprite(filesystem_model / sprite_name)
     source_to_review = {
         filesystem_model / "quarrune_hero.t3dm": HERO_MODEL_PATH,
         filesystem_model / "quarrune_distance.t3dm": DISTANCE_MODEL_PATH,
