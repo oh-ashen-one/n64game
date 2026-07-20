@@ -359,20 +359,24 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--setting Input/Driver=SDL", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
         expected_keyboard_bindings = {
-            "Up": 92,
-            "Down": 93,
-            "Left": 94,
-            "Right": 95,
-            "B": 63,
-            "A": 65,
-            "C-Down": 42,
-            "Z": 98,
-            "Start": 97,
+            "L-Up": "0x1/0/92;0x1/0/62;",
+            "L-Down": "0x1/0/93;0x1/0/58;",
+            "L-Left": "0x1/0/94;0x1/0/40;",
+            "L-Right": "0x1/0/95;0x1/0/43;",
+            "Up": "0x1/0/92;0x1/0/62;",
+            "Down": "0x1/0/93;0x1/0/58;",
+            "Left": "0x1/0/94;0x1/0/40;",
+            "Right": "0x1/0/95;0x1/0/43;",
+            "B": "0x1/0/63;;",
+            "A": "0x1/0/65;;",
+            "C-Down": "0x1/0/42;;",
+            "Z": "0x1/0/98;;",
+            "Start": "0x1/0/97;;",
         }
-        for control, input_id in expected_keyboard_bindings.items():
+        for control, assignments in expected_keyboard_bindings.items():
             setting = (
                 "Nintendo64/Input/Controller.Port.1/Gamepad/"
-                f"{control}=0x1/0/{input_id};;"
+                f"{control}={assignments}"
             )
             self.assertIn(setting, wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
