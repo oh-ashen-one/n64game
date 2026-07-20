@@ -11,6 +11,7 @@
 #include "n64game_core.h"
 #include "n64game_render.h"
 #include "n64game_save.h"
+#include "n64game_telemetry.h"
 
 typedef enum {
     SAVE_WRITE_IDLE = 0,
@@ -32,7 +33,129 @@ typedef struct {
     uint8_t settle_frames;
     bool faulted;
     bool pending;
+    bool writes_chapter_completion;
+    bool chapter_completion_verified;
 } SaveWriter;
+
+static void telemetry_emit_session(
+    const N64GameTelemetry *telemetry,
+    uint32_t *sequence,
+    uint64_t boot_ticks,
+    uint64_t ready_ticks
+)
+{
+    debugf(
+        "N64G_TELEM schema=1 seq=%lu event=session status=INSTRUMENTATION_ONLY "
+        "ticks_per_second=%lu target_fps=30 budget_ticks=%lu tolerance_ticks=%lu "
+        "boot_ticks=%llu ready_ticks=%llu heap_baseline_bytes=%ld\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long)telemetry->ticks_per_second,
+        (unsigned long)telemetry->frame_budget_ticks,
+        (unsigned long)telemetry->frame_tolerance_ticks,
+        (unsigned long long)boot_ticks,
+        (unsigned long long)ready_ticks,
+        (long)telemetry->heap_baseline_bytes
+    );
+}
+
+static void telemetry_emit_transition(
+    const N64GameTelemetry *telemetry,
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    N64GameScene from,
+    N64GameScene to,
+    bool resumed,
+    const N64GameCore *game,
+    int32_t free_heap_bytes
+)
+{
+    debugf(
+        "N64G_TELEM schema=1 seq=%lu event=transition status=INSTRUMENTATION_ONLY "
+        "wall_ticks=%llu cause=%s from=%u to=%u transition_count=%lu "
+        "play_ticks=%lu active_control_ticks=%lu free_heap_bytes=%ld "
+        "heap_low_water_bytes=%ld\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long long)wall_ticks,
+        resumed ? "continue_resume" : "core",
+        (unsigned int)from,
+        (unsigned int)to,
+        (unsigned long)telemetry->transition_count,
+        (unsigned long)game->play_ticks,
+        (unsigned long)game->active_control_ticks,
+        (long)free_heap_bytes,
+        (long)telemetry->heap_low_water_bytes
+    );
+}
+
+static void telemetry_emit_summary(
+    const N64GameTelemetry *telemetry,
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    const N64GameCore *game,
+    int32_t free_heap_bytes
+)
+{
+    debugf(
+        "N64G_TELEM schema=1 seq=%lu event=summary status=INSTRUMENTATION_ONLY "
+        "wall_ticks=%llu scene=%u submitted_frames=%lu measured_intervals=%lu "
+        "over_budget_frames=%lu missed_deadlines=%lu max_frame_ticks=%lu "
+        "max_over_budget_streak=%lu play_ticks=%lu active_control_ticks=%lu "
+        "free_heap_bytes=%ld heap_low_water_bytes=%ld invalid_samples=%lu\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long long)wall_ticks,
+        (unsigned int)game->scene,
+        (unsigned long)telemetry->total.submitted_frames,
+        (unsigned long)telemetry->total.measured_intervals,
+        (unsigned long)telemetry->total.over_budget_frames,
+        (unsigned long)telemetry->total.missed_deadlines,
+        (unsigned long)telemetry->total.max_frame_ticks,
+        (unsigned long)telemetry->total.max_over_budget_streak,
+        (unsigned long)game->play_ticks,
+        (unsigned long)game->active_control_ticks,
+        (long)free_heap_bytes,
+        (long)telemetry->heap_low_water_bytes,
+        (unsigned long)(
+            telemetry->invalid_frame_intervals + telemetry->invalid_scene_samples +
+            telemetry->invalid_transitions + telemetry->invalid_heap_samples
+        )
+    );
+}
+
+static void telemetry_emit_chapter_stable(
+    const N64GameTelemetry *telemetry,
+    uint32_t *sequence,
+    uint64_t boot_ticks,
+    uint64_t stable_ticks,
+    const N64GameCore *game,
+    uint32_t save_sequence
+)
+{
+    debugf(
+        "N64G_TELEM schema=1 seq=%lu event=chapter_stable "
+        "status=INSTRUMENTATION_ONLY wall_ticks=%llu duration_ticks=%llu "
+        "play_ticks=%lu active_control_ticks=%lu save_verified=1 save_sequence=%lu "
+        "submitted_frames=%lu measured_intervals=%lu over_budget_frames=%lu "
+        "missed_deadlines=%lu max_frame_ticks=%lu max_over_budget_streak=%lu "
+        "heap_low_water_bytes=%ld invalid_samples=%lu\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long long)stable_ticks,
+        (unsigned long long)(stable_ticks - boot_ticks),
+        (unsigned long)game->play_ticks,
+        (unsigned long)game->active_control_ticks,
+        (unsigned long)save_sequence,
+        (unsigned long)telemetry->total.submitted_frames,
+        (unsigned long)telemetry->total.measured_intervals,
+        (unsigned long)telemetry->total.over_budget_frames,
+        (unsigned long)telemetry->total.missed_deadlines,
+        (unsigned long)telemetry->total.max_frame_ticks,
+        (unsigned long)telemetry->total.max_over_budget_streak,
+        (long)telemetry->heap_low_water_bytes,
+        (unsigned long)(
+            telemetry->invalid_frame_intervals + telemetry->invalid_scene_samples +
+            telemetry->invalid_transitions + telemetry->invalid_heap_samples
+        )
+    );
+}
 
 static N64GameInput read_game_input(void)
 {
@@ -128,6 +251,8 @@ static bool save_writer_begin(
     if (!n64game_save_encode(game, writer->sequence, writer->bytes)) {
         return false;
     }
+    writer->writes_chapter_completion =
+        game->scene == N64GAME_SCENE_END_CHAPTER && game->slice_complete;
     uint8_t invalid_footer[N64GAME_SAVE_FOOTER_BYTES];
     for (size_t index = 0U; index < N64GAME_SAVE_FOOTER_BYTES; ++index) {
         invalid_footer[index] = (uint8_t)(
@@ -202,17 +327,23 @@ static bool save_writer_pump(
         verified_sequence != writer->sequence) {
         writer->faulted = true;
         writer->phase = SAVE_WRITE_IDLE;
+        writer->writes_chapter_completion = false;
         return false;
     }
     *continue_game = verified_game;
     *save_sequence = writer->sequence;
     *active_slot = writer->target_slot;
+    if (writer->writes_chapter_completion) {
+        writer->chapter_completion_verified = true;
+    }
+    writer->writes_chapter_completion = false;
     writer->phase = SAVE_WRITE_IDLE;
     return true;
 }
 
 int main(void)
 {
+    const uint64_t boot_ticks = get_ticks();
     debug_init_emulog();
     debug_init_usblog();
     assertf(
@@ -263,8 +394,27 @@ int main(void)
         );
     }
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_READY);
+
+    heap_stats_t heap_stats;
+    sys_get_heap_stats(&heap_stats);
+    N64GameTelemetry telemetry;
+    assertf(
+        n64game_telemetry_init(
+            &telemetry,
+            (uint32_t)TICKS_PER_SECOND,
+            heap_stats.free,
+            heap_stats.fragmented
+        ),
+        "N64GAME telemetry initialization failed"
+    );
+    uint32_t telemetry_sequence = 0U;
+    telemetry_emit_session(
+        &telemetry, &telemetry_sequence, boot_ticks, get_ticks()
+    );
+
     SaveWriter save_writer = {0};
     bool controller_was_connected = false;
+    bool chapter_completion_emitted = false;
 
     for (;;) {
         joypad_poll();
@@ -273,6 +423,7 @@ int main(void)
         controller_was_connected = controller_connected;
         const N64GameInput input = controller_connected ?
             read_game_input() : (N64GameInput){0};
+        const N64GameScene scene_before = game.scene;
         const bool resume_now = game.scene == N64GAME_SCENE_OPENING_SLATE &&
             controller_connected && !clear_edge_frame && continue_available &&
             input_pressed(input, N64GAME_INPUT_START);
@@ -283,7 +434,6 @@ int main(void)
                 &game, input, controller_connected, clear_edge_frame
             );
         }
-
         if (save_available && !save_writer.faulted) {
             if (save_writer_pump(
                     &save_writer, &continue_game, &save_sequence, &active_save_slot)) {
@@ -324,5 +474,62 @@ int main(void)
             continue_available,
             controller_connected
         );
+
+        const uint32_t frame_tick = TICKS_READ();
+        (void)n64game_telemetry_record_frame(&telemetry, game.scene, frame_tick);
+        const bool transition_observed = scene_before != game.scene;
+        const bool summary_due = telemetry.total.submitted_frames != 0U &&
+            telemetry.total.submitted_frames %
+                N64GAME_TELEMETRY_SUMMARY_FRAMES == 0U;
+        const bool chapter_stable = game.scene == N64GAME_SCENE_END_CHAPTER &&
+            game.slice_complete && save_writer.chapter_completion_verified &&
+            continue_available && !save_busy && !game.save_requested;
+        const bool periodic_heap_sample_due =
+            telemetry.total.submitted_frames != 0U &&
+            telemetry.total.submitted_frames %
+                N64GAME_TELEMETRY_HEAP_SAMPLE_FRAMES == 0U;
+        const bool heap_sample_due = transition_observed || summary_due ||
+            periodic_heap_sample_due ||
+            (chapter_stable && !chapter_completion_emitted);
+        if (heap_sample_due) {
+            sys_get_heap_stats(&heap_stats);
+            (void)n64game_telemetry_sample_heap(
+                &telemetry, heap_stats.free, heap_stats.fragmented
+            );
+        }
+        const uint64_t wall_ticks = get_ticks();
+        if (transition_observed &&
+            n64game_telemetry_record_transition(&telemetry, scene_before, game.scene)) {
+            telemetry_emit_transition(
+                &telemetry,
+                &telemetry_sequence,
+                wall_ticks,
+                scene_before,
+                game.scene,
+                resume_now,
+                &game,
+                heap_stats.free
+            );
+        }
+        if (summary_due) {
+            telemetry_emit_summary(
+                &telemetry,
+                &telemetry_sequence,
+                wall_ticks,
+                &game,
+                heap_stats.free
+            );
+        }
+        if (chapter_stable && !chapter_completion_emitted) {
+            telemetry_emit_chapter_stable(
+                &telemetry,
+                &telemetry_sequence,
+                boot_ticks,
+                wall_ticks,
+                &game,
+                save_sequence
+            );
+            chapter_completion_emitted = true;
+        }
     }
 }

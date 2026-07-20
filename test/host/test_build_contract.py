@@ -183,6 +183,17 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("eeprom_write_bytes", source)
         self.assertIn("joypad_is_connected(JOYPAD_PORT_1)", source)
         self.assertIn("n64game_core_update_controller", source)
+        self.assertEqual(source.count("sys_get_heap_stats(&heap_stats);"), 2)
+        self.assertRegex(
+            source,
+            r"if \(heap_sample_due\) \{\s+sys_get_heap_stats\(&heap_stats\);",
+        )
+        self.assertIn("N64GAME_TELEMETRY_HEAP_SAMPLE_FRAMES", source)
+        self.assertIn("TICKS_READ()", source)
+        self.assertIn("N64G_TELEM schema=1", source)
+        self.assertIn("status=INSTRUMENTATION_ONLY", source)
+        self.assertIn("n64game_telemetry_record_frame", source)
+        self.assertIn("n64game_telemetry_record_transition", source)
 
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for object_name in (
@@ -190,6 +201,7 @@ class BuildContractTests(unittest.TestCase):
             "n64game_core.o",
             "n64game_render.o",
             "n64game_save.o",
+            "n64game_telemetry.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
 

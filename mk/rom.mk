@@ -27,6 +27,7 @@ OBJS := \
 	$(BUILD_DIR)/n64game_core.o \
 	$(BUILD_DIR)/n64game_render.o \
 	$(BUILD_DIR)/n64game_save.o \
+	$(BUILD_DIR)/n64game_telemetry.o \
 	$(BUILD_DIR)/quarrune_render_assets.o
 
 .PHONY: all clean stage-rom
