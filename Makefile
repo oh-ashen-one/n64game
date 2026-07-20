@@ -2,7 +2,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := rom
 
-.PHONY: clean assets test test-authoring authoring-check rom validate report
+.PHONY: clean assets test test-authoring test-certification authoring-check certification-check rom validate report
+
+CERTIFICATION_MANIFEST ?= build/certification/evidence.json
+CERTIFICATION_ROM ?= build/game/n64game-gate3.z64
 
 clean:
 	scripts/clean-build
@@ -16,8 +19,14 @@ test:
 test-authoring:
 	scripts/test-authoring-stack
 
+test-certification:
+	/usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_certification_evidence.py' -v
+
 authoring-check:
 	scripts/check-authoring-stack
+
+certification-check:
+	scripts/validate-certification-evidence --manifest "$(CERTIFICATION_MANIFEST)" --rom "$(CERTIFICATION_ROM)"
 
 rom:
 	scripts/build-rom

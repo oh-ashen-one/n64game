@@ -29,6 +29,7 @@ typedef struct {
     uint8_t target_slot;
     uint32_t sequence;
     uint8_t bytes[N64GAME_SAVE_BYTES];
+    N64GameCore active_game;
     N64GameCore pending_game;
     uint8_t settle_frames;
     bool faulted;
@@ -36,6 +37,12 @@ typedef struct {
     bool writes_chapter_completion;
     bool chapter_completion_verified;
 } SaveWriter;
+
+static uint32_t telemetry_invalid_samples(const N64GameTelemetry *telemetry)
+{
+    return telemetry->invalid_frame_intervals + telemetry->invalid_scene_samples +
+        telemetry->invalid_transitions + telemetry->invalid_heap_samples;
+}
 
 static void telemetry_emit_session(
     const N64GameTelemetry *telemetry,
@@ -73,7 +80,8 @@ static void telemetry_emit_transition(
         "N64G_TELEM schema=1 seq=%lu event=transition status=INSTRUMENTATION_ONLY "
         "wall_ticks=%llu cause=%s from=%u to=%u transition_count=%lu "
         "play_ticks=%lu active_control_ticks=%lu free_heap_bytes=%ld "
-        "heap_low_water_bytes=%ld\n",
+        "heap_low_water_bytes=%ld submitted_frames=%lu measured_intervals=%lu "
+        "invalid_samples=%lu\n",
         (unsigned long)(*sequence)++,
         (unsigned long long)wall_ticks,
         resumed ? "continue_resume" : "core",
@@ -83,8 +91,124 @@ static void telemetry_emit_transition(
         (unsigned long)game->play_ticks,
         (unsigned long)game->active_control_ticks,
         (long)free_heap_bytes,
-        (long)telemetry->heap_low_water_bytes
+        (long)telemetry->heap_low_water_bytes,
+        (unsigned long)telemetry->total.submitted_frames,
+        (unsigned long)telemetry->total.measured_intervals,
+        (unsigned long)telemetry_invalid_samples(telemetry)
     );
+}
+
+static void telemetry_emit_scene_summary(
+    const N64GameTelemetry *telemetry,
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    N64GameScene scene
+)
+{
+    const N64GameTelemetryFrameStats *const stats = &telemetry->scenes[(unsigned)scene];
+    debugf(
+        "N64G_TELEM schema=1 seq=%lu event=scene_summary "
+        "status=INSTRUMENTATION_ONLY wall_ticks=%llu scene=%u "
+        "submitted_frames=%lu measured_intervals=%lu over_budget_frames=%lu "
+        "missed_deadlines=%lu max_frame_ticks=%lu max_over_budget_streak=%lu "
+        "invalid_samples=%lu\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long long)wall_ticks,
+        (unsigned int)scene,
+        (unsigned long)stats->submitted_frames,
+        (unsigned long)stats->measured_intervals,
+        (unsigned long)stats->over_budget_frames,
+        (unsigned long)stats->missed_deadlines,
+        (unsigned long)stats->max_frame_ticks,
+        (unsigned long)stats->max_over_budget_streak,
+        (unsigned long)telemetry_invalid_samples(telemetry)
+    );
+}
+
+static void telemetry_emit_save_load(
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    bool save_available,
+    uint8_t valid_slot_mask,
+    bool continue_available,
+    uint8_t active_slot,
+    uint32_t save_sequence,
+    const N64GameCore *continue_game
+)
+{
+    if (continue_available) {
+        debugf(
+            "N64G_TELEM schema=1 seq=%lu event=save_load "
+            "status=INSTRUMENTATION_ONLY wall_ticks=%llu eeprom_present=1 "
+            "valid_slot_mask=%u outcome=selected selected_slot=%u save_sequence=%lu "
+            "checkpoint_scene=%u checkpoint_quest=%u\n",
+            (unsigned long)(*sequence)++,
+            (unsigned long long)wall_ticks,
+            (unsigned int)valid_slot_mask,
+            (unsigned int)active_slot,
+            (unsigned long)save_sequence,
+            (unsigned int)continue_game->scene,
+            (unsigned int)continue_game->quest
+        );
+    } else {
+        debugf(
+            "N64G_TELEM schema=1 seq=%lu event=save_load "
+            "status=INSTRUMENTATION_ONLY wall_ticks=%llu eeprom_present=%u "
+            "valid_slot_mask=%u outcome=%s selected_slot=NONE save_sequence=NONE "
+            "checkpoint_scene=NONE checkpoint_quest=NONE\n",
+            (unsigned long)(*sequence)++,
+            (unsigned long long)wall_ticks,
+            save_available ? 1U : 0U,
+            (unsigned int)valid_slot_mask,
+            save_available ? "none" : "unavailable"
+        );
+    }
+}
+
+static void telemetry_emit_save_write(
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    const char *outcome,
+    const char *reason,
+    bool slot_known,
+    uint8_t slot,
+    bool sequence_known,
+    uint32_t save_sequence,
+    bool chapter_completion,
+    const N64GameCore *game
+)
+{
+    if (slot_known && sequence_known) {
+        debugf(
+            "N64G_TELEM schema=1 seq=%lu event=save_write "
+            "status=INSTRUMENTATION_ONLY wall_ticks=%llu outcome=%s reason=%s "
+            "slot=%u save_sequence=%lu chapter_completion=%u checkpoint_scene=%u "
+            "checkpoint_quest=%u\n",
+            (unsigned long)(*sequence)++,
+            (unsigned long long)wall_ticks,
+            outcome,
+            reason,
+            (unsigned int)slot,
+            (unsigned long)save_sequence,
+            chapter_completion ? 1U : 0U,
+            (unsigned int)game->scene,
+            (unsigned int)game->quest
+        );
+    } else {
+        debugf(
+            "N64G_TELEM schema=1 seq=%lu event=save_write "
+            "status=INSTRUMENTATION_ONLY wall_ticks=%llu outcome=%s reason=%s "
+            "slot=NONE save_sequence=NONE chapter_completion=%u "
+            "checkpoint_scene=%u checkpoint_quest=%u\n",
+            (unsigned long)(*sequence)++,
+            (unsigned long long)wall_ticks,
+            outcome,
+            reason,
+            chapter_completion ? 1U : 0U,
+            (unsigned int)game->scene,
+            (unsigned int)game->quest
+        );
+    }
 }
 
 static void telemetry_emit_summary(
@@ -114,10 +238,7 @@ static void telemetry_emit_summary(
         (unsigned long)game->active_control_ticks,
         (long)free_heap_bytes,
         (long)telemetry->heap_low_water_bytes,
-        (unsigned long)(
-            telemetry->invalid_frame_intervals + telemetry->invalid_scene_samples +
-            telemetry->invalid_transitions + telemetry->invalid_heap_samples
-        )
+        (unsigned long)telemetry_invalid_samples(telemetry)
     );
 }
 
@@ -150,10 +271,7 @@ static void telemetry_emit_chapter_stable(
         (unsigned long)telemetry->total.max_frame_ticks,
         (unsigned long)telemetry->total.max_over_budget_streak,
         (long)telemetry->heap_low_water_bytes,
-        (unsigned long)(
-            telemetry->invalid_frame_intervals + telemetry->invalid_scene_samples +
-            telemetry->invalid_transitions + telemetry->invalid_heap_samples
-        )
+        (unsigned long)telemetry_invalid_samples(telemetry)
     );
 }
 
@@ -251,6 +369,8 @@ static bool save_writer_begin(
     if (!n64game_save_encode(game, writer->sequence, writer->bytes)) {
         return false;
     }
+    writer->active_game = *game;
+    writer->active_game.save_requested = false;
     writer->writes_chapter_completion =
         game->scene == N64GAME_SCENE_END_CHAPTER && game->slice_complete &&
         game->final_save_state == N64GAME_FINAL_SAVE_PENDING;
@@ -397,10 +517,20 @@ int main(void)
     const bool save_available = save_type != EEPROM_NONE;
     uint32_t save_sequence = 0U;
     uint8_t active_save_slot = 0U;
+    uint8_t valid_save_slot_mask = 0U;
     bool continue_available = false;
     if (save_available) {
         uint8_t stored_slots[N64GAME_SAVE_SLOT_COUNT][N64GAME_SAVE_BYTES];
         eeprom_read_bytes(stored_slots, 0U, sizeof(stored_slots));
+        for (uint8_t slot = 0U; slot < N64GAME_SAVE_SLOT_COUNT; ++slot) {
+            N64GameCore decoded_game;
+            uint32_t decoded_sequence = 0U;
+            if (n64game_save_decode(
+                    stored_slots[slot], &decoded_game, &decoded_sequence
+                )) {
+                valid_save_slot_mask |= (uint8_t)(UINT8_C(1) << slot);
+            }
+        }
         continue_available = n64game_save_select_latest(
             stored_slots, &continue_game, &save_sequence, &active_save_slot
         );
@@ -422,6 +552,16 @@ int main(void)
     uint32_t telemetry_sequence = 0U;
     telemetry_emit_session(
         &telemetry, &telemetry_sequence, boot_ticks, get_ticks()
+    );
+    telemetry_emit_save_load(
+        &telemetry_sequence,
+        get_ticks(),
+        save_available,
+        valid_save_slot_mask,
+        continue_available,
+        active_save_slot,
+        save_sequence,
+        &continue_game
     );
 
     SaveWriter save_writer = {0};
@@ -457,6 +597,8 @@ int main(void)
         }
         const bool pumping_chapter_completion = save_writer.writes_chapter_completion;
         const bool save_faulted_before_pump = save_writer.faulted;
+        const uint8_t pumped_save_slot = save_writer.target_slot;
+        const uint32_t pumped_save_sequence = save_writer.sequence;
         bool write_verified = false;
         bool final_save_attempted = false;
         bool final_save_accepted = false;
@@ -493,6 +635,12 @@ int main(void)
                 final_save_accepted = accepted;
             }
         }
+        const bool final_save_unavailable =
+            !save_available && game.final_save_state == N64GAME_FINAL_SAVE_PENDING &&
+            game.save_requested;
+        const bool final_save_request_rejected =
+            game.final_save_state == N64GAME_FINAL_SAVE_PENDING &&
+            final_save_attempted && !final_save_accepted;
         if (write_verified && pumping_chapter_completion &&
             game.final_save_state == N64GAME_FINAL_SAVE_PENDING) {
             n64game_core_set_final_save_result(&game, true);
@@ -502,6 +650,62 @@ int main(void)
                     (save_writer.faulted && game.save_requested) ||
                     (final_save_attempted && !final_save_accepted))) {
             n64game_core_set_final_save_result(&game, false);
+        }
+
+        const bool write_verification_failed =
+            !save_faulted_before_pump && save_writer.faulted;
+        if (write_verified) {
+            telemetry_emit_save_write(
+                &telemetry_sequence,
+                get_ticks(),
+                "verified",
+                "none",
+                true,
+                pumped_save_slot,
+                true,
+                pumped_save_sequence,
+                pumping_chapter_completion,
+                &continue_game
+            );
+        } else if (write_verification_failed) {
+            telemetry_emit_save_write(
+                &telemetry_sequence,
+                get_ticks(),
+                "failed",
+                "verification",
+                true,
+                pumped_save_slot,
+                true,
+                pumped_save_sequence,
+                pumping_chapter_completion,
+                &save_writer.active_game
+            );
+        } else if (final_save_unavailable) {
+            telemetry_emit_save_write(
+                &telemetry_sequence,
+                get_ticks(),
+                "failed",
+                "eeprom_unavailable",
+                false,
+                0U,
+                false,
+                0U,
+                true,
+                &game
+            );
+        } else if (final_save_request_rejected) {
+            telemetry_emit_save_write(
+                &telemetry_sequence,
+                get_ticks(),
+                "failed",
+                "request_rejected",
+                false,
+                0U,
+                false,
+                0U,
+                true,
+                &game
+            );
         }
 
         const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE ||
@@ -543,6 +747,12 @@ int main(void)
         const uint64_t wall_ticks = get_ticks();
         if (transition_observed &&
             n64game_telemetry_record_transition(&telemetry, scene_before, game.scene)) {
+            telemetry_emit_scene_summary(
+                &telemetry,
+                &telemetry_sequence,
+                wall_ticks,
+                scene_before
+            );
             telemetry_emit_transition(
                 &telemetry,
                 &telemetry_sequence,
@@ -564,6 +774,12 @@ int main(void)
             );
         }
         if (chapter_stable && !chapter_completion_emitted) {
+            telemetry_emit_scene_summary(
+                &telemetry,
+                &telemetry_sequence,
+                wall_ticks,
+                N64GAME_SCENE_END_CHAPTER
+            );
             telemetry_emit_chapter_stable(
                 &telemetry,
                 &telemetry_sequence,

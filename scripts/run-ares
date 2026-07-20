@@ -4,26 +4,63 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROM="$ROOT/build/game/n64game-gate3.z64"
 EXPECTED_ROM_SHA=""
+EXPECTED_ROM_SHA_SET=0
+EXPECTED_EEPROM_SHA=""
+EXPECTED_EEPROM_SHA_SET=0
 CHECK_ONLY=0
+ROM_SET=0
 
 for argument in "$@"; do
     case "$argument" in
         --homebrew-mode) ;;
         --check-only) CHECK_ONLY=1 ;;
-        --expected-rom-sha256=*) EXPECTED_ROM_SHA="${argument#*=}" ;;
+        --expected-rom-sha256=*)
+            if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 ]]; then
+                printf 'duplicate --expected-rom-sha256 argument\n' >&2
+                exit 64
+            fi
+            EXPECTED_ROM_SHA_SET=1
+            EXPECTED_ROM_SHA="${argument#*=}"
+            ;;
+        --expected-eeprom-sha256=*)
+            if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 ]]; then
+                printf 'duplicate --expected-eeprom-sha256 argument\n' >&2
+                exit 64
+            fi
+            EXPECTED_EEPROM_SHA_SET=1
+            EXPECTED_EEPROM_SHA="${argument#*=}"
+            ;;
         --*) printf 'unsupported argument: %s\n' "$argument" >&2; exit 64 ;;
-        *) ROM="$argument" ;;
+        *)
+            if [[ "$ROM_SET" -eq 1 ]]; then
+                printf 'multiple ROM paths are not supported\n' >&2
+                exit 64
+            fi
+            ROM_SET=1
+            ROM="$argument"
+            ;;
     esac
 done
+
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 && ! "$EXPECTED_ROM_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'expected ROM SHA-256 must be 64 lowercase hexadecimal characters\n' >&2
+    exit 64
+fi
+if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 && ! "$EXPECTED_EEPROM_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'expected EEPROM SHA-256 must be 64 lowercase hexadecimal characters\n' >&2
+    exit 64
+fi
 
 if [[ "$ROM" != /* ]]; then
     ROM="$ROOT/$ROM"
 fi
-test -f "$ROM"
-test ! -L "$ROM"
+if [[ ! -f "$ROM" || -L "$ROM" ]]; then
+    printf 'ROM must be a non-symlink regular file: %s\n' "$ROM" >&2
+    exit 1
+fi
 
 ACTUAL_ROM_SHA="$(shasum -a 256 "$ROM" | awk '{print $1}')"
-if [[ -n "$EXPECTED_ROM_SHA" && "$ACTUAL_ROM_SHA" != "$EXPECTED_ROM_SHA" ]]; then
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 && "$ACTUAL_ROM_SHA" != "$EXPECTED_ROM_SHA" ]]; then
     printf 'ROM SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_ROM_SHA" "$EXPECTED_ROM_SHA" >&2
     exit 1
 fi
@@ -40,15 +77,36 @@ if [[ "$ACTUAL_ARES_SHA" != "$EXPECTED_ARES_SHA" ]]; then
 fi
 
 STATE_ROOT="${N64GAME_ARES_STATE:-$HOME/Library/Application Support/ares-v148-n64game}"
-mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
-VERSION="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
-if [[ "$VERSION" != *"v148"* ]]; then
-    printf 'unexpected Ares version: %s\n' "$VERSION" >&2
+mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves/Nintendo 64" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
+VERSION_RAW="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
+if [[ ! "$VERSION_RAW" =~ ^[[:space:]]*v148[[:space:]]*$ ]]; then
+    printf 'unexpected Ares version output: %q\n' "$VERSION_RAW" >&2
     exit 1
 fi
+VERSION_CANONICAL="ares version v148"
 
 printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
-    "$VERSION" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+    "$VERSION_CANONICAL" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+
+if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 ]]; then
+    ROM_FILENAME="$(basename "$ROM")"
+    EEPROM_PATH="$STATE_ROOT/Saves/Nintendo 64/${ROM_FILENAME%.*}.eeprom"
+    if [[ ! -f "$EEPROM_PATH" || -L "$EEPROM_PATH" ]]; then
+        printf 'active Ares EEPROM must be a non-symlink regular file: %s\n' "$EEPROM_PATH" >&2
+        exit 1
+    fi
+    EEPROM_BYTES="$(stat -f '%z' "$EEPROM_PATH")"
+    if [[ "$EEPROM_BYTES" != "512" ]]; then
+        printf 'active Ares EEPROM must be exactly 512 bytes: got %s\n' "$EEPROM_BYTES" >&2
+        exit 1
+    fi
+    ACTUAL_EEPROM_SHA="$(shasum -a 256 "$EEPROM_PATH" | awk '{print $1}')"
+    if [[ "$ACTUAL_EEPROM_SHA" != "$EXPECTED_EEPROM_SHA" ]]; then
+        printf 'EEPROM SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_EEPROM_SHA" "$EXPECTED_EEPROM_SHA" >&2
+        exit 1
+    fi
+    printf 'eeprom_sha256=%s\n' "$ACTUAL_EEPROM_SHA"
+fi
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
     exit 0

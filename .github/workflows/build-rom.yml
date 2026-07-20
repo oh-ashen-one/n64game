@@ -51,6 +51,9 @@ jobs:
       - name: Run host contract tests
         run: make test
 
+      - name: Run fail-closed certification evidence contract tests
+        run: make test-certification
+
       - name: Run portable Gate 4 authoring-contract tests
         run: make test-authoring
 
