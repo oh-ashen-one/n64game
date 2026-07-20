@@ -4043,7 +4043,7 @@ end
 def exact_locator_tokens(cell)
   cell.to_s.split("; ").each_with_object({}) do |token, locators|
     prefix, value = token.split(":", 2)
-    return {} unless prefix&.match?(/\A[a-z_]+\z/) && value && !locators.key?(prefix)
+    return {} unless prefix&.match?(/\A[a-z][a-z0-9_]*\z/) && value && !locators.key?(prefix)
     locators[prefix] = value
   end
 end
@@ -5937,6 +5937,20 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
         error("#{production_id}: concept binding is outside reviewed payload graph: #{path}") unless payload_context[:closure].include?(path)
       end
     end
+    if source_binding
+      source_path, source_digest = source_binding.split("@", 2)
+      validate_manifest(
+        source_path, source_digest, "#{production_id} concept source", [], commit,
+        fresh_clone, concept_context
+      )
+      validate_manifest_member_roots(
+        concept_context, source_path, ["assets-src/#{prefix}/#{production_id}/"],
+        "#{production_id} concept source"
+      )
+    end
+    if payload_context.nil? && provenance_binding&.start_with?("#{provenance_path}@")
+      concept_context[:closure] << provenance_path
+    end
     concept_subset_digest = Digest::SHA256.hexdigest("CONCEPT_ONLY")
     provenance_record = if provenance_binding
                           validate_provenance_record(
@@ -5948,7 +5962,7 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
                               "output_manifest_path" => "NONE", "output_manifest_sha256" => "NONE"
                             },
                             "#{production_id} concept", commit: commit, fresh_clone: fresh_clone,
-                            payload_context: payload_context, record_context: concept_context,
+                            payload_context: concept_context, record_context: concept_context,
                             allow_none_subset: true
                           )
                         else
@@ -5960,14 +5974,6 @@ def validate_concept_entries(entries, owned_paths_by_id, commit: nil, fresh_clon
     end
     validate_ledger_provenance_projection(entry, provenance_record, "#{production_id} concept") unless provenance_record.empty?
     if source_binding
-      source_path, source_digest = source_binding.split("@", 2)
-      validate_manifest(
-        source_path, source_digest, "#{production_id} concept source", [], commit, fresh_clone, concept_context
-      )
-      validate_manifest_member_roots(
-        concept_context, source_path, ["assets-src/#{prefix}/#{production_id}/"],
-        "#{production_id} concept source"
-      )
       rights_path = provenance_record["rights_evidence"].to_s.split("@", 2).first
       error("#{production_id}: concept rights evidence is not source-manifest-owned") unless
         manifest_owned_paths(concept_context, source_path).include?(rights_path)
