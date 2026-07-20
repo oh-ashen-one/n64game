@@ -231,13 +231,15 @@ bool support_echo_renderer_init(
         renderer->shadow_vertices != NULL || renderer->ready) {
         return false;
     }
-    if ((size_t)buffer_count > SIZE_MAX / N64GAME_SUPPORT_ECHO_COUNT ||
-        (size_t)buffer_count * N64GAME_SUPPORT_ECHO_COUNT >
-            SIZE_MAX / sizeof(T3DMat4FP)) {
+    if (buffer_count >
+        UINT32_MAX / (uint32_t)N64GAME_SUPPORT_ECHO_COUNT) {
         return false;
     }
     const size_t matrix_count =
         (size_t)buffer_count * N64GAME_SUPPORT_ECHO_COUNT;
+    if (matrix_count > SIZE_MAX / sizeof(T3DMat4FP)) {
+        return false;
+    }
     renderer->model_matrices = malloc_uncached(
         sizeof(T3DMat4FP) * matrix_count
     );
