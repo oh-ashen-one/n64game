@@ -222,6 +222,7 @@ typedef struct {
     uint8_t resonance;
     uint8_t linked_followthrough_round;
     uint32_t random_state;
+    uint32_t event_serial;
     bool reward_applied;
 } N64GameBattle;
 

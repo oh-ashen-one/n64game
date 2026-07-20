@@ -248,7 +248,9 @@ static void inject_action(
         .valid = true,
     };
     battle->queue[1] = (N64GameBattleAction){0};
+    const uint32_t event_serial_before = battle->event_serial;
     assert(n64game_battle_resolve_next(battle));
+    assert(battle->event_serial == event_serial_before + UINT32_C(1));
     assert(battle->phase == N64GAME_BATTLE_PRESENT);
     assert(battle->queue_cursor == 1U);
 }
@@ -408,6 +410,7 @@ static void test_canonical_retained_move_definitions_and_effects(void)
     inject_action(&battle, 0U, 2U, N64GAME_TARGET_ALL);
     assert(battle.actors[2].power_stage == 1);
     assert(battle.actors[3].power_stage == 1);
+    assert(battle.last_event.target == N64GAME_TARGET_ALL);
 
     n64game_battle_begin(&battle);
     inject_action(&battle, 1U, 2U, N64GAME_TARGET_ALL);
@@ -437,6 +440,7 @@ static void test_canonical_retained_move_definitions_and_effects(void)
     inject_action(&battle, 3U, 3U, N64GAME_TARGET_ALL);
     assert(battle.actors[0].hp < quarrune_hp);
     assert(battle.actors[1].hp < ayselor_hp);
+    assert(battle.last_event.target == N64GAME_TARGET_ALL);
 }
 
 static void test_input_only_release_route(void)

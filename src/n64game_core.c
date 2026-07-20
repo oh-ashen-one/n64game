@@ -1382,6 +1382,7 @@ static void mark_move_used(
 
 static void apply_action(N64GameBattle *battle, const N64GameBattleAction *action)
 {
+    ++battle->event_serial;
     battle->last_event = (N64GameBattleEvent){0};
     if (action->move == N64GAME_MOVE_FINISHER &&
         (!alive(&battle->actors[0]) || !alive(&battle->actors[1]))) {
@@ -1489,6 +1490,9 @@ static void apply_action(N64GameBattle *battle, const N64GameBattleAction *actio
                            effect_roll(battle, move->effect_chance_percent)) {
                     recipient->stagger_rounds = 1U;
                 }
+            }
+            if (any_success) {
+                battle->last_event.target = N64GAME_TARGET_ALL;
             }
         }
     } else {

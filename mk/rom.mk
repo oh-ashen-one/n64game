@@ -15,6 +15,57 @@ QUARRUNE_RUNTIME_CANDIDATES := \
 	$(QUARRUNE_BODY) \
 	$(QUARRUNE_ACCENT) \
 	$(QUARRUNE_SHADOW)
+AYSELOR_SOURCE_DIR := runtime-candidates/echo/echo.ayselor
+AYSELOR_FILESYSTEM_DIR := filesystem/echo/echo.ayselor
+AYSELOR_MODEL := $(AYSELOR_FILESYSTEM_DIR)/ayselor_distance.t3dm
+AYSELOR_ANIM_0 := $(AYSELOR_FILESYSTEM_DIR)/ayselor_distance.0.sdata
+AYSELOR_ANIM_1 := $(AYSELOR_FILESYSTEM_DIR)/ayselor_distance.1.sdata
+AYSELOR_ANIM_2 := $(AYSELOR_FILESYSTEM_DIR)/ayselor_distance.2.sdata
+AYSELOR_BODY := $(AYSELOR_FILESYSTEM_DIR)/tex_ayselor_body_ci8_64x64.sprite
+AYSELOR_ACCENT := $(AYSELOR_FILESYSTEM_DIR)/tex_ayselor_accent_ci4_32x32.sprite
+AYSELOR_SHADOW := $(AYSELOR_FILESYSTEM_DIR)/tex_ayselor_blob_shadow_ia8_32x32.sprite
+AYSELOR_RUNTIME_CANDIDATES := \
+	$(AYSELOR_MODEL) \
+	$(AYSELOR_ANIM_0) \
+	$(AYSELOR_ANIM_1) \
+	$(AYSELOR_ANIM_2) \
+	$(AYSELOR_BODY) \
+	$(AYSELOR_ACCENT) \
+	$(AYSELOR_SHADOW)
+GYRECLAST_SOURCE_DIR := runtime-candidates/echo/echo.gyreclast
+GYRECLAST_FILESYSTEM_DIR := filesystem/echo/echo.gyreclast
+GYRECLAST_MODEL := $(GYRECLAST_FILESYSTEM_DIR)/gyreclast_distance.t3dm
+GYRECLAST_ANIM_0 := $(GYRECLAST_FILESYSTEM_DIR)/gyreclast_distance.0.sdata
+GYRECLAST_ANIM_1 := $(GYRECLAST_FILESYSTEM_DIR)/gyreclast_distance.1.sdata
+GYRECLAST_ANIM_2 := $(GYRECLAST_FILESYSTEM_DIR)/gyreclast_distance.2.sdata
+GYRECLAST_BODY := $(GYRECLAST_FILESYSTEM_DIR)/tex_gyreclast_body_ci8_64x64.sprite
+GYRECLAST_ACCENT := $(GYRECLAST_FILESYSTEM_DIR)/tex_gyreclast_accent_ci4_32x32.sprite
+GYRECLAST_SHADOW := $(GYRECLAST_FILESYSTEM_DIR)/tex_gyreclast_blob_shadow_ia8_32x32.sprite
+GYRECLAST_RUNTIME_CANDIDATES := \
+	$(GYRECLAST_MODEL) \
+	$(GYRECLAST_ANIM_0) \
+	$(GYRECLAST_ANIM_1) \
+	$(GYRECLAST_ANIM_2) \
+	$(GYRECLAST_BODY) \
+	$(GYRECLAST_ACCENT) \
+	$(GYRECLAST_SHADOW)
+KIVARRAX_SOURCE_DIR := runtime-candidates/echo/echo.kivarrax
+KIVARRAX_FILESYSTEM_DIR := filesystem/echo/echo.kivarrax
+KIVARRAX_MODEL := $(KIVARRAX_FILESYSTEM_DIR)/kivarrax_distance.t3dm
+KIVARRAX_ANIM_0 := $(KIVARRAX_FILESYSTEM_DIR)/kivarrax_distance.0.sdata
+KIVARRAX_ANIM_1 := $(KIVARRAX_FILESYSTEM_DIR)/kivarrax_distance.1.sdata
+KIVARRAX_ANIM_2 := $(KIVARRAX_FILESYSTEM_DIR)/kivarrax_distance.2.sdata
+KIVARRAX_BODY := $(KIVARRAX_FILESYSTEM_DIR)/tex_kivarrax_body_ci8_64x64.sprite
+KIVARRAX_ACCENT := $(KIVARRAX_FILESYSTEM_DIR)/tex_kivarrax_accent_ci4_32x32.sprite
+KIVARRAX_SHADOW := $(KIVARRAX_FILESYSTEM_DIR)/tex_kivarrax_blob_shadow_ia8_32x32.sprite
+KIVARRAX_RUNTIME_CANDIDATES := \
+	$(KIVARRAX_MODEL) \
+	$(KIVARRAX_ANIM_0) \
+	$(KIVARRAX_ANIM_1) \
+	$(KIVARRAX_ANIM_2) \
+	$(KIVARRAX_BODY) \
+	$(KIVARRAX_ACCENT) \
+	$(KIVARRAX_SHADOW)
 ANNEX_KIT_SOURCE_DIR := runtime-candidates/env/env.annex.threshold_kit
 ANNEX_KIT_FILESYSTEM_DIR := filesystem/env/env.annex.threshold_kit
 ANNEX_KIT_MODEL := $(ANNEX_KIT_FILESYSTEM_DIR)/annex_threshold_kit.t3dm
@@ -55,7 +106,9 @@ OBJS := \
 	$(BUILD_DIR)/n64game_save.o \
 	$(BUILD_DIR)/n64game_telemetry.o \
 	$(BUILD_DIR)/player_render_assets.o \
-	$(BUILD_DIR)/quarrune_render_assets.o
+	$(BUILD_DIR)/quarrune_render_assets.o \
+	$(BUILD_DIR)/support_echo_render_assets.o \
+	$(BUILD_DIR)/support_echo_renderer.o
 
 .PHONY: all clean stage-rom
 
@@ -84,6 +137,78 @@ $(QUARRUNE_ACCENT): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_accent_ci4_32x32.png
 	@test -f "$@"
 
 $(QUARRUNE_SHADOW): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_blob_shadow_ia8_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(AYSELOR_MODEL) $(AYSELOR_ANIM_0) $(AYSELOR_ANIM_1) $(AYSELOR_ANIM_2) &: $(AYSELOR_SOURCE_DIR)/ayselor_distance.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(AYSELOR_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(AYSELOR_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(AYSELOR_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(AYSELOR_MODEL)"
+	@test -f "$(AYSELOR_ANIM_0)"
+	@test -f "$(AYSELOR_ANIM_1)"
+	@test -f "$(AYSELOR_ANIM_2)"
+
+$(AYSELOR_BODY): $(AYSELOR_SOURCE_DIR)/tex_ayselor_body_ci8_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(AYSELOR_ACCENT): $(AYSELOR_SOURCE_DIR)/tex_ayselor_accent_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(AYSELOR_SHADOW): $(AYSELOR_SOURCE_DIR)/tex_ayselor_blob_shadow_ia8_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(GYRECLAST_MODEL) $(GYRECLAST_ANIM_0) $(GYRECLAST_ANIM_1) $(GYRECLAST_ANIM_2) &: $(GYRECLAST_SOURCE_DIR)/gyreclast_distance.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(GYRECLAST_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(GYRECLAST_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(GYRECLAST_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(GYRECLAST_MODEL)"
+	@test -f "$(GYRECLAST_ANIM_0)"
+	@test -f "$(GYRECLAST_ANIM_1)"
+	@test -f "$(GYRECLAST_ANIM_2)"
+
+$(GYRECLAST_BODY): $(GYRECLAST_SOURCE_DIR)/tex_gyreclast_body_ci8_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(GYRECLAST_ACCENT): $(GYRECLAST_SOURCE_DIR)/tex_gyreclast_accent_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(GYRECLAST_SHADOW): $(GYRECLAST_SOURCE_DIR)/tex_gyreclast_blob_shadow_ia8_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(KIVARRAX_MODEL) $(KIVARRAX_ANIM_0) $(KIVARRAX_ANIM_1) $(KIVARRAX_ANIM_2) &: $(KIVARRAX_SOURCE_DIR)/kivarrax_distance.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(KIVARRAX_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(KIVARRAX_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(KIVARRAX_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(KIVARRAX_MODEL)"
+	@test -f "$(KIVARRAX_ANIM_0)"
+	@test -f "$(KIVARRAX_ANIM_1)"
+	@test -f "$(KIVARRAX_ANIM_2)"
+
+$(KIVARRAX_BODY): $(KIVARRAX_SOURCE_DIR)/tex_kivarrax_body_ci8_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(KIVARRAX_ACCENT): $(KIVARRAX_SOURCE_DIR)/tex_kivarrax_accent_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(KIVARRAX_SHADOW): $(KIVARRAX_SOURCE_DIR)/tex_kivarrax_blob_shadow_ia8_32x32.png
 	@mkdir -p $(dir $@)
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
@@ -129,6 +254,9 @@ $(PLAYER_FACE): $(PLAYER_SOURCE_DIR)/tex_player_ari_face_ci4_32x32.png
 
 $(BUILD_DIR)/$(ROM_NAME).dfs: \
 	$(QUARRUNE_RUNTIME_CANDIDATES) \
+	$(AYSELOR_RUNTIME_CANDIDATES) \
+	$(GYRECLAST_RUNTIME_CANDIDATES) \
+	$(KIVARRAX_RUNTIME_CANDIDATES) \
 	$(ANNEX_KIT_RUNTIME_CANDIDATES) \
 	$(PLAYER_RUNTIME_CANDIDATES)
 

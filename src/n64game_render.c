@@ -47,6 +47,22 @@ static const float ANNEX_WORLD_FLOOR_Y = -18.0f;
 static const float ANNEX_KIT_BATTLE_SCALE_MULTIPLIER = 1.6f;
 static const float ANNEX_PLAYER_SCALE = 0.0833333f;
 static const float ANNEX_QUARRUNE_SCALE = 0.10f;
+static const float BATTLE_QUARRUNE_SCALE = 0.20f;
+static const float BATTLE_SUPPORT_SCALES[N64GAME_SUPPORT_ECHO_COUNT] = {
+    [N64GAME_SUPPORT_ECHO_AYSELOR] = 0.28f,
+    [N64GAME_SUPPORT_ECHO_GYRECLAST] = 0.42f,
+    [N64GAME_SUPPORT_ECHO_KIVARRAX] = 0.36f,
+};
+static const float BATTLE_SUPPORT_YAWS[N64GAME_SUPPORT_ECHO_COUNT] = {
+    [N64GAME_SUPPORT_ECHO_AYSELOR] = 3.9269908f,
+    [N64GAME_SUPPORT_ECHO_GYRECLAST] = 0.60f,
+    [N64GAME_SUPPORT_ECHO_KIVARRAX] = 3.9269908f,
+};
+static const float BATTLE_SUPPORT_SHADOW_RADII[N64GAME_SUPPORT_ECHO_COUNT] = {
+    [N64GAME_SUPPORT_ECHO_AYSELOR] = 15.0f,
+    [N64GAME_SUPPORT_ECHO_GYRECLAST] = 18.0f,
+    [N64GAME_SUPPORT_ECHO_KIVARRAX] = 16.0f,
+};
 
 static const char *const PLAYER_ANIMATION_NAMES[] = {
     "idle_a",
@@ -526,7 +542,7 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
         renderer->floor_vertices != NULL || renderer->player_ready ||
-        renderer->quarrune_ready) {
+        renderer->quarrune_ready || renderer->support_echoes_ready) {
         return false;
     }
 
@@ -566,10 +582,14 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
             renderer->buffer_count
         ) ||
         !setup_player(renderer) ||
-        !setup_quarrune(renderer)) {
+        !setup_quarrune(renderer) ||
+        !support_echo_renderer_init(
+            &renderer->support_echoes, renderer->buffer_count
+        )) {
         n64game_renderer_destroy(renderer);
         return false;
     }
+    renderer->support_echoes_ready = true;
     return true;
 }
 
@@ -587,6 +607,7 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
         return;
     }
     n64game_static_model_free(&renderer->annex_kit);
+    support_echo_renderer_destroy(&renderer->support_echoes);
     rspq_wait();
     if (renderer->player_draw_block != NULL) {
         rspq_block_free(renderer->player_draw_block);
@@ -883,7 +904,7 @@ static void draw_battle_kit_backdrop(N64GameRenderer *renderer)
     float translation[3];
     centered_annex_kit_translation(
         0.0f,
-        -50.0f,
+        -105.0f,
         yaw,
         ANNEX_KIT_BATTLE_SCALE_MULTIPLIER,
         translation
@@ -1762,31 +1783,75 @@ static void draw_battle_menu(const N64GameCore *game)
 
 static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    static const float BATTLE_ACTOR_SCALE = 0.50f;
     const fm_vec3_t camera = {{0.0f, 56.0f, 112.0f}};
     const fm_vec3_t target = {{0.0f, -4.0f, 0.0f}};
     begin_world_render(renderer, &camera, &target);
     draw_battle_kit_backdrop(renderer);
+    static const uint8_t BATTLE_ACTOR_AMBIENT[4] = {112, 105, 112, 255};
+    t3d_light_set_ambient(BATTLE_ACTOR_AMBIENT);
     static const float POSITIONS[4][2] = {
-        {-31.0f, -34.0f}, {26.0f, -30.0f},
-        {-28.0f, -76.0f}, {31.0f, -70.0f},
+        {-32.0f, -43.0f}, {32.0f, -40.0f},
+        {-72.0f, -76.0f}, {72.0f, -70.0f},
     };
     const float angle = (float)game->scene_ticks * 0.012f;
+    assertf(
+        renderer->support_echoes_ready &&
+            support_echo_renderer_update(
+                &renderer->support_echoes, &game->battle
+            ),
+        "Support Echoform renderer update failed"
+    );
+    for (uint8_t actor = 1U; actor < N64GAME_BATTLE_ACTOR_COUNT; ++actor) {
+        const N64GameSupportEchoKind kind =
+            (N64GameSupportEchoKind)(actor - 1U);
+        const bool knockout_motion =
+            renderer->support_echoes.instances[kind].motion ==
+                N64GAME_SUPPORT_ECHO_MOTION_HIT;
+        if (game->battle.actors[actor].hp > 0 || knockout_motion) {
+            assertf(
+                support_echo_renderer_draw_shadow(
+                    &renderer->support_echoes,
+                    kind,
+                    renderer->frame_index,
+                    POSITIONS[actor][0],
+                    ANNEX_WORLD_FLOOR_Y,
+                    POSITIONS[actor][1],
+                    BATTLE_SUPPORT_SHADOW_RADII[kind]
+                ),
+                "Support Echoform shadow draw failed for actor %u",
+                (unsigned int)actor
+            );
+        }
+    }
     for (uint8_t actor = 0U; actor < 4U; ++actor) {
-        if (game->battle.actors[actor].hp > 0) {
+        const bool knockout_motion = actor > 0U &&
+            renderer->support_echoes.instances[actor - 1U].motion ==
+                N64GAME_SUPPORT_ECHO_MOTION_HIT;
+        if (game->battle.actors[actor].hp > 0 || knockout_motion) {
             if (actor == 0U) {
                 draw_quarrune(
                     renderer, actor,
                     POSITIONS[actor][0], ANNEX_WORLD_FLOOR_Y, POSITIONS[actor][1],
-                    ANNEX_QUARRUNE_SCALE,
+                    BATTLE_QUARRUNE_SCALE,
                     0.10f + fm_sinf(angle * 2.0f) * 0.035f
                 );
             } else {
-                draw_actor(renderer, actor, actor,
-                           POSITIONS[actor][0],
-                           grounded_actor_origin(BATTLE_ACTOR_SCALE),
-                           POSITIONS[actor][1], BATTLE_ACTOR_SCALE,
-                           actor < 2U ? angle : -angle);
+                const N64GameSupportEchoKind kind =
+                    (N64GameSupportEchoKind)(actor - 1U);
+                assertf(
+                    support_echo_renderer_draw(
+                        &renderer->support_echoes,
+                        kind,
+                        renderer->frame_index,
+                        POSITIONS[actor][0],
+                        ANNEX_WORLD_FLOOR_Y,
+                        POSITIONS[actor][1],
+                        BATTLE_SUPPORT_SCALES[kind],
+                        BATTLE_SUPPORT_YAWS[kind]
+                    ),
+                    "Support Echoform model draw failed for actor %u",
+                    (unsigned int)actor
+                );
             }
         }
     }

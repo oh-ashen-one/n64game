@@ -16,6 +16,7 @@
 #include "n64game_core.h"
 #include "player_render_assets.h"
 #include "quarrune_render_assets.h"
+#include "support_echo_renderer.h"
 
 typedef struct {
     T3DModel *model;
@@ -47,6 +48,7 @@ typedef struct {
     T3DSkeleton quarrune_skeleton;
     QuarruneRenderAssets quarrune_assets;
     rspq_block_t *quarrune_draw_block;
+    SupportEchoRenderer support_echoes;
     float player_yaw;
     uint32_t buffer_count;
     uint32_t frame_index;
@@ -56,6 +58,7 @@ typedef struct {
     bool font_registered;
     bool player_ready;
     bool quarrune_ready;
+    bool support_echoes_ready;
     bool annex_camera_ready;
 } N64GameRenderer;
 

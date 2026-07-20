@@ -309,6 +309,78 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.png",
             "rom:/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.sprite",
         ),
+        (
+            "candidate.echo.ayselor.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.ayselor/ayselor_distance.glb",
+            "rom:/echo/echo.ayselor/ayselor_distance.t3dm",
+        ),
+        (
+            "candidate.echo.ayselor.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.gyreclast/gyreclast_distance.glb",
+            "rom:/echo/echo.gyreclast/gyreclast_distance.t3dm",
+        ),
+        (
+            "candidate.echo.gyreclast.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.kivarrax/kivarrax_distance.glb",
+            "rom:/echo/echo.kivarrax/kivarrax_distance.t3dm",
+        ),
+        (
+            "candidate.echo.kivarrax.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_accent_ci4_32x32.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -350,7 +422,8 @@ def validate_runtime_candidates() -> dict[str, Any]:
         )
     if tuple(observed_identity) != expected:
         raise ContractError(
-            "runtime candidate identity/path census is not the exact Quarrune, Annex, and Ari proof set"
+            "runtime candidate identity/path census is not the exact Quarrune, Annex, Ari, "
+            "Ayselor, Gyreclast, and Kivarrax proof set"
         )
     return {
         "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
@@ -358,7 +431,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
         "scope": (
-            "Quarrune, Annex, and Ari in-engine proof only; "
+            "Quarrune, Annex, Ari, Ayselor, Gyreclast, and Kivarrax in-engine proof only; "
             "not Gate evidence or production approval"
         ),
         "entries": rows,

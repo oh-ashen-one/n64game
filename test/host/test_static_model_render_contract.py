@@ -214,12 +214,13 @@ class StaticModelRenderContractTests(unittest.TestCase):
         self.assertIn("--renderer->annex_camera_fade_ticks;", annex)
         self.assertNotIn("player_z + 88.0f", annex)
         self.assertIn("ANNEX_QUARRUNE_SCALE = 0.10f", self.source)
+        self.assertIn("BATTLE_QUARRUNE_SCALE = 0.20f", self.source)
         self.assertIn(
             "renderer, 3U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f",
             annex,
         )
         self.assertIn("ANNEX_QUARRUNE_SCALE", annex)
-        self.assertIn("ANNEX_QUARRUNE_SCALE", battle)
+        self.assertIn("BATTLE_QUARRUNE_SCALE", battle)
 
 
 if __name__ == "__main__":
