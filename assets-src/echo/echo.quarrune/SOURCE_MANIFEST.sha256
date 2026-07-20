@@ -1,6 +1,6 @@
-assets-src/echo/echo.quarrune/RIGHTS.md	822	de82293013aa9e061ccb3e94f457ddb14fbaaf4be7a9f834771205e2e1ba34a4	build:-	capture:-	role:rights.record
-assets-src/echo/echo.quarrune/TRANSFORMATIONS.md	268	e5dbb7fe3ea8f716c47101e919ea7b6b1b19a30101bc08d6b48d04fb02a97241	build:-	capture:-	role:metadata.transformations
-assets-src/echo/echo.quarrune/generation/d68ba011b2fad31b.md	3696	15cb3628833321221a11cc1b4ff51f2c6705d09d6a025d1da2e7452d38687d45	build:-	capture:-	role:generation.record
-assets-src/echo/echo.quarrune/quarrune_concept_g1_v2.png	2814985	84cee158a18cee8d535ca4c3dc4d47763b25e0761bce36fd8371a8ce0036f795	build:-	capture:-	role:source.generated
+assets-src/echo/echo.quarrune/RIGHTS.md	822	75207967a654af614d3cf4b3b95632f9bc6df0afbe66338ed88f32487af9f318	build:-	capture:-	role:rights.record
+assets-src/echo/echo.quarrune/TRANSFORMATIONS.md	268	75aab46219881215ac772a0b6ee92aab892e8e06c457b9e3c4d59a48bf60095a	build:-	capture:-	role:metadata.transformations
+assets-src/echo/echo.quarrune/generation/c4dc4a7aff180694.md	2240	9d2a2d838e5290f3cb6ca6d7d26e6123f95704643687db09daab28c8cc248317	build:-	capture:-	role:generation.record
+assets-src/echo/echo.quarrune/quarrune_concept_g1_v3.png	2621871	4b30b5fe0e4c1b952402a05ad2a67d6372148aba313bdbac615fe598b8064d7e	build:-	capture:-	role:source.generated
 assets-src/echo/echo.quarrune/rights-support/OPENAI_PROVIDER_TERMS.md	688	6b0074063709ad4e580d6d040c55e87a4ee6efbc0d6b3e4fe083181b79f02e77	build:-	capture:-	role:rights.support
-assets-src/echo/echo.quarrune/rights-support/THIRD_PARTY_NOTICE.md	453	1a53ef47e02819c3812616975d8c3f1ca13dd6a90b3810ed2410acdb41220a3c	build:-	capture:-	role:rights.support
+assets-src/echo/echo.quarrune/rights-support/THIRD_PARTY_NOTICE.md	540	c9639bcc93aab37011584af6f11d5099a5f1bdba070fe9f57d849aa341256a49	build:-	capture:-	role:rights.support
