@@ -17,6 +17,9 @@ enum {
     ARI_ANIMATION_IDLE = 0,
     ARI_ANIMATION_WALK,
     ARI_ANIMATION_RUN,
+    BATTLE_ECHO_ANIMATION_IDLE = 0,
+    BATTLE_ECHO_ANIMATION_REPOSITION,
+    BATTLE_ECHO_ANIMATION_HIT,
 };
 
 static const char ANNEX_MODEL_PATH[] = "rom:/env/annex/annex_threshold.t3dm";
@@ -28,9 +31,42 @@ static const char ARI_SHARED_SHADOW_PATH[] =
 static const char QUARRUNE_MODEL_PATH[] =
     "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
 
+typedef struct {
+    const char *debug_name;
+    const char *model_path;
+    const char *body_path;
+    uint32_t body_top_reference;
+    uint32_t body_bottom_reference;
+    uint16_t minimum_body_palette_colors;
+} N64GameBattleEchoAssetConfig;
+
 static const char *const ARI_ANIMATION_NAMES[
     N64GAME_ARI_RUNTIME_ANIMATION_COUNT
 ] = {"idle_a", "walk", "run"};
+
+static const char *const BATTLE_ECHO_ANIMATION_NAMES[
+    N64GAME_BATTLE_ECHO_ANIMATION_COUNT
+] = {"idle_a", "reposition", "hit"};
+
+static const N64GameBattleEchoAssetConfig GYRECLAST_ASSET_CONFIG = {
+    .debug_name = "gyreclast",
+    .model_path = "rom:/echo/echo.gyreclast/gyreclast.t3dm",
+    .body_path =
+        "rom:/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.sprite",
+    .body_top_reference = UINT32_C(0x47594230),
+    .body_bottom_reference = UINT32_C(0x47594231),
+    .minimum_body_palette_colors = 11U,
+};
+
+static const N64GameBattleEchoAssetConfig KIVARRAX_ASSET_CONFIG = {
+    .debug_name = "kivarrax",
+    .model_path = "rom:/echo/echo.kivarrax/kivarrax.t3dm",
+    .body_path =
+        "rom:/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.sprite",
+    .body_top_reference = UINT32_C(0x4B564230),
+    .body_bottom_reference = UINT32_C(0x4B564231),
+    .minimum_body_palette_colors = 53U,
+};
 
 static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
     UINT32_C(0xD7A253FF),
@@ -323,6 +359,114 @@ static bool setup_quarrune(N64GameRenderer *renderer)
     return true;
 }
 
+static bool setup_battle_echo(
+    N64GameRenderer *renderer,
+    N64GameBattleEchoRenderer *echo,
+    const N64GameBattleEchoAssetConfig *config
+)
+{
+    const N64GameIndexedRenderAssetsConfig assets_config = {
+        .body_sprite_path = config->body_path,
+        .blob_shadow_sprite_path = ARI_SHARED_SHADOW_PATH,
+        .body_top_reference = config->body_top_reference,
+        .body_bottom_reference = config->body_bottom_reference,
+        .minimum_body_palette_colors = config->minimum_body_palette_colors,
+    };
+    if (!n64game_indexed_render_assets_load(&echo->assets, &assets_config)) {
+        debugf("[%s] render-asset load failed\n", config->debug_name);
+        return false;
+    }
+
+    echo->model = t3d_model_load(config->model_path);
+    if (echo->model == NULL) {
+        debugf("[%s] model load failed: %s\n",
+               config->debug_name, config->model_path);
+        return false;
+    }
+    if (t3d_model_get_skeleton(echo->model) == NULL) {
+        debugf("[%s] model has no skeleton\n", config->debug_name);
+        return false;
+    }
+
+    echo->skeleton = t3d_skeleton_create_buffered(
+        echo->model, (int)renderer->buffer_count
+    );
+    if (echo->skeleton.bones == NULL ||
+        echo->skeleton.boneMatricesFP == NULL) {
+        debugf("[%s] skeleton allocation failed\n", config->debug_name);
+        return false;
+    }
+
+    for (uint8_t index = 0U;
+         index < N64GAME_BATTLE_ECHO_ANIMATION_COUNT;
+         ++index) {
+        echo->animations[index] = t3d_anim_create(
+            echo->model, BATTLE_ECHO_ANIMATION_NAMES[index]
+        );
+        ++echo->animation_count;
+        if (echo->animations[index].file == NULL) {
+            debugf("[%s] animation stream open failed: %s\n",
+                   config->debug_name,
+                   BATTLE_ECHO_ANIMATION_NAMES[index]);
+            return false;
+        }
+        t3d_anim_attach(&echo->animations[index], &echo->skeleton);
+        t3d_anim_update(&echo->animations[index], 0.0f);
+        t3d_anim_set_looping(
+            &echo->animations[index], index == BATTLE_ECHO_ANIMATION_IDLE
+        );
+        t3d_anim_set_playing(
+            &echo->animations[index], index == BATTLE_ECHO_ANIMATION_IDLE
+        );
+    }
+    t3d_anim_set_speed(
+        &echo->animations[BATTLE_ECHO_ANIMATION_REPOSITION], 2.4f
+    );
+    t3d_anim_set_speed(
+        &echo->animations[BATTLE_ECHO_ANIMATION_HIT], 1.8f
+    );
+    t3d_skeleton_reset(&echo->skeleton);
+    t3d_anim_set_time(
+        &echo->animations[BATTLE_ECHO_ANIMATION_IDLE], 0.0f
+    );
+    t3d_anim_update(
+        &echo->animations[BATTLE_ECHO_ANIMATION_IDLE], 0.0f
+    );
+    for (uint32_t index = 0U; index < renderer->buffer_count; ++index) {
+        t3d_skeleton_update(&echo->skeleton);
+    }
+
+    rspq_block_begin();
+    t3d_model_draw_custom(
+        echo->model,
+        (T3DModelDrawConf){
+            .userData = &echo->assets,
+            .dynTextureCb = n64game_indexed_render_assets_dynamic_texture_cb,
+            .matrices = (const T3DMat4FP *)t3d_segment_placeholder(
+                T3D_SEGMENT_SKELETON
+            ),
+        }
+    );
+    echo->draw_block = rspq_block_end();
+    if (echo->draw_block == NULL) {
+        debugf("[%s] draw-block recording failed\n", config->debug_name);
+        return false;
+    }
+    if (!n64game_indexed_render_assets_callback_ok(&echo->assets)) {
+        debugf(
+            "[%s] dynamic-texture callback failed: callbacks=%u fault=%u\n",
+            config->debug_name,
+            (unsigned int)echo->assets.successful_body_callbacks,
+            echo->assets.callback_fault ? 1U : 0U
+        );
+        return false;
+    }
+    echo->last_event_key = UINT32_MAX;
+    echo->active_animation = BATTLE_ECHO_ANIMATION_IDLE;
+    echo->ready = true;
+    return true;
+}
+
 bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer)
 {
     if (renderer == NULL) {
@@ -363,7 +507,8 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
         renderer->floor_vertices != NULL || renderer->annex_ready ||
-        renderer->ari_ready || renderer->quarrune_ready) {
+        renderer->ari_ready || renderer->quarrune_ready ||
+        renderer->gyreclast.ready || renderer->kivarrax.ready) {
         return false;
     }
 
@@ -396,7 +541,13 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
     if (renderer->viewport._matFP == NULL || !setup_annex(renderer) ||
-        !setup_ari(renderer) || !setup_quarrune(renderer)) {
+        !setup_ari(renderer) || !setup_quarrune(renderer) ||
+        !setup_battle_echo(
+            renderer, &renderer->gyreclast, &GYRECLAST_ASSET_CONFIG
+        ) ||
+        !setup_battle_echo(
+            renderer, &renderer->kivarrax, &KIVARRAX_ASSET_CONFIG
+        )) {
         n64game_renderer_destroy(renderer);
         return false;
     }
@@ -411,12 +562,35 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
     return n64game_renderer_finish_init(renderer);
 }
 
+static void destroy_battle_echo(N64GameBattleEchoRenderer *echo)
+{
+    if (echo->draw_block != NULL) {
+        rspq_block_free(echo->draw_block);
+        echo->draw_block = NULL;
+    }
+    for (uint8_t index = 0U; index < echo->animation_count; ++index) {
+        t3d_anim_destroy(&echo->animations[index]);
+    }
+    echo->animation_count = 0U;
+    t3d_skeleton_destroy(&echo->skeleton);
+    if (echo->model != NULL) {
+        t3d_model_free(echo->model);
+        echo->model = NULL;
+    }
+    if (echo->assets.lifetime != NULL) {
+        (void)n64game_indexed_render_assets_unload(&echo->assets);
+    }
+    *echo = (N64GameBattleEchoRenderer){0};
+}
+
 void n64game_renderer_destroy(N64GameRenderer *renderer)
 {
     if (renderer == NULL) {
         return;
     }
     rspq_wait();
+    destroy_battle_echo(&renderer->kivarrax);
+    destroy_battle_echo(&renderer->gyreclast);
     if (renderer->quarrune_draw_block != NULL) {
         rspq_block_free(renderer->quarrune_draw_block);
         renderer->quarrune_draw_block = NULL;
@@ -537,6 +711,140 @@ static void draw_quarrune(
     t3d_skeleton_use(&renderer->quarrune_skeleton);
     t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
     rspq_block_run(renderer->quarrune_draw_block);
+    t3d_matrix_pop(1);
+}
+
+static uint32_t battle_event_key(const N64GameBattle *battle)
+{
+    const N64GameBattleEvent *const event = &battle->last_event;
+    return ((uint32_t)battle->round << 18) |
+        ((uint32_t)battle->queue_cursor << 15) |
+        ((uint32_t)event->actor << 13) |
+        ((uint32_t)event->move << 10) |
+        ((uint32_t)event->target << 2) |
+        (event->happened ? UINT32_C(2) : UINT32_C(0)) |
+        (event->skipped ? UINT32_C(1) : UINT32_C(0));
+}
+
+static bool battle_event_targets_actor(
+    const N64GameBattle *battle,
+    uint8_t actor
+)
+{
+    const N64GameBattleEvent *const event = &battle->last_event;
+    if (event->target == actor) {
+        return true;
+    }
+    if (event->actor >= N64GAME_BATTLE_ACTOR_COUNT ||
+        event->hp_delta >= 0) {
+        return false;
+    }
+    if (event->move == N64GAME_MOVE_FINISHER) {
+        return battle->actors[event->actor].player_side !=
+            battle->actors[actor].player_side;
+    }
+    const N64GameMoveDef *const move = n64game_move_def(
+        battle->actors[event->actor].id, event->move
+    );
+    return move != NULL &&
+        move->target_rule == N64GAME_TARGET_ALL_ENEMIES &&
+        battle->actors[event->actor].player_side !=
+            battle->actors[actor].player_side;
+}
+
+static uint8_t battle_echo_animation_for(
+    const N64GameCore *game,
+    uint8_t actor
+)
+{
+    const N64GameBattle *const battle = &game->battle;
+    const N64GameBattleEvent *const event = &battle->last_event;
+    if ((battle->phase != N64GAME_BATTLE_PRESENT &&
+         battle->phase != N64GAME_BATTLE_VICTORY &&
+         battle->phase != N64GAME_BATTLE_DEFEAT) ||
+        !event->happened || event->skipped) {
+        return BATTLE_ECHO_ANIMATION_IDLE;
+    }
+    if (event->hp_delta < 0 && battle_event_targets_actor(battle, actor)) {
+        return BATTLE_ECHO_ANIMATION_HIT;
+    }
+    if (event->actor == actor) {
+        return BATTLE_ECHO_ANIMATION_REPOSITION;
+    }
+    return BATTLE_ECHO_ANIMATION_IDLE;
+}
+
+static void set_battle_echo_animation(
+    N64GameBattleEchoRenderer *echo,
+    uint8_t animation
+)
+{
+    assertf(
+        animation < N64GAME_BATTLE_ECHO_ANIMATION_COUNT,
+        "Battle Echoform animation index is invalid"
+    );
+    for (uint8_t index = 0U;
+         index < N64GAME_BATTLE_ECHO_ANIMATION_COUNT;
+         ++index) {
+        t3d_anim_set_playing(&echo->animations[index], false);
+    }
+    T3DAnim *const selected = &echo->animations[animation];
+    t3d_anim_set_time(selected, 0.0f);
+    t3d_anim_set_looping(
+        selected, animation == BATTLE_ECHO_ANIMATION_IDLE
+    );
+    t3d_anim_set_playing(selected, true);
+    t3d_anim_update(selected, 0.0f);
+    echo->active_animation = animation;
+}
+
+static void update_battle_echo_pose(
+    N64GameBattleEchoRenderer *echo,
+    const N64GameCore *game,
+    uint8_t actor
+)
+{
+    assertf(echo->ready, "Battle Echoform renderer is not ready");
+    const uint32_t event_key = battle_event_key(&game->battle);
+    if (event_key != echo->last_event_key) {
+        set_battle_echo_animation(
+            echo, battle_echo_animation_for(game, actor)
+        );
+        echo->last_event_key = event_key;
+    }
+
+    T3DAnim *active = &echo->animations[echo->active_animation];
+    t3d_anim_update(active, 1.0f / 30.0f);
+    if (echo->active_animation != BATTLE_ECHO_ANIMATION_IDLE &&
+        !t3d_anim_is_playing(active)) {
+        set_battle_echo_animation(echo, BATTLE_ECHO_ANIMATION_IDLE);
+    }
+    t3d_skeleton_update(&echo->skeleton);
+}
+
+static void draw_battle_echo(
+    N64GameRenderer *renderer,
+    N64GameBattleEchoRenderer *echo,
+    size_t matrix_index,
+    float x,
+    float y,
+    float z,
+    float scale,
+    float angle
+)
+{
+    assertf(echo->ready, "Battle Echoform renderer is not ready");
+    const float scales[3] = {scale, scale, scale};
+    const float rotations[3] = {0.0f, angle, 0.0f};
+    const float translation[3] = {x, y, z};
+    const size_t matrix_slot = matrix_index * (size_t)renderer->buffer_count +
+        (size_t)renderer->frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_skeleton_use(&echo->skeleton);
+    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
+    rspq_block_run(echo->draw_block);
     t3d_matrix_pop(1);
 }
 
@@ -1127,7 +1435,7 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
         {-28.0f, -2.0f, -76.0f}, {31.0f, -1.0f, -70.0f},
     };
     const float angle = (float)game->scene_ticks * 0.012f;
-    for (uint8_t actor = 0U; actor < 4U; ++actor) {
+    for (uint8_t actor = 0U; actor < 2U; ++actor) {
         if (game->battle.actors[actor].hp > 0) {
             if (actor == 0U) {
                 draw_quarrune(
@@ -1136,11 +1444,31 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
                     0.42f, 0.10f + fm_sinf(angle * 2.0f) * 0.035f
                 );
             } else {
-                draw_actor(renderer, actor, actor,
-                           POSITIONS[actor][0], POSITIONS[actor][1], POSITIONS[actor][2],
-                           0.82f, actor < 2U ? angle : -angle);
+                draw_actor(
+                    renderer, actor, actor,
+                    POSITIONS[actor][0], POSITIONS[actor][1],
+                    POSITIONS[actor][2], 0.82f, angle
+                );
             }
         }
+    }
+    update_battle_echo_pose(&renderer->gyreclast, game, 2U);
+    update_battle_echo_pose(&renderer->kivarrax, game, 3U);
+    if (game->battle.actors[2].hp > 0 ||
+        renderer->gyreclast.active_animation == BATTLE_ECHO_ANIMATION_HIT) {
+        draw_battle_echo(
+            renderer, &renderer->gyreclast, 2U,
+            POSITIONS[2][0], -18.0f, POSITIONS[2][2],
+            0.72f, -0.08f
+        );
+    }
+    if (game->battle.actors[3].hp > 0 ||
+        renderer->kivarrax.active_animation == BATTLE_ECHO_ANIMATION_HIT) {
+        draw_battle_echo(
+            renderer, &renderer->kivarrax, 3U,
+            POSITIONS[3][0], -18.0f, POSITIONS[3][2],
+            0.46f, 0.08f
+        );
     }
     draw_battle_status(game);
     draw_battle_menu(game);

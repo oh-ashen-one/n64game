@@ -309,6 +309,42 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/chr/player_ari/filesystem/chr/player_ari/tex_ari_face_warm_ci4_32x32.png",
             "rom:/chr/player_ari/tex_ari_face_warm_ci4_32x32.sprite",
         ),
+        (
+            "candidate.echo.gyreclast.hero",
+            "model_glb",
+            "runtime-candidates/echo/echo.gyreclast/intermediate/gyreclast_bound.glb",
+            "rom:/echo/echo.gyreclast/gyreclast.t3dm",
+        ),
+        (
+            "candidate.echo.gyreclast.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/filesystem/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/filesystem/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.hero",
+            "model_glb",
+            "runtime-candidates/echo/echo.kivarrax/intermediate/kivarrax_bound.glb",
+            "rom:/echo/echo.kivarrax/kivarrax.t3dm",
+        ),
+        (
+            "candidate.echo.kivarrax.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/filesystem/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.diaphragm",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/filesystem/echo/echo.kivarrax/tex_kivarrax_diaphragm_ci4_32x32.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_diaphragm_ci4_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -355,7 +391,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
-        "scope": "Quarrune, Annex, and Ari in-engine candidates only; not Gate evidence or production approval",
+        "scope": "Annex, Ari, Quarrune, Gyreclast, and Kivarrax in-engine candidates only; not Gate evidence or production approval",
         "entries": rows,
     }
 
@@ -466,7 +502,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune, Annex, and Ari in-engine candidates; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Annex, Ari, Quarrune, Gyreclast, and Kivarrax in-engine candidates; not Gate evidence)\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

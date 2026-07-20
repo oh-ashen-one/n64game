@@ -56,4 +56,5 @@ docker exec \
     "$CONTAINER_ID" \
     ./scripts/container-build
 
+scripts/validate-runtime-candidate-assets
 scripts/validate-rom build/game/n64game-gate3.z64

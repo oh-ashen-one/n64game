@@ -66,13 +66,15 @@ class BuildContractTests(unittest.TestCase):
 
     def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 11)
+        self.assertEqual(report["runtime_candidate_count"], 17)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
             [
                 "model_glb", "texture_png", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png",
             ],
         )
@@ -206,7 +208,8 @@ class BuildContractTests(unittest.TestCase):
                 f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
                 makefile,
             )
-        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
+        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs:", makefile)
+        self.assertIn("$(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
         self.assertIn("$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs", makefile)
         self.assertNotIn("mkasset", makefile)
 
@@ -228,10 +231,7 @@ class BuildContractTests(unittest.TestCase):
             "--format CI4 --tiles 64,32 --mipmap NONE --dither NONE --compress 0",
             makefile,
         )
-        self.assertIn(
-            "$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES) $(ANNEX_RUNTIME_CANDIDATES)",
-            makefile,
-        )
+        self.assertIn("$(ANNEX_RUNTIME_CANDIDATES)", makefile)
 
         renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
         self.assertIn('"rom:/env/annex/annex_threshold.t3dm"', renderer)
@@ -254,10 +254,7 @@ class BuildContractTests(unittest.TestCase):
             "--format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0",
             makefile,
         )
-        self.assertIn(
-            "$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES) $(ANNEX_RUNTIME_CANDIDATES) $(ARI_RUNTIME_CANDIDATES)",
-            makefile,
-        )
+        self.assertIn("$(ARI_RUNTIME_CANDIDATES)", makefile)
         self.assertIn("0 1 2 3 4 5 6 7 8 9 10", makefile)
         self.assertIn("canonicalize_sprite", makefile)
 
@@ -271,6 +268,44 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("rspq_block_run(renderer->ari_draw_block)", renderer)
         self.assertIn("draw_ari(renderer, 0U, player_x", renderer)
         self.assertIn("t3d_anim_destroy(&renderer->ari_animations[index])", renderer)
+
+    def test_reviewed_enemy_candidates_replace_battle_tetrahedra_with_real_clips(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        for prefix in ("GYRECLAST", "KIVARRAX"):
+            self.assertIn(
+                f"--base-scale=64 --asset-path=$({prefix}_SOURCE_DIR)/filesystem --verbose",
+                makefile,
+            )
+            self.assertIn(f"$({prefix}_RUNTIME_CANDIDATES)", makefile)
+            self.assertIn(
+                f"$(foreach index,0 1 2,$({prefix}_FILESYSTEM_DIR)",
+                makefile,
+            )
+        self.assertGreaterEqual(makefile.count("canonicalize_sprite"), 6)
+
+        renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
+        self.assertIn('"rom:/echo/echo.gyreclast/gyreclast.t3dm"', renderer)
+        self.assertIn('"rom:/echo/echo.kivarrax/kivarrax.t3dm"', renderer)
+        self.assertIn('{"idle_a", "reposition", "hit"}', renderer)
+        self.assertIn("UINT32_C(0x47594230)", renderer)
+        self.assertIn("UINT32_C(0x47594231)", renderer)
+        self.assertIn("UINT32_C(0x4B564230)", renderer)
+        self.assertIn("UINT32_C(0x4B564231)", renderer)
+        self.assertIn("setup_battle_echo(", renderer)
+        self.assertIn("update_battle_echo_pose(&renderer->gyreclast, game, 2U)", renderer)
+        self.assertIn("update_battle_echo_pose(&renderer->kivarrax, game, 3U)", renderer)
+        self.assertIn("draw_battle_echo(", renderer)
+        self.assertIn("destroy_battle_echo(&renderer->kivarrax)", renderer)
+
+        build_script = (ROOT / "scripts" / "build-rom").read_text(encoding="utf-8")
+        self.assertIn("scripts/validate-runtime-candidate-assets", build_script)
+        validator = ROOT / "scripts" / "validate-runtime-candidate-assets"
+        self.assertTrue(validator.is_file())
+        validator_text = validator.read_text(encoding="utf-8")
+        self.assertIn("body indices are not dense", validator_text)
+        self.assertIn("transparent or duplicate runtime colors", validator_text)
+        self.assertIn("dynamic texture references differ", validator_text)
+        self.assertIn("animation census differs", validator_text)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")

@@ -1,0 +1,123 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "pathname"
+
+ROOT = Pathname.new(__dir__).parent.realpath
+$LOAD_PATH.unshift(ROOT.join("lib").to_s)
+
+require "n64game/libdragon_sprite_contract"
+require "n64game/tiny3d_package_contract"
+
+SpriteContract = N64Game::LibdragonSpriteContract
+Tiny3DContract = N64Game::Tiny3DPackageContract
+
+CONFIGS = [
+  {
+    name: "gyreclast",
+    model: "filesystem/echo/echo.gyreclast/gyreclast.t3dm",
+    body: "filesystem/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.sprite",
+    accent: "filesystem/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.sprite",
+    body_references: [0x4759_4230, 0x4759_4231],
+    static_texture: "rom:/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.sprite",
+    bone_count: 18,
+    body_color_count: 11,
+    durations: [2.0, 1.4, 1.0]
+  },
+  {
+    name: "kivarrax",
+    model: "filesystem/echo/echo.kivarrax/kivarrax.t3dm",
+    body: "filesystem/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.sprite",
+    accent: "filesystem/echo/echo.kivarrax/tex_kivarrax_diaphragm_ci4_32x32.sprite",
+    body_references: [0x4B56_4230, 0x4B56_4231],
+    static_texture: "rom:/echo/echo.kivarrax/tex_kivarrax_diaphragm_ci4_32x32.sprite",
+    bone_count: 20,
+    body_color_count: 53,
+    durations: [2.0, 1.6, 1.2]
+  }
+].freeze
+
+ANIMATION_NAMES = %w[idle_a reposition hit].freeze
+
+def fail!(message)
+  warn("runtime candidate asset validation failed: #{message}")
+  exit(1)
+end
+
+def read(relative)
+  path = ROOT.join(relative)
+  fail!("missing #{relative}") unless path.file? && !path.symlink?
+  path.binread
+end
+
+def validate_body(config)
+  decoded = SpriteContract.decode(read(config.fetch(:body)), config.fetch(:body))
+  expected_count = config.fetch(:body_color_count)
+  fail!("#{config.fetch(:name)} body is not exact CI8 64x64") unless
+    decoded.fetch(:format) == "CI8" && decoded.fetch(:width) == 64 && decoded.fetch(:height) == 64
+  fail!("#{config.fetch(:name)} complete body atlas unexpectedly fits TMEM") if decoded.fetch(:fits_tmem)
+  fail!("#{config.fetch(:name)} body palette count differs") unless
+    decoded.fetch(:palette_used) == expected_count
+  used_indices = decoded.fetch(:indices).uniq.sort
+  fail!("#{config.fetch(:name)} body indices are not dense") unless
+    used_indices == (0...expected_count).to_a
+  used_colors = used_indices.map { |index| decoded.fetch(:palette).fetch(index) }
+  fail!("#{config.fetch(:name)} body contains transparent or duplicate runtime colors") unless
+    used_colors.all?(&:odd?) && used_colors.uniq.length == expected_count
+end
+
+def validate_accent(config)
+  decoded = SpriteContract.decode(read(config.fetch(:accent)), config.fetch(:accent))
+  fail!("#{config.fetch(:name)} accent is not exact CI4 32x32 TMEM media") unless
+    decoded.fetch(:format) == "CI4" && decoded.fetch(:width) == 32 &&
+      decoded.fetch(:height) == 32 && decoded.fetch(:fits_tmem)
+end
+
+def validate_model(config)
+  model_path = config.fetch(:model)
+  file = Tiny3DContract::ParsedFile.new(read(model_path), model_path)
+  skeletons = file.chunks_of("S")
+  fail!("#{config.fetch(:name)} skeleton census differs") unless skeletons.length == 1
+  bone_count = file.reader.u16(skeletons.first.fetch(:offset), "skeleton bone count")
+  fail!("#{config.fetch(:name)} bone count differs") unless bone_count == config.fetch(:bone_count)
+
+  materials = Tiny3DContract.parse_materials(file, file.chunks_of("M"))
+  textures = materials.flat_map { |material| material.fetch(:textures) }
+  references = textures.each_with_object([]) do |texture, values|
+    reference = texture.fetch(:reference)
+    values << reference unless reference.zero?
+  end.sort
+  paths = textures.each_with_object([]) do |texture, values|
+    path = texture.fetch(:path)
+    values << path unless path.nil?
+  end.sort
+  fail!("#{config.fetch(:name)} dynamic texture references differ") unless
+    references == config.fetch(:body_references).sort
+  fail!("#{config.fetch(:name)} static texture binding differs") unless
+    paths == [config.fetch(:static_texture)]
+
+  animations = file.chunks_of("A")
+  fail!("#{config.fetch(:name)} animation census differs") unless animations.length == ANIMATION_NAMES.length
+  animations.each_with_index do |chunk, index|
+    base = chunk.fetch(:offset)
+    name = file.string_at(file.reader.u32(base, "animation name"), "animation name")
+    duration = file.reader.f32(base + 4, "animation duration")
+    keyframes = file.reader.u32(base + 8, "animation keyframe count")
+    stream = file.string_at(file.reader.u32(base + 16, "animation stream"), "animation stream")
+    expected_stream = "rom:/echo/echo.#{config.fetch(:name)}/#{config.fetch(:name)}.#{index}.sdata"
+    fail!("#{config.fetch(:name)} animation #{index} identity differs") unless
+      name == ANIMATION_NAMES.fetch(index) &&
+        (duration - config.fetch(:durations).fetch(index)).abs <= 0.000_01 &&
+        keyframes.positive? && stream == expected_stream
+    disk_stream = "filesystem/echo/echo.#{config.fetch(:name)}/#{config.fetch(:name)}.#{index}.sdata"
+    read(disk_stream)
+  end
+end
+
+CONFIGS.each do |config|
+  validate_body(config)
+  validate_accent(config)
+  validate_model(config)
+  puts("runtime_candidate_asset=#{config.fetch(:name)} status=PASS")
+end
+puts("runtime_candidate_assets=PASS count=#{CONFIGS.length}")
