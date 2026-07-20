@@ -156,6 +156,24 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("dfs_init(DFS_DEFAULT_LOCATION)", source)
         self.assertIn("n64game_core_update", source)
         self.assertIn("n64game_renderer_draw", source)
+        self.assertIn("n64game_renderer_init_bootstrap", source)
+        self.assertIn("n64game_renderer_finish_init", source)
+        self.assertIn("N64GAME_LOADING_RUNTIME", source)
+        self.assertIn("N64GAME_LOADING_ANNEX_ASSETS", source)
+        self.assertIn("N64GAME_LOADING_SAVE_DATA", source)
+        self.assertIn("N64GAME_LOADING_READY", source)
+        self.assertLess(
+            source.index("n64game_renderer_init_bootstrap"),
+            source.index("t3d_init((T3DInitParams){})"),
+        )
+        self.assertLess(
+            source.index("N64GAME_LOADING_ANNEX_ASSETS"),
+            source.index("n64game_renderer_finish_init"),
+        )
+        self.assertLess(
+            source.index("N64GAME_LOADING_SAVE_DATA"),
+            source.index("eeprom_present()"),
+        )
         self.assertIn("n64game_save_decode", source)
         self.assertIn("n64game_save_select_latest", source)
         self.assertIn("N64GAME_SAVE_SLOT_COUNT", source)

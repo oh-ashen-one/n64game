@@ -30,8 +30,21 @@ typedef struct {
     bool quarrune_ready;
 } N64GameRenderer;
 
+typedef enum {
+    N64GAME_LOADING_RUNTIME = 0,
+    N64GAME_LOADING_ANNEX_ASSETS,
+    N64GAME_LOADING_SAVE_DATA,
+    N64GAME_LOADING_READY,
+} N64GameLoadingStage;
+
+bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer);
+bool n64game_renderer_finish_init(N64GameRenderer *renderer);
 bool n64game_renderer_init(N64GameRenderer *renderer);
 void n64game_renderer_destroy(N64GameRenderer *renderer);
+void n64game_renderer_draw_loading(
+    const N64GameRenderer *renderer,
+    N64GameLoadingStage stage
+);
 void n64game_renderer_draw(
     N64GameRenderer *renderer,
     const N64GameCore *game,

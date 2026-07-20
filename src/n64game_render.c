@@ -167,7 +167,7 @@ static bool setup_quarrune(N64GameRenderer *renderer)
     return true;
 }
 
-bool n64game_renderer_init(N64GameRenderer *renderer)
+bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer)
 {
     if (renderer == NULL) {
         return false;
@@ -199,6 +199,16 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
     });
     rdpq_text_register_font(FONT_ID, renderer->font);
     renderer->font_registered = true;
+
+    return true;
+}
+
+bool n64game_renderer_finish_init(N64GameRenderer *renderer)
+{
+    if (renderer == NULL || !renderer->font_registered ||
+        renderer->floor_vertices != NULL || renderer->quarrune_ready) {
+        return false;
+    }
 
     renderer->floor_vertices = malloc_uncached(sizeof(T3DVertPacked) * 2U);
     renderer->actor_vertices = malloc_uncached(
@@ -233,6 +243,14 @@ bool n64game_renderer_init(N64GameRenderer *renderer)
         return false;
     }
     return true;
+}
+
+bool n64game_renderer_init(N64GameRenderer *renderer)
+{
+    if (!n64game_renderer_init_bootstrap(renderer)) {
+        return false;
+    }
+    return n64game_renderer_finish_init(renderer);
 }
 
 void n64game_renderer_destroy(N64GameRenderer *renderer)
@@ -819,6 +837,50 @@ static void draw_name_entry(const N64GameCore *game)
     centered(214.0f, STYLE_MUTED, "D-PAD SELECT / A ENTER / B ERASE");
 }
 
+void n64game_renderer_draw_loading(
+    const N64GameRenderer *renderer,
+    N64GameLoadingStage stage
+)
+{
+    static const char *const STATUS[] = {
+        "INITIALIZING SIGNAL RUNTIME",
+        "LOADING MERIDIAN ANNEX",
+        "VERIFYING RESONANCE FILE",
+        "SIGNAL PATH READY",
+    };
+    if (renderer == NULL || !renderer->font_registered ||
+        stage < N64GAME_LOADING_RUNTIME || stage > N64GAME_LOADING_READY) {
+        return;
+    }
+
+    rdpq_attach(display_get(), display_get_zbuf());
+    clear_2d(RGBA32(4, 11, 19, 255));
+    fill_rect(0, 0, 320, 5, RGBA32(184, 67, 151, 255));
+    fill_rect(0, 235, 320, 240, RGBA32(24, 82, 91, 255));
+    centered(24.0f, STYLE_ACCENT, "N64GAME");
+    centered(43.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
+
+    /* A small relay beacon reads clearly at native 320x240 without a texture. */
+    fill_rect(156, 72, 164, 108, RGBA32(34, 91, 101, 255));
+    fill_rect(151, 78, 169, 102, RGBA32(12, 31, 41, 255));
+    fill_rect(156, 83, 164, 97, RGBA32(91, 231, 204, 255));
+    fill_rect(146, 88, 151, 92, RGBA32(57, 147, 151, 255));
+    fill_rect(169, 88, 174, 92, RGBA32(57, 147, 151, 255));
+    fill_rect(137, 86, 142, 94, RGBA32(29, 82, 93, 255));
+    fill_rect(178, 86, 183, 94, RGBA32(29, 82, 93, 255));
+
+    panel(42, 126, 278, 187);
+    centered(139.0f, STYLE_MUTED, STATUS[(size_t)stage]);
+    for (int segment = 0; segment < 4; ++segment) {
+        const int x0 = 68 + segment * 47;
+        const color_t color = segment <= (int)stage ?
+            RGBA32(87, 226, 203, 255) : RGBA32(24, 53, 63, 255);
+        fill_rect(x0, 162, x0 + 39, 169, color);
+    }
+    centered(203.0f, STYLE_MUTED, "RESONANCE LINK / ORIGINAL N64 BUILD");
+    rdpq_detach_show();
+}
+
 static void draw_opening(const N64GameCore *game, bool continue_available)
 {
     clear_2d(RGBA32(6, 15, 24, 255));
@@ -830,7 +892,7 @@ static void draw_opening(const N64GameCore *game, bool continue_available)
         fill_rect(154, 126, 166, 138, RGBA32(87, 226, 203, 255));
         fill_rect(136 - pulse, 130, 148 - pulse, 134, RGBA32(45, 126, 132, 255));
         fill_rect(172 + pulse, 130, 184 + pulse, 134, RGBA32(45, 126, 132, 255));
-        centered(150.0f, STYLE_MUTED, "RESONANCE HANDSHAKE");
+        centered(150.0f, STYLE_MUTED, "AN ORIGINAL N64 CHAPTER");
     } else {
         fill_rect(18, 18, 302, 222, RGBA32(22, 32, 44, 255));
         fill_rect(18, 18, 302, 22, RGBA32(183, 72, 154, 255));
