@@ -1,5 +1,6 @@
 #include "n64game_render.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -13,11 +14,23 @@ enum {
     ACTOR_STYLE_COUNT = 8,
     ANNEX_MATRIX_INDEX = 5,
     ACTOR_MATRIX_COUNT = 6,
+    ARI_ANIMATION_IDLE = 0,
+    ARI_ANIMATION_WALK,
+    ARI_ANIMATION_RUN,
 };
 
 static const char ANNEX_MODEL_PATH[] = "rom:/env/annex/annex_threshold.t3dm";
+static const char ARI_MODEL_PATH[] = "rom:/chr/player_ari/ari.t3dm";
+static const char ARI_BODY_PATH[] =
+    "rom:/chr/player_ari/tex_ari_body_ci8_64x64.sprite";
+static const char ARI_SHARED_SHADOW_PATH[] =
+    "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite";
 static const char QUARRUNE_MODEL_PATH[] =
     "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
+
+static const char *const ARI_ANIMATION_NAMES[
+    N64GAME_ARI_RUNTIME_ANIMATION_COUNT
+] = {"idle_a", "walk", "run"};
 
 static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
     UINT32_C(0xD7A253FF),
@@ -132,6 +145,128 @@ static bool setup_annex(N64GameRenderer *renderer)
     return true;
 }
 
+static bool setup_ari(N64GameRenderer *renderer)
+{
+    const N64GameIndexedRenderAssetsConfig assets_config = {
+        .body_sprite_path = ARI_BODY_PATH,
+        .blob_shadow_sprite_path = ARI_SHARED_SHADOW_PATH,
+        .body_top_reference = UINT32_C(0x41524930),
+        .body_bottom_reference = UINT32_C(0x41524931),
+        .minimum_body_palette_colors = 24U,
+    };
+    if (!n64game_indexed_render_assets_load(
+            &renderer->ari_assets, &assets_config
+        )) {
+        debugf("[ari] render-asset load failed\n");
+        return false;
+    }
+
+    renderer->ari_model = t3d_model_load(ARI_MODEL_PATH);
+    if (renderer->ari_model == NULL) {
+        debugf("[ari] model load failed: %s\n", ARI_MODEL_PATH);
+        return false;
+    }
+    if (t3d_model_get_skeleton(renderer->ari_model) == NULL) {
+        debugf("[ari] model has no skeleton\n");
+        return false;
+    }
+
+    renderer->ari_skeleton = t3d_skeleton_create_buffered(
+        renderer->ari_model, (int)renderer->buffer_count
+    );
+    if (renderer->ari_skeleton.bones == NULL ||
+        renderer->ari_skeleton.boneMatricesFP == NULL) {
+        debugf("[ari] skeleton allocation failed\n");
+        return false;
+    }
+    renderer->ari_idle_skeleton = t3d_skeleton_clone(
+        &renderer->ari_skeleton, false
+    );
+    renderer->ari_walk_skeleton = t3d_skeleton_clone(
+        &renderer->ari_skeleton, false
+    );
+    renderer->ari_run_skeleton = t3d_skeleton_clone(
+        &renderer->ari_skeleton, false
+    );
+    renderer->ari_motion_skeleton = t3d_skeleton_clone(
+        &renderer->ari_skeleton, false
+    );
+    if (renderer->ari_idle_skeleton.bones == NULL ||
+        renderer->ari_walk_skeleton.bones == NULL ||
+        renderer->ari_run_skeleton.bones == NULL ||
+        renderer->ari_motion_skeleton.bones == NULL) {
+        debugf("[ari] blend-skeleton allocation failed\n");
+        return false;
+    }
+
+    T3DSkeleton *const animation_skeletons[
+        N64GAME_ARI_RUNTIME_ANIMATION_COUNT
+    ] = {
+        &renderer->ari_idle_skeleton,
+        &renderer->ari_walk_skeleton,
+        &renderer->ari_run_skeleton,
+    };
+    for (uint8_t index = 0U;
+         index < N64GAME_ARI_RUNTIME_ANIMATION_COUNT;
+         ++index) {
+        renderer->ari_animations[index] = t3d_anim_create(
+            renderer->ari_model, ARI_ANIMATION_NAMES[index]
+        );
+        ++renderer->ari_animation_count;
+        if (renderer->ari_animations[index].file == NULL) {
+            debugf("[ari] animation stream open failed: %s\n",
+                   ARI_ANIMATION_NAMES[index]);
+            return false;
+        }
+        t3d_anim_attach(
+            &renderer->ari_animations[index], animation_skeletons[index]
+        );
+        t3d_anim_update(&renderer->ari_animations[index], 0.0f);
+    }
+    t3d_skeleton_blend(
+        &renderer->ari_motion_skeleton,
+        &renderer->ari_walk_skeleton,
+        &renderer->ari_run_skeleton,
+        0.0f
+    );
+    t3d_skeleton_blend(
+        &renderer->ari_skeleton,
+        &renderer->ari_idle_skeleton,
+        &renderer->ari_motion_skeleton,
+        0.0f
+    );
+    for (uint32_t index = 0U; index < renderer->buffer_count; ++index) {
+        t3d_skeleton_update(&renderer->ari_skeleton);
+    }
+
+    rspq_block_begin();
+    t3d_model_draw_custom(
+        renderer->ari_model,
+        (T3DModelDrawConf){
+            .userData = &renderer->ari_assets,
+            .dynTextureCb = n64game_indexed_render_assets_dynamic_texture_cb,
+            .matrices = (const T3DMat4FP *)t3d_segment_placeholder(
+                T3D_SEGMENT_SKELETON
+            ),
+        }
+    );
+    renderer->ari_draw_block = rspq_block_end();
+    if (renderer->ari_draw_block == NULL) {
+        debugf("[ari] draw-block recording failed\n");
+        return false;
+    }
+    if (!n64game_indexed_render_assets_callback_ok(&renderer->ari_assets)) {
+        debugf(
+            "[ari] dynamic-texture callback failed: callbacks=%u fault=%u\n",
+            (unsigned int)renderer->ari_assets.successful_body_callbacks,
+            renderer->ari_assets.callback_fault ? 1U : 0U
+        );
+        return false;
+    }
+    renderer->ari_ready = true;
+    return true;
+}
+
 static bool setup_quarrune(N64GameRenderer *renderer)
 {
     if (!quarrune_render_assets_load(&renderer->quarrune_assets)) {
@@ -228,7 +363,7 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
         renderer->floor_vertices != NULL || renderer->annex_ready ||
-        renderer->quarrune_ready) {
+        renderer->ari_ready || renderer->quarrune_ready) {
         return false;
     }
 
@@ -261,7 +396,7 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
     if (renderer->viewport._matFP == NULL || !setup_annex(renderer) ||
-        !setup_quarrune(renderer)) {
+        !setup_ari(renderer) || !setup_quarrune(renderer)) {
         n64game_renderer_destroy(renderer);
         return false;
     }
@@ -290,12 +425,33 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
         rspq_block_free(renderer->annex_draw_block);
         renderer->annex_draw_block = NULL;
     }
+    if (renderer->ari_draw_block != NULL) {
+        rspq_block_free(renderer->ari_draw_block);
+        renderer->ari_draw_block = NULL;
+    }
+    for (uint8_t index = 0U;
+         index < renderer->ari_animation_count;
+         ++index) {
+        t3d_anim_destroy(&renderer->ari_animations[index]);
+    }
+    renderer->ari_animation_count = 0U;
+    t3d_skeleton_destroy(&renderer->ari_motion_skeleton);
+    t3d_skeleton_destroy(&renderer->ari_run_skeleton);
+    t3d_skeleton_destroy(&renderer->ari_walk_skeleton);
+    t3d_skeleton_destroy(&renderer->ari_idle_skeleton);
+    t3d_skeleton_destroy(&renderer->ari_skeleton);
     t3d_skeleton_destroy(&renderer->quarrune_skeleton);
     if (renderer->quarrune_model != NULL) {
         t3d_model_free(renderer->quarrune_model);
     }
     if (renderer->annex_model != NULL) {
         t3d_model_free(renderer->annex_model);
+    }
+    if (renderer->ari_model != NULL) {
+        t3d_model_free(renderer->ari_model);
+    }
+    if (renderer->ari_assets.lifetime != NULL) {
+        (void)n64game_indexed_render_assets_unload(&renderer->ari_assets);
     }
     if (renderer->quarrune_assets.lifetime != NULL) {
         (void)quarrune_render_assets_unload(&renderer->quarrune_assets);
@@ -381,6 +537,91 @@ static void draw_quarrune(
     t3d_skeleton_use(&renderer->quarrune_skeleton);
     t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
     rspq_block_run(renderer->quarrune_draw_block);
+    t3d_matrix_pop(1);
+}
+
+static float clamp_unit(float value)
+{
+    if (value < 0.0f) {
+        return 0.0f;
+    }
+    return value > 1.0f ? 1.0f : value;
+}
+
+static void update_ari_pose(
+    N64GameRenderer *renderer,
+    const N64GameCore *game
+)
+{
+    assertf(renderer->ari_ready, "Ari renderer is not ready");
+    float velocity_x = (float)game->player_velocity_x_q8;
+    float velocity_z = (float)game->player_velocity_z_q8;
+    if (game->dialogue != N64GAME_DIALOGUE_NONE ||
+        game->menu != N64GAME_MENU_CLOSED) {
+        velocity_x = 0.0f;
+        velocity_z = 0.0f;
+    }
+    const float speed = sqrtf(
+        velocity_x * velocity_x + velocity_z * velocity_z
+    );
+    const float locomotion_blend = clamp_unit(speed / 256.0f);
+    const float run_blend = clamp_unit((speed - 384.0f) / 256.0f);
+    t3d_anim_set_speed(
+        &renderer->ari_animations[ARI_ANIMATION_WALK],
+        0.75f + clamp_unit(speed / 384.0f) * 0.35f
+    );
+    t3d_anim_set_speed(
+        &renderer->ari_animations[ARI_ANIMATION_RUN],
+        0.75f + clamp_unit(speed / 640.0f) * 0.45f
+    );
+    for (uint8_t index = 0U;
+         index < N64GAME_ARI_RUNTIME_ANIMATION_COUNT;
+         ++index) {
+        t3d_anim_update(&renderer->ari_animations[index], 1.0f / 30.0f);
+    }
+    t3d_skeleton_blend(
+        &renderer->ari_motion_skeleton,
+        &renderer->ari_walk_skeleton,
+        &renderer->ari_run_skeleton,
+        run_blend
+    );
+    t3d_skeleton_blend(
+        &renderer->ari_skeleton,
+        &renderer->ari_idle_skeleton,
+        &renderer->ari_motion_skeleton,
+        locomotion_blend
+    );
+    t3d_skeleton_update(&renderer->ari_skeleton);
+
+    if (speed > 32.0f) {
+        const float target_angle = atan2f(velocity_x, velocity_z);
+        renderer->ari_facing_angle = t3d_lerp_angle(
+            renderer->ari_facing_angle, target_angle, 0.32f
+        );
+    }
+}
+
+static void draw_ari(
+    N64GameRenderer *renderer,
+    size_t matrix_index,
+    float x,
+    float y,
+    float z,
+    float scale
+)
+{
+    assertf(renderer->ari_ready, "Ari renderer is not ready");
+    const float scales[3] = {scale, scale, scale};
+    const float rotations[3] = {0.0f, -renderer->ari_facing_angle, 0.0f};
+    const float translation[3] = {x, y, z};
+    const size_t matrix_slot = matrix_index * (size_t)renderer->buffer_count +
+        (size_t)renderer->frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_skeleton_use(&renderer->ari_skeleton);
+    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
+    rspq_block_run(renderer->ari_draw_block);
     t3d_matrix_pop(1);
 }
 
@@ -762,8 +1003,9 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
     const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
     begin_world_render(renderer, &camera, &target);
     draw_annex_sector_model(renderer, game->annex_sector);
+    update_ari_pose(renderer, game);
     const float angle = (float)game->scene_ticks * 0.018f;
-    draw_actor(renderer, 0U, 4U, player_x, -1.0f, player_z, 0.75f, angle);
+    draw_ari(renderer, 0U, player_x, -18.0f, player_z, 0.27f);
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
     draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
     draw_quarrune(

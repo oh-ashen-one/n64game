@@ -26,6 +26,17 @@ ANNEX_RUNTIME_CANDIDATES := \
 	$(ANNEX_ARCHITECTURE) \
 	$(ANNEX_TRIM) \
 	$(ANNEX_RESONANCE_MASK)
+ARI_SOURCE_DIR := runtime-candidates/chr/player_ari
+ARI_FILESYSTEM_DIR := filesystem/chr/player_ari
+ARI_MODEL := $(ARI_FILESYSTEM_DIR)/ari.t3dm
+ARI_BODY := $(ARI_FILESYSTEM_DIR)/tex_ari_body_ci8_64x64.sprite
+ARI_FACE := $(ARI_FILESYSTEM_DIR)/tex_ari_face_warm_ci4_32x32.sprite
+ARI_ANIMATION_STREAMS := $(foreach index,0 1 2 3 4 5 6 7 8 9 10,$(ARI_FILESYSTEM_DIR)/ari.$(index).sdata)
+ARI_RUNTIME_CANDIDATES := \
+	$(ARI_MODEL) \
+	$(ARI_ANIMATION_STREAMS) \
+	$(ARI_BODY) \
+	$(ARI_FACE)
 
 include $(N64_INST)/include/n64.mk
 include $(T3D_ROOT)/t3d.mk
@@ -92,7 +103,28 @@ $(ANNEX_RESONANCE_MASK): $(ANNEX_SOURCE_DIR)/filesystem/env/annex/tex_annex_reso
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
 
-$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES) $(ANNEX_RUNTIME_CANDIDATES)
+$(ARI_MODEL): $(ARI_SOURCE_DIR)/intermediate/ari_bound.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(dir $@)
+	@echo "    [T3D-CANDIDATE] $@"
+	$(T3D_GLTF_TO_3D) "$<" "$@" --base-scale=64 --asset-path=$(ARI_SOURCE_DIR)/filesystem --verbose
+	@for stream in $(ARI_ANIMATION_STREAMS); do test -f "$$stream"; done
+
+$(ARI_ANIMATION_STREAMS): $(ARI_MODEL)
+	@test -f "$@"
+
+$(ARI_BODY): $(ARI_SOURCE_DIR)/filesystem/chr/player_ari/tex_ari_body_ci8_64x64.png tools/n64game_gate5_export.py
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
+	@test -f "$@"
+
+$(ARI_FACE): $(ARI_SOURCE_DIR)/filesystem/chr/player_ari/tex_ari_face_warm_ci4_32x32.png tools/n64game_gate5_export.py
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
+	@test -f "$@"
+
+$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES) $(ANNEX_RUNTIME_CANDIDATES) $(ARI_RUNTIME_CANDIDATES)
 
 $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME OPENING"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k
