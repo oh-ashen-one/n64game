@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""Fail-closed validator for the one-week retained release projection."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import struct
+import sys
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+
+
+SCHEMA = "n64game-retained-release-v1"
+HEADER = (
+    "schema\taction\tdomain\tgroup\tmatch\tid\trelated_ids_csv\t"
+    "min_instances\tselectors_csv\tsectors_csv\n"
+)
+ID_RE = re.compile(r"\A[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+\Z")
+PREFIX_RE = re.compile(r"\A[a-z][a-z0-9_]*(?:(?:\.[a-z0-9_]+)|(?:_[a-z0-9_]+))*\.?\Z")
+TOKEN_RE = re.compile(r"\A[a-z0-9_]+\Z")
+DOMAINS = {"PRODUCTION", "PAIR", "STORYBOARD", "ALIAS"}
+GROUPS = {
+    "HUMANOID", "ECHOFORM", "ENVIRONMENT", "LANDMARK", "PROP",
+    "COLLISION", "NAVIGATION", "SPAWN", "INTERACTION", "UI",
+    "MOVE_PAIR", "VFX", "ANIMATION", "MUSIC", "AMBIENCE", "SFX_BANK",
+    "VOCAL", "STORYBOARD", "ALIAS", "CUT_SCOPE",
+}
+
+
+@dataclass(frozen=True)
+class Row:
+    line: int
+    action: str
+    domain: str
+    group: str
+    match: str
+    asset_id: str
+    related: tuple[str, ...]
+    minimum: int
+    selectors: tuple[str, ...]
+    sectors: tuple[str, ...]
+
+
+class ProjectionError(RuntimeError):
+    pass
+
+
+def split_csv(value: str, line: int, label: str) -> tuple[str, ...]:
+    if value == "-":
+        return ()
+    items = tuple(value.split(","))
+    if not items or any(not item or not TOKEN_RE.fullmatch(item) for item in items):
+        raise ProjectionError(f"line {line}: invalid {label} token list")
+    if len(set(items)) != len(items):
+        raise ProjectionError(f"line {line}: duplicate {label} token")
+    return items
+
+
+def parse(root: Path) -> list[Row]:
+    path = root / "docs" / "RETAINED_RELEASE.tsv"
+    raw = path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw or not raw.endswith(b"\n"):
+        raise ProjectionError("release projection must be canonical UTF-8/LF text")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProjectionError("release projection is not UTF-8") from exc
+    if not text.startswith(HEADER):
+        raise ProjectionError("release projection header is not canonical")
+
+    rows: list[Row] = []
+    seen: set[tuple[str, str]] = set()
+    for line_number, line in enumerate(text.splitlines()[1:], 2):
+        fields = line.split("\t")
+        if len(fields) != 10:
+            raise ProjectionError(f"line {line_number}: expected 10 TSV fields")
+        schema, action, domain, group, match, asset_id, related_raw, minimum_raw, selectors_raw, sectors_raw = fields
+        if schema != SCHEMA:
+            raise ProjectionError(f"line {line_number}: unsupported schema")
+        if action not in {"RETAIN", "FORBID"} or domain not in DOMAINS or group not in GROUPS:
+            raise ProjectionError(f"line {line_number}: invalid action/domain/group")
+        if match not in {"EXACT", "PREFIX"}:
+            raise ProjectionError(f"line {line_number}: invalid match mode")
+        valid_id = ID_RE.fullmatch(asset_id) if match == "EXACT" else PREFIX_RE.fullmatch(asset_id)
+        if valid_id is None:
+            raise ProjectionError(f"line {line_number}: invalid asset ID or prefix")
+        try:
+            minimum = int(minimum_raw)
+        except ValueError as exc:
+            raise ProjectionError(f"line {line_number}: min_instances is not an integer") from exc
+        if minimum < 0:
+            raise ProjectionError(f"line {line_number}: negative min_instances")
+        if (action, asset_id) in seen:
+            raise ProjectionError(f"line {line_number}: duplicate {action} ID")
+        seen.add((action, asset_id))
+
+        if related_raw == "-":
+            related: tuple[str, ...] = ()
+        else:
+            related = tuple(related_raw.split(","))
+            if any(ID_RE.fullmatch(item) is None for item in related) or len(set(related)) != len(related):
+                raise ProjectionError(f"line {line_number}: invalid related ID list")
+        selectors = split_csv(selectors_raw, line_number, "selector")
+        sectors = split_csv(sectors_raw, line_number, "sector")
+        if action == "RETAIN" and match != "EXACT":
+            raise ProjectionError(f"line {line_number}: RETAIN must be exact")
+        if action == "FORBID" and (related or minimum != 0 or selectors or sectors):
+            raise ProjectionError(f"line {line_number}: FORBID metadata must be empty/zero")
+        if action == "RETAIN" and group != "ALIAS" and minimum < 1:
+            raise ProjectionError(f"line {line_number}: retained production work needs min_instances >= 1")
+        rows.append(Row(line_number, action, domain, group, match, asset_id, related, minimum, selectors, sectors))
+    if not rows:
+        raise ProjectionError("release projection is empty")
+    return rows
+
+
+def exact_group(rows: list[Row], group: str) -> set[str]:
+    return {row.asset_id for row in rows if row.action == "RETAIN" and row.group == group}
+
+
+def validate_locked_roster(rows: list[Row]) -> None:
+    expected = {
+        "HUMANOID": {"chr.player.ari", "chr.sera_venn", "chr.tavi"},
+        "ECHOFORM": {"echo.quarrune", "echo.ayselor", "echo.gyreclast", "echo.kivarrax"},
+        "ENVIRONMENT": {
+            "env.annex.sim_chamber", "env.annex.atrium_lower", "env.annex.workshop",
+            "env.annex.threshold", "env.annex.circulation",
+        },
+        "LANDMARK": {
+            "lmk.annex.simulation_ring", "lmk.annex.skylight_spine",
+            "lmk.annex.resonance_monitor", "lmk.annex.antenna_array",
+        },
+        "PROP": {
+            "prop.annex.field_relay", "prop.annex.relay_dock",
+            "prop.annex.monitor_console", "prop.annex.sim_dais",
+            "prop.annex.sim_emitter", "prop.annex.workbench",
+            "prop.annex.tool_wall", "prop.annex.coil_spool",
+            "prop.annex.cargo_tote", "prop.annex.water_condenser",
+            "prop.annex.shade_canopy", "prop.annex.beacon_decoder",
+        },
+        "COLLISION": {
+            "col.annex.sim_chamber", "col.annex.atrium_lower", "col.annex.workshop",
+            "col.annex.threshold", "col.annex.circulation", "col.common.camera_volumes",
+        },
+        "NAVIGATION": {
+            "nav.sim.arena", "nav.annex.sim_room", "nav.annex.atrium",
+            "nav.annex.workshop", "nav.annex.threshold",
+        },
+        "SPAWN": {
+            "spn.sim.arena", "spn.annex.sim_room", "spn.annex.atrium",
+            "spn.annex.workshop", "spn.annex.threshold",
+        },
+        "INTERACTION": {
+            "int.sim.arena", "int.annex.sim_room", "int.annex.atrium",
+            "int.annex.workshop", "int.annex.threshold",
+        },
+    }
+    for group, ids in expected.items():
+        if exact_group(rows, group) != ids:
+            raise ProjectionError(f"{group} release roster differs from the locked one-week scope")
+
+    expected_counts = {
+        "UI": 34,
+        "VFX": 14,
+        "ANIMATION": 15,
+        "MUSIC": 5,
+        "AMBIENCE": 1,
+        "SFX_BANK": 6,
+        "VOCAL": 4,
+        "STORYBOARD": 18,
+        "ALIAS": 7,
+    }
+    for group, expected_count in expected_counts.items():
+        observed_count = len(exact_group(rows, group))
+        if observed_count != expected_count:
+            raise ProjectionError(
+                f"{group} release count is {observed_count}, expected {expected_count}"
+            )
+
+    expected_moves = {
+        "quarrune.ridge_ram", "quarrune.brace_relay", "quarrune.grounding_ring", "quarrune.steady_pulse",
+        "ayselor.sirocco_slice", "ayselor.lift_current", "ayselor.dazzle_wake", "ayselor.guiding_draft",
+        "gyreclast.auger_knuckle", "gyreclast.dust_screen", "gyreclast.fault_pin", "gyreclast.carapace_brace",
+        "kivarrax.crosswind_cut", "kivarrax.slipstream", "kivarrax.pressure_drop", "kivarrax.talon_sweep",
+    }
+    pair_rows = [row for row in rows if row.action == "RETAIN" and row.group == "MOVE_PAIR"]
+    observed: set[str] = set()
+    for row in pair_rows:
+        if row.domain != "PAIR" or len(row.related) != 1 or not row.asset_id.startswith("vfx.move."):
+            raise ProjectionError(f"line {row.line}: malformed move-pair row")
+        suffix = row.asset_id.removeprefix("vfx.move.")
+        if row.related[0] != f"sfx.move.{suffix}":
+            raise ProjectionError(f"line {row.line}: move VFX/SFX suffix mismatch")
+        observed.add(suffix)
+    if observed != expected_moves or len(pair_rows) != 16:
+        raise ProjectionError("release must contain exactly the retained four-by-four move pairs")
+
+
+def validate_default_deny(rows: list[Row], root: Path) -> tuple[set[str], int]:
+    retained_rows = [row for row in rows if row.action == "RETAIN"]
+    retained = {row.asset_id for row in retained_rows}
+    for row in retained_rows:
+        if row.domain == "PAIR":
+            retained.update(row.related)
+    forbidden = [row for row in rows if row.action == "FORBID"]
+    for rule in forbidden:
+        for asset_id in retained:
+            matched = asset_id == rule.asset_id if rule.match == "EXACT" else asset_id.startswith(rule.asset_id)
+            if matched:
+                raise ProjectionError(f"retained ID {asset_id} is also forbidden by {rule.asset_id}")
+
+    for row in retained_rows:
+        if row.domain in {"PAIR", "ALIAS"}:
+            for related in row.related:
+                if related not in retained:
+                    raise ProjectionError(f"line {row.line}: related ID {related} is outside the retained closure")
+        elif row.domain == "PRODUCTION":
+            for related in row.related:
+                if related not in retained:
+                    raise ProjectionError(f"line {row.line}: related production ID {related} is not retained")
+
+    inventory = (root / "docs" / "ASSET_INVENTORY.md").read_text(encoding="utf-8")
+    inventory_ids = set(re.findall(r"`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)`", inventory))
+    exception: set[str] = set()
+    missing = sorted(
+        row.asset_id for row in retained_rows
+        if row.asset_id not in inventory_ids and row.asset_id not in exception
+    )
+    if missing:
+        raise ProjectionError(f"retained IDs do not resolve in the inventory: {', '.join(missing)}")
+
+    runtime_assets = (root / "config" / "runtime-assets.tsv").read_text(encoding="utf-8").splitlines()[1:]
+    for line_number, line in enumerate(runtime_assets, 2):
+        if not line:
+            continue
+        asset_id = line.split("\t", 1)[0]
+        if asset_id not in retained:
+            raise ProjectionError(f"runtime-assets.tsv line {line_number} is outside retained release: {asset_id}")
+    candidates = (root / "config" / "runtime-candidates.tsv").read_text(encoding="utf-8").splitlines()[1:]
+    for line_number, line in enumerate(candidates, 2):
+        if not line:
+            continue
+        candidate_id = line.split("\t", 1)[0]
+        parts = candidate_id.split(".")
+        if len(parts) < 4 or parts[0] != "candidate":
+            raise ProjectionError(f"runtime-candidates.tsv line {line_number} has an unmappable ID")
+        owner = ".".join(parts[1:3])
+        if owner not in retained:
+            raise ProjectionError(f"runtime candidate owner is outside retained release: {owner}")
+    return retained, len(forbidden)
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise ProjectionError(f"storyboard image is not canonical PNG: {path.relative_to(path.parents[2])}")
+    return struct.unpack(">II", data[16:24])
+
+
+def validate_storyboard(rows: list[Row], root: Path) -> None:
+    ids = exact_group(rows, "STORYBOARD")
+    panels = {f"sb.opening.panel.{index:02d}" for index in range(1, 13)}
+    support = {
+        "sb.opening.contact_sheet", "sb.opening.shot_list", "sb.opening.continuity.solace",
+        "sb.opening.color_script", "sb.opening.prompt_manifest", "sb.opening.delivery_manifest",
+    }
+    if ids != panels | support:
+        raise ProjectionError("storyboard projection is not the delivered 12-panel package")
+    delivery_path = root / "storyboard" / "opening" / "DELIVERY_MANIFEST.md"
+    delivery = delivery_path.read_text(encoding="utf-8")
+    for index in range(1, 13):
+        path = root / "storyboard" / "opening" / "panels" / f"{index:02d}.png"
+        if png_dimensions(path) != (1600, 1200):
+            raise ProjectionError(f"storyboard panel {index:02d} is not 1600x1200")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in delivery:
+            raise ProjectionError(f"storyboard panel {index:02d} digest is absent from delivery manifest")
+    images = {
+        root / "storyboard" / "opening" / "CONTACT_SHEET.png": (1848, 1904),
+        root / "storyboard" / "opening" / "COLOR_SCRIPT.png": (2112, 462),
+        root / "storyboard" / "opening" / "continuity" / "CONTINUITY_SHEET.png": (2000, 1500),
+    }
+    for path, dimensions in images.items():
+        if png_dimensions(path) != dimensions:
+            raise ProjectionError(f"storyboard support image dimensions changed: {path.name}")
+        if hashlib.sha256(path.read_bytes()).hexdigest() not in delivery:
+            raise ProjectionError(f"storyboard support image digest is absent: {path.name}")
+    for name in ("SHOT_LIST.md", "PROMPT_MANIFEST.md", "DELIVERY_MANIFEST.md", "COLOR_SCRIPT.md"):
+        path = root / "storyboard" / "opening" / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ProjectionError(f"storyboard support document is missing: {name}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args()
+    root = args.root.resolve()
+    try:
+        rows = parse(root)
+        validate_locked_roster(rows)
+        retained, forbidden_count = validate_default_deny(rows, root)
+        validate_storyboard(rows, root)
+    except (OSError, ProjectionError) as exc:
+        print(f"release_projection=FAIL error={exc}", file=sys.stderr)
+        return 1
+    counts = Counter(row.group for row in rows if row.action == "RETAIN")
+    alias_count = counts["ALIAS"]
+    production_count = len(retained) - alias_count
+    print(
+        "release_projection=PASS "
+        f"retained_ids={len(retained)} production_ids={production_count} "
+        f"aliases={alias_count} forbidden_rules={forbidden_count} "
+        f"humanoids={counts['HUMANOID']} echoforms={counts['ECHOFORM']} "
+        f"environments={counts['ENVIRONMENT']} props={counts['PROP']} "
+        f"move_pairs={counts['MOVE_PAIR']} storyboard={counts['STORYBOARD']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

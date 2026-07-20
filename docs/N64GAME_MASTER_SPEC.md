@@ -184,6 +184,8 @@ Produce and track only what the release needs:
 - VFX/audio for all implemented moves, Resonance, `Horizon Break`, Annex ambience, dust, loading/transitions, beacon hook, and feedback.
 - Portraits/icons required by the selected UI direction.
 
+`docs/RETAINED_RELEASE.tsv` is the exact machine-readable release projection for these bullets. It is default-deny: a legacy inventory item not explicitly retained there is future reference and cannot enter the release BOM, generated runtime tables, production queue, or completion denominator. A `MOVE_PAIR` row retains both its exact VFX ID and suffix-matched audio ID. Selectors narrow shared atlases/banks to release content without authorizing a second asset identity. `scripts/validate-release-projection` must pass before asset validation.
+
 Do not build the old Estate, world map, extra four Echoforms, Rusk/Ivo/Oren/supporting cast, follower system, or their assets during this release.
 
 Minimum humanoid animation: idle variations, walk/run for the player, direction handling, interaction, talk gestures, reaction, battle command where applicable, and locked story poses.
