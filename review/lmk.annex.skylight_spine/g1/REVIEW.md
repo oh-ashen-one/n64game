@@ -2,8 +2,8 @@ schema: n64game-concept-review-v1
 production_id: lmk.annex.skylight_spine
 stage: G1_CONCEPT
 creator_id: openai.codex-n64game
-source_manifest: assets-src/lmk/lmk.annex.skylight_spine/SOURCE_MANIFEST.sha256@2483093c1e31629072248e56145fe0c156bb6cf7e3cfa65e2d88275002c1b43c
-evidence_manifest: review/lmk.annex.skylight_spine/g1/EVIDENCE_MANIFEST.sha256@d3fbd2911b38e5b37338b69aeea962323678905da17736e4d89f0c87731f8f88
+source_manifest: assets-src/lmk/lmk.annex.skylight_spine/SOURCE_MANIFEST.sha256@087d7c0d7c560b2e497f9030fe1920d3c3974931393ef0a8cac162ee56e29255
+evidence_manifest: review/lmk.annex.skylight_spine/g1/EVIDENCE_MANIFEST.sha256@e7828dafba2c188abca9496a55ee56d04b3218ea370bf15da9463b663d72bab1
 status: IN_PROGRESS
-updated_at: 2026-07-20T00:05:34Z
-rationale: Owner-isolated skylight concept and four-view presentation are ready for scale-annotation and spacing refinement; no Gate decision is claimed.
+updated_at: 2026-07-20T03:49:52Z
+rationale: Revised owner-isolated skylight concept binds current spacing, underlighting, reverse, and longitudinal construction views; G1 remains in progress and no Gate decision is claimed.

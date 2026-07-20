@@ -4,7 +4,7 @@ rights_basis: project-original
 rights_holder_id: oh-ashen-one.project
 output_license: project-all-rights-reserved
 evidence_kind: PROJECT_ORIGINAL
-input_records: assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend@a41610c679a3a4a8d1323dddcc63bb12b3f833db4a0badd2a9142181e34d20e6|2026-07-20T00:05:34Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
+input_records: assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend@b5ec2d8ffe93aad9d17ef8a1b287dea2957ceff24a0259297a5c058ac5aa9838|2026-07-20T03:49:52Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
 third_party_notices: NONE
 reviewer_id: openai.codex-rights-auditor
-verified_at: 2026-07-20T00:05:34Z
+verified_at: 2026-07-20T03:49:52Z

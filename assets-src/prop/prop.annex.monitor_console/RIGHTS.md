@@ -4,7 +4,7 @@ rights_basis: project-original
 rights_holder_id: oh-ashen-one.project
 output_license: project-all-rights-reserved
 evidence_kind: PROJECT_ORIGINAL
-input_records: assets-src/prop/prop.annex.monitor_console/prop_annex_monitor_console_concept.blend@145dbd8cff92d4f938a0172153fa34f21f6c3c4005b709f1e762cae307603917|2026-07-20T00:05:34Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
+input_records: assets-src/prop/prop.annex.monitor_console/prop_annex_monitor_console_concept.blend@e077285ba4b5147b1c49c36e88fc6521f5c71577f0cd46e72e66acf99e8d6792|2026-07-20T03:49:52Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
 third_party_notices: NONE
 reviewer_id: openai.codex-rights-auditor
-verified_at: 2026-07-20T00:05:34Z
+verified_at: 2026-07-20T03:49:52Z
