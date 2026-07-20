@@ -2,8 +2,8 @@ schema: n64game-concept-review-v1
 production_id: echo.gyreclast
 stage: G1_CONCEPT
 creator_id: openai.codex-n64game
-source_manifest: assets-src/echo/echo.gyreclast/SOURCE_MANIFEST.sha256@06cc9ce04b5b9a6d94a6ce9d64cd735fc164b7b6d5986bdd8f7d750a01bf99b2
-evidence_manifest: review/echo.gyreclast/g1/EVIDENCE_MANIFEST.sha256@07072cd544f4c48e2d12188ac21f9c4d30316c5ee0c0bedf865342c713fdcede
+source_manifest: assets-src/echo/echo.gyreclast/SOURCE_MANIFEST.sha256@905f27aff15d9febe4076e18ffb8e8aa688f29d238ac79ce7122fe1922144768
+evidence_manifest: review/echo.gyreclast/g1/EVIDENCE_MANIFEST.sha256@fb6bbafab6fc9df8fec3aed43a763dfa2850a54166355662c0880fbed62c9394
 status: IN_PROGRESS
-updated_at: 2026-07-20T20:49:46Z
-rationale: The packet now binds exact 64x64 and four-peer silhouette evidence, locked scale/lane comparison, quantitative budget, material palette, rig/motion plan, collision/VFX notes, and clean-room risks. G1 remains in progress pending a consistent functional three-quarter view, auger/underside closure, and independent non-owner review.
+updated_at: 2026-07-20T21:19:01Z
+rationale: The packet now adds a visually inspected functional bore/brace view with exactly three contacts, one offset auger, stabilizer, and underside/rotation insets to the existing orthographic, scale, silhouette, budget, material, rig, collision, and clean-room evidence. G1 remains in progress pending auger/rear/underside closure, lane-reach confirmation, and independent non-owner review.

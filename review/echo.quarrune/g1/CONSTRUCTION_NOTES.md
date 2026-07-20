@@ -30,12 +30,13 @@ Status: `IN_PROGRESS`. This packet adds measurable construction evidence; it doe
 
 - `SILHOUETTE_64.png` is the exact black 64x64 reduction derived from the selected sheet.
 - `SILHOUETTE_COMPARISON.png` order is Quarrune, Ayselor, Gyreclast, Kivarrax; the cobalt frame marks Quarrune. Its low six-foot mass, open ring/lattice, and rear counterweight remain distinct from the winged, tripod, and stilt-runner peers.
+- `FUNCTIONAL_THREE_QUARTER.png` was visually inspected as a candidate: the main brace pose preserves six separated planted footpads, one forward hollow ring, the asymmetric lattice, a supported low center of mass, and unobscured joint chains; its two insets expose ring/lattice and underside leg-root construction without an identity redesign.
 - Similarity risk: armored insect, tank, or horned mammal. Required differentiators are six equal mechanical footpads, no animal face, one hollow resonance ring, asymmetrical non-biological lattice, and layered geological ceramic compression.
 - Protected references were used only for high-level pacing and technical presentation study. No protected creature silhouette, costume, logo, surface motif, model, texture, or layout is a source input.
 
 ## Open before Gate 1
 
-- Add and inspect a consistent functional three-quarter construction view.
+- Review and either accept or revise the added functional three-quarter construction view; creator inspection is not an independent Gate-1 decision.
 - Confirm underside panel and leg-root attachment continuity across every view.
 - Freeze final palette ramps and minimum-screen reduction after the three-quarter view.
 - Obtain independent non-owner H2 Gate-1 review; the creator cannot approve this gate.

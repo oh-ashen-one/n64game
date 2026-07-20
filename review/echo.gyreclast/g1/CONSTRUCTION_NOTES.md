@@ -30,12 +30,13 @@ Status: `IN_PROGRESS`. This packet adds measurable construction evidence; it doe
 
 - `SILHOUETTE_64.png` is the exact black 64x64 reduction derived from the selected sheet.
 - `SILHOUETTE_COMPARISON.png` order is Quarrune, Ayselor, Gyreclast, Kivarrax; the cobalt frame marks Gyreclast. Its three-contact stance and single forward auger remain distinct from six-foot, tri-wing, and four-stilt peers.
+- `FUNCTIONAL_THREE_QUARTER.png` was visually inspected as a candidate: the main bore/brace pose preserves exactly three planted contacts, one offset layered auger, the opposite stabilizer cheek, the fault-line aperture, and a supported slab center; its insets expose the rotation stack and underside tripod roots.
 - Similarity risk: crab, insect, tank, or drill vehicle. Required differentiators are exactly three legs, no animal face, no paired pincers, a fault-line aperture, one layered mineral auger, and an asymmetrical slab.
 - Protected references were used only for high-level pacing and technical presentation study. No protected creature, vehicle, logo, surface motif, model, texture, or layout is a source input.
 
 ## Open before Gate 1
 
-- Add and inspect a functional three-quarter view with exact tripod and auger continuity.
+- Review and either accept or revise the added functional three-quarter view; creator inspection is not an independent Gate-1 decision.
 - Resolve auger base rotation, underside clearance, stabilizer cheek, and rear panel attachment.
 - Confirm attack reach and idle stance fit the one-lane footprint without silhouette collision.
 - Obtain independent non-owner H2 Gate-1 review; the creator cannot approve this gate.

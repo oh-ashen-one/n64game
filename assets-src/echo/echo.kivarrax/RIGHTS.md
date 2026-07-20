@@ -4,7 +4,7 @@ rights_basis: generated-provider-terms
 rights_holder_id: oh-ashen-one.project
 output_license: provider-terms-output
 evidence_kind: GENERATIVE_TERMS
-input_records: assets-src/echo/echo.kivarrax/kivarrax_concept_g1_v1.png@296b8018bff6d5dfa3254da279d56e52e502ad1d140803dc5897b6753818be62|2026-07-20T20:32:17Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.kivarrax/rights-support/OPENAI_PROVIDER_TERMS.md@8bc18641c279e632b4e2336a6659c3784cba6575eac266a5bccaeaf00582c989|NONE|NONE
+input_records: assets-src/echo/echo.kivarrax/kivarrax_concept_g1_v1.png@296b8018bff6d5dfa3254da279d56e52e502ad1d140803dc5897b6753818be62|2026-07-20T20:32:17Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.kivarrax/rights-support/OPENAI_PROVIDER_TERMS.md@8bc18641c279e632b4e2336a6659c3784cba6575eac266a5bccaeaf00582c989|NONE|NONE;assets-src/echo/echo.kivarrax/kivarrax_functional_three_quarter_g1_v1.png@124348fc2b6d2ab31883f5de2cba49dd57d151d1adf425f77afe83ce9eaa2268|2026-07-20T21:09:29Z|concept-functional-three-quarter|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.kivarrax/rights-support/OPENAI_PROVIDER_TERMS.md@8bc18641c279e632b4e2336a6659c3784cba6575eac266a5bccaeaf00582c989|NONE|NONE
 third_party_notices: assets-src/echo/echo.kivarrax/rights-support/THIRD_PARTY_NOTICE.md@d27fad9548019497197052b6113685dccd8f97c5b4e327ef84441fc0bd386960
 reviewer_id: openai.codex-rights-auditor
-verified_at: 2026-07-20T20:32:31Z
+verified_at: 2026-07-20T21:12:45Z

@@ -4,7 +4,7 @@ rights_basis: generated-provider-terms
 rights_holder_id: oh-ashen-one.project
 output_license: provider-terms-output
 evidence_kind: GENERATIVE_TERMS
-input_records: assets-src/echo/echo.ayselor/ayselor_concept_g1_v1.png@9055192fd36b4d9f7f2def30879b16defbbe5c84d32be7670cab6e42bedd8bd6|2026-07-20T20:21:04Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.ayselor/rights-support/OPENAI_PROVIDER_TERMS.md@63a17825322cad9d45ed55be5ef60400880590a64e3593e0dbbc8fef42b775ab|NONE|NONE
+input_records: assets-src/echo/echo.ayselor/ayselor_concept_g1_v1.png@9055192fd36b4d9f7f2def30879b16defbbe5c84d32be7670cab6e42bedd8bd6|2026-07-20T20:21:04Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.ayselor/rights-support/OPENAI_PROVIDER_TERMS.md@63a17825322cad9d45ed55be5ef60400880590a64e3593e0dbbc8fef42b775ab|NONE|NONE;assets-src/echo/echo.ayselor/ayselor_functional_three_quarter_g1_v1.png@53673cb9f66a6c65d9e692cf2b8fce1dfafc5366352222df9c7651f660192cf7|2026-07-20T20:56:37Z|concept-functional-three-quarter|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.ayselor/rights-support/OPENAI_PROVIDER_TERMS.md@63a17825322cad9d45ed55be5ef60400880590a64e3593e0dbbc8fef42b775ab|NONE|NONE
 third_party_notices: assets-src/echo/echo.ayselor/rights-support/THIRD_PARTY_NOTICE.md@ec2e6622a0e5f5b0d65f9a455b37b6918110999c50bce94fd2be7c7c8134cbf9
 reviewer_id: openai.codex-rights-auditor
-verified_at: 2026-07-20T20:21:18Z
+verified_at: 2026-07-20T21:12:45Z

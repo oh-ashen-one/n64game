@@ -30,12 +30,13 @@ Status: `IN_PROGRESS`. This packet adds measurable construction evidence; it doe
 
 - `SILHOUETTE_64.png` is the exact black 64x64 reduction derived from the selected sheet.
 - `SILHOUETTE_COMPARISON.png` order is Quarrune, Ayselor, Gyreclast, Kivarrax; the cobalt frame marks Kivarrax. Its four long stilt gaps and vertical fan wedge remain distinct from every retained peer.
+- `FUNCTIONAL_THREE_QUARTER.png` was visually inspected as a candidate: the main skim/brake pose preserves exactly four separated stilt contacts, the open pressure scoop, one rearward vane, and one three-panel fan on plausible hinges; its insets expose knee/foot and fan-root/underside construction without adding anatomy.
 - Similarity risk: deer, horse, spider, or tall robot. Required differentiators are no animal face, no hooves, a forward pressure scoop, a rearward vane sensor, four aerodynamic stilt legs, and one three-panel folding fan.
 - Protected references were used only for high-level pacing and technical presentation study. No protected creature, vehicle, logo, surface motif, model, texture, or layout is a source input.
 
 ## Open before Gate 1
 
-- Add and inspect a functional three-quarter view with exact leg, scoop, vane, and fan continuity.
+- Review and either accept or revise the added functional three-quarter view; creator inspection is not an independent Gate-1 decision.
 - Resolve fan-fold range, underside torso construction, foot contact area, and self-collision at full stride.
 - Confirm the tall silhouette clears battle UI and neighboring actors during target selection.
 - Obtain independent non-owner H2 Gate-1 review; the creator cannot approve this gate.

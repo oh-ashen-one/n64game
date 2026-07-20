@@ -30,12 +30,13 @@ Status: `IN_PROGRESS`. This packet adds measurable construction evidence; it doe
 
 - `SILHOUETTE_64.png` is the exact black 64x64 reduction derived from the selected sheet.
 - `SILHOUETTE_COMPARISON.png` order is Quarrune, Ayselor, Gyreclast, Kivarrax; the cobalt frame marks Ayselor. Its extremely wide tri-wing span and dangling lamp do not overlap the grounded peers.
+- `FUNCTIONAL_THREE_QUARTER.png` was visually inspected as a candidate: the main glide pose preserves one long leading wing, two smaller counter-wings, the narrow keel, a single freely hanging lamp, plausible spar articulation, and no visible membrane intersection; its insets expose the wing root and lamp suspension.
 - Similarity risk: aircraft, manta, bird, or ordinary kite. Required differentiators are one asymmetrical leading wing, two counter-wings, a faceless narrow keel, tension-spar construction, and one hanging lamp.
 - Protected references were used only for high-level pacing and technical presentation study. No protected creature silhouette, vehicle, logo, surface motif, model, texture, or layout is a source input.
 
 ## Open before Gate 1
 
-- Add and inspect a functional three-quarter view with the same wing count and spar placement.
+- Review and either accept or revise the added functional three-quarter view; creator inspection is not an independent Gate-1 decision.
 - Resolve membrane underside, fold limits, and lamp-chain clearance.
 - Confirm the wide silhouette and shadow remain readable in the representative battle lane.
 - Obtain independent non-owner H2 Gate-1 review; the creator cannot approve this gate.
