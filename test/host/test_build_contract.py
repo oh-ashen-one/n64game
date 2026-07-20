@@ -181,6 +181,25 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("SAVE_WRITE_BODY", source)
         self.assertIn("SAVE_WRITE_FOOTER", source)
         self.assertIn("eeprom_write_bytes", source)
+        self.assertIn("save_writer_retry_faulted_attempt", source)
+        retry_edge = source.index("const bool explicit_final_save_retry")
+        retry_reset = source.index(
+            "save_writer_retry_faulted_attempt(&save_writer);", retry_edge
+        )
+        writer_gate = source.index(
+            "if (save_available && !save_writer.faulted)", retry_reset
+        )
+        self.assertLess(retry_edge, retry_reset)
+        self.assertLess(retry_reset, writer_gate)
+        self.assertIn(
+            "final_save_before_update == N64GAME_FINAL_SAVE_FAILED",
+            source[retry_edge:retry_reset],
+        )
+        self.assertIn(
+            "game.final_save_state == N64GAME_FINAL_SAVE_PENDING",
+            source[retry_edge:retry_reset],
+        )
+        self.assertIn("game.save_requested", source[retry_edge:retry_reset])
         self.assertIn("joypad_is_connected(JOYPAD_PORT_1)", source)
         self.assertIn("n64game_core_update_controller", source)
         self.assertEqual(source.count("sys_get_heap_stats(&heap_stats);"), 2)

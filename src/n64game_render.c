@@ -383,8 +383,10 @@ static const char *objective_text(N64GameQuest quest)
 {
     switch (quest) {
     case N64GAME_QUEST_MEET_SERA: return "MEET DR. SERA VENN";
+    case N64GAME_QUEST_MEET_TAVI: return "CHECK IN WITH TAVI";
     case N64GAME_QUEST_RETRIEVE_RELAY: return "RETRIEVE THE FIELD RELAY";
-    case N64GAME_QUEST_RETURN_TO_SERA: return "RETURN TO SERA";
+    case N64GAME_QUEST_CALIBRATE_RELAY: return "CALIBRATE AT THE SIMULATION RING";
+    case N64GAME_QUEST_READY_FOR_TRIAL: return "BEGIN THE TRIAL AT THE SIMULATION RING";
     case N64GAME_QUEST_RESONANCE_TRIAL: return "COMPLETE THE RESONANCE TRIAL";
     case N64GAME_QUEST_BEACON_OVERLOOK: return "TRACE THE SIGNAL AT THE OVERLOOK";
     case N64GAME_QUEST_COMPLETE: return "OPENING CHAPTER COMPLETE";
@@ -392,15 +394,31 @@ static const char *objective_text(N64GameQuest quest)
     return "";
 }
 
-static const char *dialogue_speaker(N64GameDialogue dialogue)
+static const char *dialogue_speaker(const N64GameCore *game)
 {
-    switch (dialogue) {
+    switch (game->dialogue) {
     case N64GAME_DIALOGUE_SERA_INTRO:
     case N64GAME_DIALOGUE_SERA_TRIAL:
     case N64GAME_DIALOGUE_BATTLE_VICTORY:
-    case N64GAME_DIALOGUE_BEACON_HOOK:
         return "DR. SERA VENN";
-    case N64GAME_DIALOGUE_TAVI_OPTIONAL:
+    case N64GAME_DIALOGUE_BEACON_HOOK:
+        switch (game->dialogue_page) {
+        case 0U:
+        case 5U:
+            return "DR. SERA VENN";
+        case 1U:
+            return "TAVI";
+        case 2U:
+            return "QUARRUNE";
+        case 3U:
+            return "AYSELOR";
+        case 4U:
+            return "FIELD RELAY";
+        default:
+            return "SOLACE BEACON";
+        }
+    case N64GAME_DIALOGUE_TAVI_INTRO:
+    case N64GAME_DIALOGUE_TAVI_REPEAT:
         return "TAVI";
     case N64GAME_DIALOGUE_RELAY:
         return "FIELD RELAY";
@@ -420,22 +438,27 @@ static const char *dialogue_speaker(N64GameDialogue dialogue)
 
 static const char *dialogue_text(const N64GameCore *game)
 {
+    static char dynamic_line[96];
     static const char *const SERA_INTRO[] = {
-        "The Annex heard your Resonance before you reached the floor.",
-        "Quarrune and Ayselor are already matching your rhythm.",
-        "Bring the Field Relay from the east bench. We will calibrate together.",
+        "",
+        "Quarrune is your Strata anchor. Ayselor is your Gale carrier.",
+        "Tavi is waiting by the atrium observation rail. Check in with him.",
+        "Then collect your Field Relay from the east workshop bench.",
+    };
+    static const char *const TAVI_INTRO[] = {
+        "The west antenna keeps pointing at empty sky. Sera says it is impossible.",
+        "Your Field Relay is on the east bench. Bring it to the Simulation Ring.",
+    };
+    static const char *const TAVI_REPEAT[] = {
+        "Relay first, then the Simulation Ring. I will keep watching the west antenna.",
     };
     static const char *const RELAY[] = {
-        "MERIDIAN FIELD RELAY / LINK ESTABLISHED",
-        "PARTY, MESSAGES, RESONANCE, AND SAVE CHANNELS ARE READY.",
+        "MERIDIAN FIELD RELAY ACQUIRED / LINK LOCKED",
+        "CALIBRATION REQUIRED AT THE SIMULATION RING.",
     };
     static const char *const SERA_TRIAL[] = {
-        "Good. The Relay needs one live pattern before it can hear the desert.",
-        "Take your pair into the chamber. Let the true pattern answer.",
-    };
-    static const char *const TAVI[] = {
-        "The west antenna keeps pointing at empty sky.",
-        "Sera says instruments do not get nervous. I think this one does.",
+        "Calibration holds. The Relay needs one live pattern before it can hear the desert.",
+        "Take Quarrune and Ayselor into the ring. Let the true pattern answer.",
     };
     static const char *const VICTORY[] = {
         "There. Quarrune anchors; Ayselor carries. The Relay understands you now.",
@@ -443,9 +466,11 @@ static const char *dialogue_text(const N64GameCore *game)
     };
     static const char *const BEACON[] = {
         "That signature belongs to Solace.",
-        "It vanished three nights ago. This beacon should not be moving.",
-        "Something enormous is answering from beneath the storm.",
-        "We follow at first light.",
+        "A beacon cannot walk. This one has crossed twelve kilometers since dusk.",
+        "Quarrune plants both foreclaws. A warning rolls through the overlook floor.",
+        "Ayselor's wings snap wide toward the storm, answering a voice no one else can hear.",
+        "FRACTURE PULSE / SOURCE BELOW SOLACE / RANGE UNRESOLVED",
+        "Something enormous is answering from beneath the storm. We follow at first light.",
     };
     static const char SIM_RING[] =
         "Brass grooves record thirty years of paired Echoform trials. One ring is newly scorched.";
@@ -457,10 +482,19 @@ static const char *dialogue_text(const N64GameCore *game)
         "The sight is fixed on Solace Pass. Its brass housing is warm, though no one signed it out.";
     const uint8_t page = game->dialogue_page;
     switch (game->dialogue) {
-    case N64GAME_DIALOGUE_SERA_INTRO: return SERA_INTRO[page];
+    case N64GAME_DIALOGUE_SERA_INTRO:
+        if (page == 0U) {
+            (void)snprintf(
+                dynamic_line, sizeof(dynamic_line),
+                "%s, welcome to Meridian Research Annex.", game->player_name
+            );
+            return dynamic_line;
+        }
+        return SERA_INTRO[page];
+    case N64GAME_DIALOGUE_TAVI_INTRO: return TAVI_INTRO[page];
+    case N64GAME_DIALOGUE_TAVI_REPEAT: return TAVI_REPEAT[page];
     case N64GAME_DIALOGUE_RELAY: return RELAY[page];
     case N64GAME_DIALOGUE_SERA_TRIAL: return SERA_TRIAL[page];
-    case N64GAME_DIALOGUE_TAVI_OPTIONAL: return TAVI[page];
     case N64GAME_DIALOGUE_BATTLE_VICTORY: return VICTORY[page];
     case N64GAME_DIALOGUE_BEACON_HOOK: return BEACON[page];
     case N64GAME_DIALOGUE_EXAMINE_SIM_RING: return SIM_RING;
@@ -475,7 +509,7 @@ static const char *dialogue_text(const N64GameCore *game)
 static void draw_dialogue(const N64GameCore *game)
 {
     panel(8, 172, 312, 234);
-    text_at(18.0f, 179.0f, STYLE_ACCENT, 280.0f, dialogue_speaker(game->dialogue));
+    text_at(18.0f, 179.0f, STYLE_ACCENT, 280.0f, dialogue_speaker(game));
     text_at(18.0f, 193.0f, STYLE_TEXT, 276.0f, dialogue_text(game));
     text_at(286.0f, 219.0f, STYLE_MUTED, 20.0f, "A");
 }
@@ -505,7 +539,9 @@ static void draw_pause_root(const N64GameCore *game)
     text_at(77.0f, 67.0f, STYLE_MUTED, 170.0f, annex_sector_name(game->annex_sector));
     for (uint8_t item = 0U; item < 4U; ++item) {
         const char *label = ITEMS[item];
-        if (item == 2U && !game->relay_unlocked) {
+        if (item == 0U && !game->relay_unlocked) {
+            label = "PARTY  LOCKED";
+        } else if (item == 2U && !game->relay_unlocked) {
             label = "SAVE  LOCKED";
         }
         draw_menu_item(91.0f + (float)item * 22.0f, label, game->menu_cursor == item);
@@ -558,10 +594,14 @@ static const char *relay_message(N64GameQuest quest)
     switch (quest) {
     case N64GAME_QUEST_MEET_SERA:
         return "SERA: Report to the west simulation chamber.";
+    case N64GAME_QUEST_MEET_TAVI:
+        return "SERA: Tavi is waiting at the atrium observation rail.";
     case N64GAME_QUEST_RETRIEVE_RELAY:
         return "SERA: Retrieve the Relay from the east workshop bench.";
-    case N64GAME_QUEST_RETURN_TO_SERA:
-        return "RELAY: Link established. Return to Sera for calibration.";
+    case N64GAME_QUEST_CALIBRATE_RELAY:
+        return "RELAY: Link locked. Calibrate at the Simulation Ring.";
+    case N64GAME_QUEST_READY_FOR_TRIAL:
+        return "SERA: Checkpoint stable. Begin the trial at the Simulation Ring.";
     case N64GAME_QUEST_RESONANCE_TRIAL:
         return "SERA: Hold the pair together. Let the true pattern answer.";
     case N64GAME_QUEST_BEACON_OVERLOOK:
@@ -621,6 +661,40 @@ static void draw_help_page(void)
     text_at(44.0f, 199.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
 }
 
+static void draw_calibration(const N64GameCore *game)
+{
+    static const char *const BANDS[] = { "LOW", "MID", "HIGH" };
+    char heading[48];
+    char target[48];
+    const uint8_t step = game->calibration_step < N64GAME_CALIBRATION_STEP_COUNT ?
+        game->calibration_step : (uint8_t)(N64GAME_CALIBRATION_STEP_COUNT - 1U);
+    const uint8_t target_band = n64game_core_calibration_target(step);
+    panel(34, 30, 286, 216);
+    centered(40.0f, STYLE_ACCENT, "FIELD RELAY CALIBRATION");
+    (void)snprintf(
+        heading, sizeof(heading), "STEP %u / %u",
+        (unsigned)step + 1U, (unsigned)N64GAME_CALIBRATION_STEP_COUNT
+    );
+    centered(67.0f, STYLE_TEXT, heading);
+    (void)snprintf(target, sizeof(target), "MATCH REQUESTED BAND: %s", BANDS[target_band]);
+    centered(88.0f, STYLE_WARNING, target);
+    for (uint8_t band = 0U; band < 3U; ++band) {
+        const int left = 49 + (int)band * 78;
+        panel(left, 116, left + 66, 151);
+        text_at(
+            (float)(left + 13), 128.0f,
+            game->calibration_cursor == band ? STYLE_WARNING : STYLE_TEXT,
+            48.0f, BANDS[band]
+        );
+    }
+    centered(
+        169.0f,
+        game->calibration_error ? STYLE_WARNING : STYLE_MUTED,
+        game->calibration_error ? "PHASE MISMATCH / SELECT AGAIN" : "D-PAD SELECT / A LOCK BAND"
+    );
+    centered(193.0f, STYLE_MUTED, "B CANCELS WITHOUT UNLOCKING");
+}
+
 static void draw_post_chapter_root(const N64GameCore *game)
 {
     const uint8_t log_style = game->menu_cursor == 0U ? STYLE_WARNING : STYLE_TEXT;
@@ -658,6 +732,9 @@ static void draw_annex_menu(const N64GameCore *game)
         break;
     case N64GAME_MENU_HELP:
         draw_help_page();
+        break;
+    case N64GAME_MENU_RELAY_CALIBRATION:
+        draw_calibration(game);
         break;
     case N64GAME_MENU_POST_CHAPTER_ROOT:
         draw_post_chapter_root(game);
@@ -702,18 +779,159 @@ static const char *echo_name(uint8_t actor)
     return actor < 4U ? NAMES[actor] : "";
 }
 
+static const char *affinity_short_name(N64GameAffinity affinity)
+{
+    static const char *const NAMES[] = { "STR", "GAL", "CUR", "EMB" };
+    return (unsigned)affinity < 4U ? NAMES[affinity] : "---";
+}
+
+static bool affinity_advantage_ui(N64GameAffinity attack, N64GameAffinity defense)
+{
+    return (attack == N64GAME_AFFINITY_STRATA && defense == N64GAME_AFFINITY_CURRENT) ||
+        (attack == N64GAME_AFFINITY_CURRENT && defense == N64GAME_AFFINITY_EMBER) ||
+        (attack == N64GAME_AFFINITY_EMBER && defense == N64GAME_AFFINITY_GALE) ||
+        (attack == N64GAME_AFFINITY_GALE && defense == N64GAME_AFFINITY_STRATA);
+}
+
+static bool damaging_move(const N64GameMoveDef *move)
+{
+    return move != NULL &&
+        (move->effect == N64GAME_EFFECT_DAMAGE ||
+         move->effect == N64GAME_EFFECT_DAMAGE_STAGGER_CHANCE ||
+         move->effect == N64GAME_EFFECT_DAMAGE_STAGGER ||
+         move->effect == N64GAME_EFFECT_DAMAGE_GROUND);
+}
+
+static bool move_disabled(
+    const N64GameBattle *battle,
+    uint8_t actor,
+    uint8_t move,
+    const N64GameMoveDef *definition
+)
+{
+    const N64GameBattleActor *const user = &battle->actors[actor];
+    const bool spent_once = definition->once_per_encounter &&
+        (user->used_move_mask & (uint8_t)(UINT8_C(1) << move)) != 0U;
+    const bool cooling_down = user->move_ready_round[move] != 0U &&
+        battle->round < user->move_ready_round[move];
+    return spent_once || cooling_down;
+}
+
+static const char *move_target_name(N64GameTargetRule rule)
+{
+    switch (rule) {
+    case N64GAME_TARGET_ONE_ENEMY:
+        return "1FOE";
+    case N64GAME_TARGET_ALL_ENEMIES:
+        return "ALLFOE";
+    case N64GAME_TARGET_ONE_ALLY:
+        return "ALLY";
+    case N64GAME_TARGET_SELF:
+        return "SELF";
+    }
+    return "TARGET";
+}
+
+static void format_move_detail(
+    const N64GameMoveDef *move,
+    char *summary,
+    size_t summary_size,
+    char *effect,
+    size_t effect_size
+)
+{
+    (void)snprintf(
+        summary, summary_size, "%s / %s",
+        move_target_name(move->target_rule), affinity_short_name(move->affinity)
+    );
+    switch (move->effect) {
+    case N64GAME_EFFECT_DAMAGE:
+        (void)snprintf(effect, effect_size, "PWR %u", (unsigned)move->power);
+        break;
+    case N64GAME_EFFECT_DAMAGE_STAGGER_CHANCE:
+        (void)snprintf(
+            effect, effect_size, "P%u / %u%%STG",
+            (unsigned)move->power, (unsigned)move->effect_chance_percent
+        );
+        break;
+    case N64GAME_EFFECT_DAMAGE_STAGGER:
+        (void)snprintf(
+            effect, effect_size, "P%u STG / C%u",
+            (unsigned)move->power, (unsigned)move->cooldown_rounds
+        );
+        break;
+    case N64GAME_EFFECT_DAMAGE_GROUND:
+        (void)snprintf(
+            effect, effect_size, "P%u STRIP+",
+            (unsigned)move->power
+        );
+        break;
+    case N64GAME_EFFECT_GUARD_UP:
+        (void)snprintf(
+            effect, effect_size, "GRD+1 / %uR",
+            (unsigned)move->stage_rounds
+        );
+        break;
+    case N64GAME_EFFECT_SPEED_UP:
+        (void)snprintf(
+            effect, effect_size, "SPD+1 / %uR",
+            (unsigned)move->stage_rounds
+        );
+        break;
+    case N64GAME_EFFECT_EMPOWER_NEXT_DAMAGE:
+        (void)snprintf(effect, effect_size, "NEXT PWR +20%%");
+        break;
+    case N64GAME_EFFECT_HEAL_CLEAR_STAGGER:
+        (void)snprintf(
+            effect, effect_size, "HEAL%u CLR 1X",
+            (unsigned)move->power
+        );
+        break;
+    case N64GAME_EFFECT_POWER_DOWN:
+        (void)snprintf(
+            effect, effect_size, "PWR-1 / %uR",
+            (unsigned)move->stage_rounds
+        );
+        break;
+    case N64GAME_EFFECT_GUARD_DOWN:
+        (void)snprintf(
+            effect, effect_size, "GRD-1 / %uR",
+            (unsigned)move->stage_rounds
+        );
+        break;
+    case N64GAME_EFFECT_FINISHER:
+        (void)snprintf(effect, effect_size, "LINKED DUO ATTACK");
+        break;
+    }
+}
+
 static void draw_battle_status(const N64GameCore *game)
 {
     const N64GameBattle *const battle = &game->battle;
     for (uint8_t actor = 0U; actor < 4U; ++actor) {
+        char hp[24];
+        char status[40];
+        const N64GameBattleActor *const state = &battle->actors[actor];
         const bool player = actor < 2U;
         const int x = player ? 8 + (int)actor * 112 : 96 + ((int)actor - 2) * 108;
         const int y = player ? 112 : 8;
-        panel(x, y, x + 104, y + 29);
-        text_at((float)(x + 5), (float)(y + 5), STYLE_TEXT, 94.0f, echo_name(actor));
-        hp_bar(x + 5, y + 18, 92, battle->actors[actor].hp, battle->actors[actor].max_hp);
+        panel(x, y, x + 104, y + 34);
+        text_at((float)(x + 5), (float)(y + 4), STYLE_TEXT, 56.0f, echo_name(actor));
+        (void)snprintf(hp, sizeof(hp), "%d/%d", (int)state->hp, (int)state->max_hp);
+        text_at((float)(x + 63), (float)(y + 4), STYLE_MUTED, 36.0f, hp);
+        hp_bar(x + 5, y + 16, 94, state->hp, state->max_hp);
+        (void)snprintf(
+            status, sizeof(status), "P%+d G%+d S%+d%s",
+            (int)state->power_stage, (int)state->guard_stage, (int)state->speed_stage,
+            state->stagger_rounds > 0U ? " STG" : ""
+        );
+        text_at(
+            (float)(x + 5), (float)(y + 23),
+            state->stagger_rounds > 0U ? STYLE_WARNING : STYLE_MUTED,
+            94.0f, status
+        );
         if (game->battle_selecting_target && game->battle_target_cursor == actor) {
-            fill_rect(x, y, x + 4, y + 29, RGBA32(221, 97, 163, 255));
+            fill_rect(x, y, x + 4, y + 34, RGBA32(221, 97, 163, 255));
         }
     }
 }
@@ -729,12 +947,19 @@ static void draw_battle_menu(const N64GameCore *game)
         const uint8_t actor = battle->command_actor;
         text_at(16.0f, 153.0f, STYLE_ACCENT, 150.0f, echo_name(actor));
         for (uint8_t move = 0U; move < 4U; ++move) {
+            char label[40];
             const N64GameMoveDef *const definition = n64game_move_def(
                 battle->actors[actor].id, move
             );
-            const uint8_t style = !game->battle_selecting_target &&
-                game->battle_move_cursor == move ? STYLE_WARNING : STYLE_TEXT;
-            text_at(18.0f, 168.0f + (float)move * 13.0f, style, 150.0f, definition->name);
+            const bool disabled = move_disabled(battle, actor, move, definition);
+            const uint8_t style = disabled ? STYLE_MUTED :
+                (!game->battle_selecting_target && game->battle_move_cursor == move ?
+                 STYLE_WARNING : STYLE_TEXT);
+            (void)snprintf(
+                label, sizeof(label), "%s%s", definition->name,
+                disabled ? (definition->once_per_encounter ? " [USED]" : " [WAIT]") : ""
+            );
+            text_at(18.0f, 168.0f + (float)move * 13.0f, style, 150.0f, label);
         }
         if (actor == 0U && battle->resonance == N64GAME_RESONANCE_MAX &&
             battle->actors[1].hp > 0) {
@@ -753,7 +978,11 @@ static void draw_battle_menu(const N64GameCore *game)
         if (event->happened) {
             char message[96];
             if (event->skipped) {
-                (void)snprintf(message, sizeof(message), "%s CANNOT ACT", echo_name(event->actor));
+                (void)snprintf(
+                    message, sizeof(message), "%s",
+                    event->move == N64GAME_MOVE_FINISHER ?
+                        "HORIZON BREAK CANCELED" : "ACTION RESISTED / CANNOT ACT"
+                );
             } else if (event->move == N64GAME_MOVE_FINISHER) {
                 (void)snprintf(message, sizeof(message), "HORIZON BREAK");
             } else {
@@ -765,7 +994,24 @@ static void draw_battle_menu(const N64GameCore *game)
             }
             text_at(18.0f, 158.0f, STYLE_ACCENT, 150.0f, message);
             if (event->affinity_advantage) {
-                text_at(18.0f, 184.0f, STYLE_WARNING, 150.0f, "AFFINITY ADVANTAGE");
+                text_at(
+                    18.0f, 184.0f, STYLE_WARNING, 150.0f,
+                    "STRONG - 1.5x affinity force"
+                );
+            } else if (!event->skipped && event->target < N64GAME_BATTLE_ACTOR_COUNT &&
+                       event->move < N64GAME_BATTLE_MOVE_COUNT) {
+                const N64GameMoveDef *const move = n64game_move_def(
+                    battle->actors[event->actor].id, event->move
+                );
+                if (damaging_move(move) &&
+                    affinity_advantage_ui(
+                        battle->actors[event->target].affinity, move->affinity
+                    )) {
+                    text_at(
+                        18.0f, 184.0f, STYLE_MUTED, 150.0f,
+                        "RESISTED - 0.75x affinity force"
+                    );
+                }
             }
         } else {
             text_at(18.0f, 158.0f, STYLE_MUTED, 150.0f, "BUILDING TURN QUEUE");
@@ -777,10 +1023,49 @@ static void draw_battle_menu(const N64GameCore *game)
     hp_bar(192, 168, 110, battle->resonance, N64GAME_RESONANCE_MAX);
     panel(184, 186, 312, 234);
     if (game->battle_selecting_target) {
-        text_at(192.0f, 194.0f, STYLE_WARNING, 110.0f, "SELECT TARGET");
-        text_at(192.0f, 214.0f, STYLE_MUTED, 110.0f, "A CONFIRM / B BACK");
+        const uint8_t actor = battle->command_actor;
+        const uint8_t target = game->battle_target_cursor;
+        const N64GameMoveDef *const move = n64game_move_def(
+            battle->actors[actor].id, game->battle_move_cursor
+        );
+        const char *forecast = "NEUTRAL FORCE";
+        if (target < N64GAME_BATTLE_ACTOR_COUNT && damaging_move(move)) {
+            if (affinity_advantage_ui(move->affinity, battle->actors[target].affinity)) {
+                forecast = "STRONG 1.5x";
+            } else if (affinity_advantage_ui(
+                           battle->actors[target].affinity, move->affinity)) {
+                forecast = "RESIST 0.75x";
+            }
+        }
+        text_at(192.0f, 192.0f, STYLE_WARNING, 110.0f, echo_name(target));
+        text_at(192.0f, 207.0f, STYLE_TEXT, 110.0f, forecast);
+        text_at(192.0f, 221.0f, STYLE_MUTED, 110.0f, "A OK B BACK");
     } else {
-        text_at(192.0f, 194.0f, STYLE_TEXT, 110.0f, "D-PAD  MOVE\nA  CHOOSE\nB  BACK");
+        char move_summary[56];
+        char move_effect[64];
+        if (battle->phase == N64GAME_BATTLE_COMMAND &&
+            game->battle_move_cursor < N64GAME_BATTLE_MOVE_COUNT) {
+            const uint8_t actor = battle->command_actor;
+            const N64GameMoveDef *const move = n64game_move_def(
+                battle->actors[actor].id, game->battle_move_cursor
+            );
+            format_move_detail(
+                move,
+                move_summary,
+                sizeof(move_summary),
+                move_effect,
+                sizeof(move_effect)
+            );
+            text_at(192.0f, 192.0f, STYLE_TEXT, 110.0f, move_summary);
+            text_at(192.0f, 207.0f, STYLE_ACCENT, 110.0f, move_effect);
+            text_at(192.0f, 221.0f, STYLE_MUTED, 110.0f, "A OK B BACK");
+        } else if (battle->phase == N64GAME_BATTLE_COMMAND) {
+            text_at(192.0f, 192.0f, STYLE_WARNING, 110.0f, "STRATA + GALE");
+            text_at(192.0f, 207.0f, STYLE_ACCENT, 110.0f, "ALL / P36 S+G");
+            text_at(192.0f, 221.0f, STYLE_MUTED, 110.0f, "A LINK B BACK");
+        } else {
+            text_at(192.0f, 194.0f, STYLE_TEXT, 110.0f, "D-PAD MOVE\nA CHOOSE");
+        }
     }
 }
 
@@ -923,13 +1208,38 @@ static void draw_ending(const N64GameCore *game, bool save_busy, bool save_avail
     centered(54.0f, STYLE_WARNING, "SIGNAL ACQUIRED");
     centered(80.0f, STYLE_ACCENT, "SOLACE / EMERGENCY BEACON");
     centered(119.0f, STYLE_TEXT, "END OF OPENING CHAPTER");
-    char player_line[40];
-    const char *const save_state = save_busy ? "FINALIZING SAVE" :
-        (save_available ? "RESONANCE FILE SAVED" : "PROGRESS VOLATILE");
+    char player_line[64];
+    const char *save_state = "ARCHIVE LOCKED";
+    switch (game->final_save_state) {
+    case N64GAME_FINAL_SAVE_PENDING:
+        save_state = save_busy ? "FINALIZING SAVE / ARCHIVE LOCKED" :
+            "AWAITING SAVE / ARCHIVE LOCKED";
+        break;
+    case N64GAME_FINAL_SAVE_FAILED:
+        save_state = save_available ? "SAVE WRITE FAILED" : "EEPROM UNAVAILABLE";
+        break;
+    case N64GAME_FINAL_SAVE_CONFIRM_UNSAVED:
+        save_state = "UNSAVED PROGRESS WILL BE LOST";
+        break;
+    case N64GAME_FINAL_SAVE_VERIFIED:
+        save_state = "RESONANCE FILE VERIFIED";
+        break;
+    case N64GAME_FINAL_SAVE_ACCEPTED_UNSAVED:
+        save_state = "CONTINUING WITHOUT A SAVE";
+        break;
+    case N64GAME_FINAL_SAVE_NONE:
+        break;
+    }
     (void)snprintf(player_line, sizeof(player_line), "%s / %s",
                    game->player_name, save_state);
     centered(151.0f, STYLE_MUTED, player_line);
     centered(165.0f, STYLE_TEXT, "THE STORM IS ANSWERING.");
+    if (game->final_save_state == N64GAME_FINAL_SAVE_FAILED) {
+        centered(187.0f, STYLE_WARNING, "A RETRY SAVE / B CONTINUE WITHOUT SAVING");
+    } else if (game->final_save_state == N64GAME_FINAL_SAVE_CONFIRM_UNSAVED) {
+        centered(187.0f, STYLE_WARNING, "CONTINUE WITHOUT SAVING?");
+        centered(207.0f, STYLE_TEXT, "A CONFIRM / B BACK");
+    }
     if (game->menu != N64GAME_MENU_CLOSED) {
         draw_annex_menu(game);
     }
@@ -966,10 +1276,14 @@ void n64game_renderer_draw(
         draw_ending(game, save_busy, save_available);
         break;
     }
-    if (save_busy) {
+    if (game->scene == N64GAME_SCENE_END_CHAPTER &&
+        game->final_save_state == N64GAME_FINAL_SAVE_PENDING && save_busy) {
         panel(238, 214, 314, 234);
         text_at(246.0f, 221.0f, STYLE_ACCENT, 62.0f, "SAVING");
-    } else if (!save_available) {
+    } else if (game->scene != N64GAME_SCENE_END_CHAPTER && save_busy) {
+        panel(238, 214, 314, 234);
+        text_at(246.0f, 221.0f, STYLE_ACCENT, 62.0f, "SAVING");
+    } else if (game->scene != N64GAME_SCENE_END_CHAPTER && !save_available) {
         text_at(218.0f, 224.0f, STYLE_WARNING, 96.0f, "SAVE UNAVAILABLE");
     }
     if (!controller_connected) {

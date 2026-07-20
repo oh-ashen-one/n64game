@@ -7,7 +7,7 @@
 #define N64GAME_SAVE_BODY_BYTES 60
 #define N64GAME_SAVE_FOOTER_BYTES 4
 #define N64GAME_SAVE_SLOT_COUNT 2
-#define N64GAME_SAVE_VERSION UINT16_C(2)
+#define N64GAME_SAVE_VERSION UINT16_C(3)
 
 uint32_t n64game_save_checksum(const uint8_t bytes[N64GAME_SAVE_BYTES]);
 bool n64game_save_encode(

@@ -18,6 +18,7 @@
 #define N64GAME_BATTLE_STAGE_MAX 2
 #define N64GAME_TARGET_ALL UINT8_C(0xFF)
 #define N64GAME_MOVE_FINISHER UINT8_C(4)
+#define N64GAME_CALIBRATION_STEP_COUNT UINT8_C(3)
 
 typedef enum {
     N64GAME_SCENE_BOOT = 0,
@@ -30,8 +31,10 @@ typedef enum {
 
 typedef enum {
     N64GAME_QUEST_MEET_SERA = 0,
+    N64GAME_QUEST_MEET_TAVI,
     N64GAME_QUEST_RETRIEVE_RELAY,
-    N64GAME_QUEST_RETURN_TO_SERA,
+    N64GAME_QUEST_CALIBRATE_RELAY,
+    N64GAME_QUEST_READY_FOR_TRIAL,
     N64GAME_QUEST_RESONANCE_TRIAL,
     N64GAME_QUEST_BEACON_OVERLOOK,
     N64GAME_QUEST_COMPLETE,
@@ -40,9 +43,10 @@ typedef enum {
 typedef enum {
     N64GAME_DIALOGUE_NONE = 0,
     N64GAME_DIALOGUE_SERA_INTRO,
+    N64GAME_DIALOGUE_TAVI_INTRO,
+    N64GAME_DIALOGUE_TAVI_REPEAT,
     N64GAME_DIALOGUE_RELAY,
     N64GAME_DIALOGUE_SERA_TRIAL,
-    N64GAME_DIALOGUE_TAVI_OPTIONAL,
     N64GAME_DIALOGUE_BATTLE_VICTORY,
     N64GAME_DIALOGUE_BEACON_HOOK,
     N64GAME_DIALOGUE_EXAMINE_SIM_RING,
@@ -79,8 +83,18 @@ typedef enum {
     N64GAME_MENU_RESONANCE,
     N64GAME_MENU_SAVE,
     N64GAME_MENU_HELP,
+    N64GAME_MENU_RELAY_CALIBRATION,
     N64GAME_MENU_POST_CHAPTER_ROOT,
 } N64GameMenu;
+
+typedef enum {
+    N64GAME_FINAL_SAVE_NONE = 0,
+    N64GAME_FINAL_SAVE_PENDING,
+    N64GAME_FINAL_SAVE_FAILED,
+    N64GAME_FINAL_SAVE_CONFIRM_UNSAVED,
+    N64GAME_FINAL_SAVE_VERIFIED,
+    N64GAME_FINAL_SAVE_ACCEPTED_UNSAVED,
+} N64GameFinalSaveState;
 
 typedef enum {
     N64GAME_RELAY_PAGE_PARTY = UINT8_C(1) << 0,
@@ -238,8 +252,11 @@ typedef struct {
     uint8_t relay_pages_seen;
     uint8_t settings_flags;
     uint8_t prebattle_resonance;
+    uint8_t calibration_step;
+    uint8_t calibration_cursor;
     char player_name[N64GAME_NAME_CAPACITY + 1];
     bool opening_cinematic_seen;
+    bool relay_acquired;
     bool relay_unlocked;
     bool battle_won;
     bool battle_reward_claimed;
@@ -248,6 +265,8 @@ typedef struct {
     bool battle_selecting_target;
     bool save_requested;
     bool manual_save_latched;
+    bool calibration_error;
+    N64GameFinalSaveState final_save_state;
 } N64GameCore;
 
 void n64game_core_init(N64GameCore *game);
@@ -262,6 +281,8 @@ void n64game_core_set_player_position(N64GameCore *game, int32_t x_q8, int32_t z
 bool n64game_core_can_interact(const N64GameCore *game);
 const char *n64game_core_interaction_label(const N64GameCore *game);
 uint8_t n64game_dialogue_page_count(N64GameDialogue dialogue);
+uint8_t n64game_core_calibration_target(uint8_t step);
+void n64game_core_set_final_save_result(N64GameCore *game, bool verified);
 
 const N64GameMoveDef *n64game_move_def(N64GameEchoform actor, uint8_t move);
 void n64game_battle_begin(N64GameBattle *battle);

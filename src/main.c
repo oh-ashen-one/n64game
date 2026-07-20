@@ -252,7 +252,8 @@ static bool save_writer_begin(
         return false;
     }
     writer->writes_chapter_completion =
-        game->scene == N64GAME_SCENE_END_CHAPTER && game->slice_complete;
+        game->scene == N64GAME_SCENE_END_CHAPTER && game->slice_complete &&
+        game->final_save_state == N64GAME_FINAL_SAVE_PENDING;
     uint8_t invalid_footer[N64GAME_SAVE_FOOTER_BYTES];
     for (size_t index = 0U; index < N64GAME_SAVE_FOOTER_BYTES; ++index) {
         invalid_footer[index] = (uint8_t)(
@@ -283,6 +284,17 @@ static bool save_writer_queue(SaveWriter *writer, const N64GameCore *game)
     writer->pending_game.save_requested = false;
     writer->pending = true;
     return true;
+}
+
+static void save_writer_retry_faulted_attempt(SaveWriter *writer)
+{
+    /* Only the explicit end-chapter retry edge calls this reset. */
+    writer->phase = SAVE_WRITE_IDLE;
+    writer->settle_frames = 0U;
+    writer->faulted = false;
+    writer->pending = false;
+    writer->writes_chapter_completion = false;
+    writer->chapter_completion_verified = false;
 }
 
 static bool save_writer_pump(
@@ -424,6 +436,7 @@ int main(void)
         const N64GameInput input = controller_connected ?
             read_game_input() : (N64GameInput){0};
         const N64GameScene scene_before = game.scene;
+        const N64GameFinalSaveState final_save_before_update = game.final_save_state;
         const bool resume_now = game.scene == N64GAME_SCENE_OPENING_SLATE &&
             controller_connected && !clear_edge_frame && continue_available &&
             input_pressed(input, N64GAME_INPUT_START);
@@ -434,9 +447,24 @@ int main(void)
                 &game, input, controller_connected, clear_edge_frame
             );
         }
+        const bool explicit_final_save_retry =
+            scene_before == N64GAME_SCENE_END_CHAPTER &&
+            final_save_before_update == N64GAME_FINAL_SAVE_FAILED &&
+            game.final_save_state == N64GAME_FINAL_SAVE_PENDING &&
+            game.save_requested;
+        if (explicit_final_save_retry && save_available && save_writer.faulted) {
+            save_writer_retry_faulted_attempt(&save_writer);
+        }
+        const bool pumping_chapter_completion = save_writer.writes_chapter_completion;
+        const bool save_faulted_before_pump = save_writer.faulted;
+        bool write_verified = false;
+        bool final_save_attempted = false;
+        bool final_save_accepted = false;
         if (save_available && !save_writer.faulted) {
-            if (save_writer_pump(
-                    &save_writer, &continue_game, &save_sequence, &active_save_slot)) {
+            write_verified = save_writer_pump(
+                &save_writer, &continue_game, &save_sequence, &active_save_slot
+            );
+            if (write_verified) {
                 continue_available = true;
             }
             if (save_writer.phase == SAVE_WRITE_IDLE && save_writer.pending) {
@@ -449,6 +477,8 @@ int main(void)
             }
             if (game.save_requested) {
                 bool accepted = false;
+                final_save_attempted =
+                    game.final_save_state == N64GAME_FINAL_SAVE_PENDING;
                 if (save_writer.phase == SAVE_WRITE_IDLE && !save_writer.pending) {
                     accepted = save_writer_begin(
                         &save_writer, &game, save_sequence,
@@ -460,7 +490,18 @@ int main(void)
                 if (accepted) {
                     game.save_requested = false;
                 }
+                final_save_accepted = accepted;
             }
+        }
+        if (write_verified && pumping_chapter_completion &&
+            game.final_save_state == N64GAME_FINAL_SAVE_PENDING) {
+            n64game_core_set_final_save_result(&game, true);
+        } else if (game.final_save_state == N64GAME_FINAL_SAVE_PENDING &&
+                   ((!save_available && game.save_requested) ||
+                    (!save_faulted_before_pump && save_writer.faulted) ||
+                    (save_writer.faulted && game.save_requested) ||
+                    (final_save_attempted && !final_save_accepted))) {
+            n64game_core_set_final_save_result(&game, false);
         }
 
         const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE ||
@@ -482,7 +523,9 @@ int main(void)
             telemetry.total.submitted_frames %
                 N64GAME_TELEMETRY_SUMMARY_FRAMES == 0U;
         const bool chapter_stable = game.scene == N64GAME_SCENE_END_CHAPTER &&
-            game.slice_complete && save_writer.chapter_completion_verified &&
+            game.slice_complete &&
+            game.final_save_state == N64GAME_FINAL_SAVE_VERIFIED &&
+            save_writer.chapter_completion_verified &&
             continue_available && !save_busy && !game.save_requested;
         const bool periodic_heap_sample_due =
             telemetry.total.submitted_frames != 0U &&

@@ -10,10 +10,14 @@ enum {
     NAME_SLOT_BACK = 26,
     NAME_SLOT_CONFIRM = 27,
     ANNEX_STICK_DEADZONE = 12,
-    ANNEX_WALK_SPEED_Q8 = 384,
-    ANNEX_RUN_SPEED_Q8 = 640,
-    ANNEX_ACCEL_Q8 = 64,
-    ANNEX_DECEL_Q8 = 96,
+    ANNEX_WALK_SPEED_Q8 = 85,
+    ANNEX_RUN_SPEED_Q8 = 154,
+    ANNEX_ACCEL_Q8 = 16,
+    ANNEX_DECEL_Q8 = 24,
+};
+
+static const uint8_t CALIBRATION_TARGETS[N64GAME_CALIBRATION_STEP_COUNT] = {
+    2U, 0U, 1U,
 };
 
 #define MOVE(name_, affinity_, target_, effect_, power_, resonance_, priority_, chance_, rounds_, cooldown_, once_) \
@@ -138,12 +142,15 @@ static void finish_dialogue(N64GameCore *game)
     game->dialogue_page = 0U;
     switch (dialogue) {
     case N64GAME_DIALOGUE_SERA_INTRO:
+        game->quest = N64GAME_QUEST_MEET_TAVI;
+        break;
+    case N64GAME_DIALOGUE_TAVI_INTRO:
         game->quest = N64GAME_QUEST_RETRIEVE_RELAY;
         break;
     case N64GAME_DIALOGUE_RELAY:
-        game->relay_unlocked = true;
-        game->quest = N64GAME_QUEST_RETURN_TO_SERA;
-        game->save_requested = true;
+        game->relay_acquired = true;
+        game->relay_unlocked = false;
+        game->quest = N64GAME_QUEST_CALIBRATE_RELAY;
         break;
     case N64GAME_DIALOGUE_SERA_TRIAL:
         game->quest = N64GAME_QUEST_RESONANCE_TRIAL;
@@ -163,13 +170,12 @@ static void finish_dialogue(N64GameCore *game)
     case N64GAME_DIALOGUE_BEACON_HOOK:
         game->quest = N64GAME_QUEST_COMPLETE;
         game->slice_complete = true;
-        game->save_requested = true;
         set_scene(game, N64GAME_SCENE_END_CHAPTER);
-        game->menu = N64GAME_MENU_POST_CHAPTER_ROOT;
-        game->menu_parent = N64GAME_MENU_POST_CHAPTER_ROOT;
+        game->final_save_state = N64GAME_FINAL_SAVE_PENDING;
+        game->save_requested = true;
         game->paused = true;
         break;
-    case N64GAME_DIALOGUE_TAVI_OPTIONAL:
+    case N64GAME_DIALOGUE_TAVI_REPEAT:
     case N64GAME_DIALOGUE_EXAMINE_SIM_RING:
     case N64GAME_DIALOGUE_EXAMINE_ATRIUM_MAP:
     case N64GAME_DIALOGUE_EXAMINE_WORKSHOP_LOG:
@@ -280,8 +286,61 @@ static uint8_t root_menu_item_count(N64GameMenu menu)
     return menu == N64GAME_MENU_FIELD_RELAY_ROOT ? 5U : 4U;
 }
 
+static void open_calibration(N64GameCore *game)
+{
+    open_root_menu(game, N64GAME_MENU_RELAY_CALIBRATION);
+    game->calibration_step = 0U;
+    game->calibration_cursor = 0U;
+    game->calibration_error = false;
+}
+
+static void update_calibration(N64GameCore *game, N64GameInput input)
+{
+    if (pressed(input, N64GAME_INPUT_START) ||
+        pressed(input, N64GAME_INPUT_PAUSE) ||
+        pressed(input, N64GAME_INPUT_CANCEL)) {
+        close_menu(game);
+        game->calibration_step = 0U;
+        game->calibration_cursor = 0U;
+        game->calibration_error = false;
+        return;
+    }
+    if (pressed(input, N64GAME_INPUT_LEFT) || pressed(input, N64GAME_INPUT_UP)) {
+        game->calibration_cursor = (uint8_t)((game->calibration_cursor + 2U) % 3U);
+        game->calibration_error = false;
+    } else if (pressed(input, N64GAME_INPUT_RIGHT) ||
+               pressed(input, N64GAME_INPUT_DOWN)) {
+        game->calibration_cursor = (uint8_t)((game->calibration_cursor + 1U) % 3U);
+        game->calibration_error = false;
+    }
+    if (!pressed(input, N64GAME_INPUT_CONFIRM)) {
+        return;
+    }
+    if (game->calibration_step >= N64GAME_CALIBRATION_STEP_COUNT ||
+        game->calibration_cursor != CALIBRATION_TARGETS[game->calibration_step]) {
+        game->calibration_error = true;
+        return;
+    }
+    ++game->calibration_step;
+    game->calibration_error = false;
+    if (game->calibration_step < N64GAME_CALIBRATION_STEP_COUNT) {
+        game->calibration_cursor = 0U;
+        return;
+    }
+
+    close_menu(game);
+    game->relay_unlocked = true;
+    game->quest = N64GAME_QUEST_READY_FOR_TRIAL;
+    game->save_requested = true;
+    begin_dialogue(game, N64GAME_DIALOGUE_SERA_TRIAL);
+}
+
 static void update_annex_menu(N64GameCore *game, N64GameInput input)
 {
+    if (game->menu == N64GAME_MENU_RELAY_CALIBRATION) {
+        update_calibration(game, input);
+        return;
+    }
     if (pressed(input, N64GAME_INPUT_START) || pressed(input, N64GAME_INPUT_PAUSE)) {
         close_menu(game);
         return;
@@ -311,7 +370,9 @@ static void update_annex_menu(N64GameCore *game, N64GameInput input)
         if (game->menu == N64GAME_MENU_PAUSE_ROOT) {
             switch (game->menu_cursor) {
             case 0U:
-                open_submenu(game, N64GAME_MENU_PARTY, N64GAME_RELAY_PAGE_PARTY);
+                if (game->relay_unlocked) {
+                    open_submenu(game, N64GAME_MENU_PARTY, N64GAME_RELAY_PAGE_PARTY);
+                }
                 break;
             case 1U:
                 open_submenu(game, N64GAME_MENU_HELP, N64GAME_RELAY_PAGE_PARTY);
@@ -466,17 +527,23 @@ static void update_annex(N64GameCore *game, N64GameInput input)
     if (game->quest == N64GAME_QUEST_MEET_SERA &&
         interaction == N64GAME_ANNEX_INTERACTION_SERA) {
         begin_dialogue(game, N64GAME_DIALOGUE_SERA_INTRO);
+    } else if (game->quest == N64GAME_QUEST_MEET_TAVI &&
+               interaction == N64GAME_ANNEX_INTERACTION_TAVI) {
+        begin_dialogue(game, N64GAME_DIALOGUE_TAVI_INTRO);
     } else if (game->quest == N64GAME_QUEST_RETRIEVE_RELAY &&
                interaction == N64GAME_ANNEX_INTERACTION_FIELD_RELAY) {
         begin_dialogue(game, N64GAME_DIALOGUE_RELAY);
-    } else if (game->quest == N64GAME_QUEST_RETURN_TO_SERA &&
-               interaction == N64GAME_ANNEX_INTERACTION_SERA) {
+    } else if (game->quest == N64GAME_QUEST_CALIBRATE_RELAY &&
+               interaction == N64GAME_ANNEX_INTERACTION_EXAMINE_SIM_RING) {
+        open_calibration(game);
+    } else if (game->quest == N64GAME_QUEST_READY_FOR_TRIAL &&
+               interaction == N64GAME_ANNEX_INTERACTION_EXAMINE_SIM_RING) {
         begin_dialogue(game, N64GAME_DIALOGUE_SERA_TRIAL);
     } else if (game->quest == N64GAME_QUEST_BEACON_OVERLOOK &&
                interaction == N64GAME_ANNEX_INTERACTION_BEACON) {
         begin_dialogue(game, N64GAME_DIALOGUE_BEACON_HOOK);
     } else if (interaction == N64GAME_ANNEX_INTERACTION_TAVI) {
-        begin_dialogue(game, N64GAME_DIALOGUE_TAVI_OPTIONAL);
+        begin_dialogue(game, N64GAME_DIALOGUE_TAVI_REPEAT);
     } else if (interaction == N64GAME_ANNEX_INTERACTION_FIELD_RELAY &&
                game->relay_unlocked) {
         open_root_menu(game, N64GAME_MENU_FIELD_RELAY_ROOT);
@@ -487,6 +554,14 @@ static void update_annex(N64GameCore *game, N64GameInput input)
             begin_dialogue(game, examine);
         }
     }
+}
+
+static void open_post_chapter_archive(N64GameCore *game)
+{
+    game->menu = N64GAME_MENU_POST_CHAPTER_ROOT;
+    game->menu_parent = N64GAME_MENU_POST_CHAPTER_ROOT;
+    game->menu_cursor = 0U;
+    game->paused = true;
 }
 
 static void update_post_chapter_menu(N64GameCore *game, N64GameInput input)
@@ -522,6 +597,36 @@ static void update_post_chapter_menu(N64GameCore *game, N64GameInput input)
         break;
     default:
         break;
+    }
+}
+
+static void update_end_chapter(N64GameCore *game, N64GameInput input)
+{
+    switch (game->final_save_state) {
+    case N64GAME_FINAL_SAVE_PENDING:
+        return;
+    case N64GAME_FINAL_SAVE_FAILED:
+        if (pressed(input, N64GAME_INPUT_CONFIRM)) {
+            game->final_save_state = N64GAME_FINAL_SAVE_PENDING;
+            game->save_requested = true;
+        } else if (pressed(input, N64GAME_INPUT_CANCEL)) {
+            game->final_save_state = N64GAME_FINAL_SAVE_CONFIRM_UNSAVED;
+        }
+        return;
+    case N64GAME_FINAL_SAVE_CONFIRM_UNSAVED:
+        if (pressed(input, N64GAME_INPUT_CONFIRM)) {
+            game->final_save_state = N64GAME_FINAL_SAVE_ACCEPTED_UNSAVED;
+            open_post_chapter_archive(game);
+        } else if (pressed(input, N64GAME_INPUT_CANCEL)) {
+            game->final_save_state = N64GAME_FINAL_SAVE_FAILED;
+        }
+        return;
+    case N64GAME_FINAL_SAVE_VERIFIED:
+    case N64GAME_FINAL_SAVE_ACCEPTED_UNSAVED:
+        update_post_chapter_menu(game, input);
+        return;
+    case N64GAME_FINAL_SAVE_NONE:
+        return;
     }
 }
 
@@ -738,13 +843,13 @@ void n64game_core_update(N64GameCore *game, N64GameInput input)
             } else if (pressed(input, N64GAME_INPUT_CANCEL)) {
                 restore_prebattle_snapshot(game);
                 game->battle.phase = N64GAME_BATTLE_INACTIVE;
-                game->quest = N64GAME_QUEST_RETURN_TO_SERA;
+                game->quest = N64GAME_QUEST_READY_FOR_TRIAL;
                 set_scene(game, N64GAME_SCENE_ANNEX);
             }
         }
         break;
     case N64GAME_SCENE_END_CHAPTER:
-        update_post_chapter_menu(game, input);
+        update_end_chapter(game, input);
         break;
     }
 }
@@ -805,12 +910,20 @@ const char *n64game_core_interaction_label(const N64GameCore *game)
         interaction == N64GAME_ANNEX_INTERACTION_SERA) {
         return "TALK TO SERA";
     }
+    if (game->quest == N64GAME_QUEST_MEET_TAVI &&
+        interaction == N64GAME_ANNEX_INTERACTION_TAVI) {
+        return "CHECK IN WITH TAVI";
+    }
     if (game->quest == N64GAME_QUEST_RETRIEVE_RELAY &&
         interaction == N64GAME_ANNEX_INTERACTION_FIELD_RELAY) {
         return "TAKE FIELD RELAY";
     }
-    if (game->quest == N64GAME_QUEST_RETURN_TO_SERA &&
-        interaction == N64GAME_ANNEX_INTERACTION_SERA) {
+    if (game->quest == N64GAME_QUEST_CALIBRATE_RELAY &&
+        interaction == N64GAME_ANNEX_INTERACTION_EXAMINE_SIM_RING) {
+        return "CALIBRATE FIELD RELAY";
+    }
+    if (game->quest == N64GAME_QUEST_READY_FOR_TRIAL &&
+        interaction == N64GAME_ANNEX_INTERACTION_EXAMINE_SIM_RING) {
         return "BEGIN TRIAL";
     }
     if (game->quest == N64GAME_QUEST_BEACON_OVERLOOK &&
@@ -832,11 +945,38 @@ const char *n64game_core_interaction_label(const N64GameCore *game)
 
 uint8_t n64game_dialogue_page_count(N64GameDialogue dialogue)
 {
-    static const uint8_t PAGE_COUNTS[] = { 0, 3, 2, 2, 2, 2, 4, 1, 1, 1, 1 };
+    static const uint8_t PAGE_COUNTS[] = { 0, 4, 2, 1, 2, 2, 2, 6, 1, 1, 1, 1 };
     if ((unsigned)dialogue >= sizeof(PAGE_COUNTS) / sizeof(PAGE_COUNTS[0])) {
         return 0U;
     }
     return PAGE_COUNTS[dialogue];
+}
+
+uint8_t n64game_core_calibration_target(uint8_t step)
+{
+    if (step >= N64GAME_CALIBRATION_STEP_COUNT) {
+        return 0U;
+    }
+    return CALIBRATION_TARGETS[step];
+}
+
+void n64game_core_set_final_save_result(N64GameCore *game, bool verified)
+{
+    if (game == NULL || game->scene != N64GAME_SCENE_END_CHAPTER ||
+        !game->slice_complete || game->final_save_state != N64GAME_FINAL_SAVE_PENDING) {
+        return;
+    }
+    game->save_requested = false;
+    if (verified) {
+        game->final_save_state = N64GAME_FINAL_SAVE_VERIFIED;
+        open_post_chapter_archive(game);
+    } else {
+        game->final_save_state = N64GAME_FINAL_SAVE_FAILED;
+        game->menu = N64GAME_MENU_CLOSED;
+        game->menu_parent = N64GAME_MENU_CLOSED;
+        game->menu_cursor = 0U;
+        game->paused = true;
+    }
 }
 
 const N64GameMoveDef *n64game_move_def(N64GameEchoform actor, uint8_t move)
@@ -1243,6 +1383,25 @@ static void mark_move_used(
 static void apply_action(N64GameBattle *battle, const N64GameBattleAction *action)
 {
     battle->last_event = (N64GameBattleEvent){0};
+    if (action->move == N64GAME_MOVE_FINISHER &&
+        (!alive(&battle->actors[0]) || !alive(&battle->actors[1]))) {
+        battle->resonance = N64GAME_RESONANCE_MAX;
+        battle->queue_count = 0U;
+        battle->queue_cursor = 0U;
+        battle->player_actions[0] = (N64GameBattleAction){0};
+        battle->player_actions[1] = (N64GameBattleAction){0};
+        battle->command_actor = first_living_target(battle, true);
+        battle->phase = battle->command_actor == N64GAME_TARGET_ALL ?
+            N64GAME_BATTLE_DEFEAT : N64GAME_BATTLE_COMMAND;
+        battle->last_event = (N64GameBattleEvent){
+            .happened = true,
+            .skipped = true,
+            .actor = 0U,
+            .move = N64GAME_MOVE_FINISHER,
+            .target = N64GAME_TARGET_ALL,
+        };
+        return;
+    }
     if (!alive(&battle->actors[action->actor])) {
         battle->last_event = (N64GameBattleEvent){
             .happened = true,
@@ -1482,6 +1641,9 @@ bool n64game_battle_resolve_next(N64GameBattle *battle)
         return false;
     }
     apply_action(battle, &battle->queue[battle->queue_cursor++]);
+    if (battle->phase == N64GAME_BATTLE_COMMAND) {
+        return true;
+    }
     if (side_defeated(battle, false)) {
         battle->phase = N64GAME_BATTLE_VICTORY;
         return true;
