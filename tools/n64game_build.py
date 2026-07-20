@@ -291,6 +291,24 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/env/env.annex.threshold_kit/tex_annex_resonance_mask_ia8_32x32.png",
             "rom:/env/env.annex.threshold_kit/tex_annex_resonance_mask_ia8_32x32.sprite",
         ),
+        (
+            "candidate.chr.player.ari.hero",
+            "model_glb",
+            "runtime-candidates/chr/chr.player.ari/player_ari.glb",
+            "rom:/chr/chr.player.ari/player_ari.t3dm",
+        ),
+        (
+            "candidate.chr.player.ari.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.player.ari/tex_player_ari_body_ci8_64x64.png",
+            "rom:/chr/chr.player.ari/tex_player_ari_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.chr.player.ari.face",
+            "texture_png",
+            "runtime-candidates/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.png",
+            "rom:/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -332,7 +350,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         )
     if tuple(observed_identity) != expected:
         raise ContractError(
-            "runtime candidate identity/path census is not the exact Quarrune and Annex proof set"
+            "runtime candidate identity/path census is not the exact Quarrune, Annex, and Ari proof set"
         )
     return {
         "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
@@ -340,7 +358,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
         "scope": (
-            "Quarrune and Annex static in-engine proof only; "
+            "Quarrune, Annex, and Ari in-engine proof only; "
             "not Gate evidence or production approval"
         ),
         "entries": rows,
@@ -453,7 +471,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune static proof; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} ({candidates['scope']})\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

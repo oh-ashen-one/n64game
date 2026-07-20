@@ -26,6 +26,21 @@ ANNEX_KIT_RUNTIME_CANDIDATES := \
 	$(ANNEX_KIT_ARCHITECTURE) \
 	$(ANNEX_KIT_TRIM) \
 	$(ANNEX_KIT_MASK)
+PLAYER_SOURCE_DIR := runtime-candidates/chr/chr.player.ari
+PLAYER_FILESYSTEM_DIR := filesystem/chr/chr.player.ari
+PLAYER_MODEL := $(PLAYER_FILESYSTEM_DIR)/player_ari.t3dm
+PLAYER_IDLE := $(PLAYER_FILESYSTEM_DIR)/player_ari.0.sdata
+PLAYER_WALK := $(PLAYER_FILESYSTEM_DIR)/player_ari.1.sdata
+PLAYER_RUN := $(PLAYER_FILESYSTEM_DIR)/player_ari.2.sdata
+PLAYER_BODY := $(PLAYER_FILESYSTEM_DIR)/tex_player_ari_body_ci8_64x64.sprite
+PLAYER_FACE := $(PLAYER_FILESYSTEM_DIR)/tex_player_ari_face_ci4_32x32.sprite
+PLAYER_RUNTIME_CANDIDATES := \
+	$(PLAYER_MODEL) \
+	$(PLAYER_IDLE) \
+	$(PLAYER_WALK) \
+	$(PLAYER_RUN) \
+	$(PLAYER_BODY) \
+	$(PLAYER_FACE)
 
 include $(N64_INST)/include/n64.mk
 include $(T3D_ROOT)/t3d.mk
@@ -39,6 +54,7 @@ OBJS := \
 	$(BUILD_DIR)/n64game_render.o \
 	$(BUILD_DIR)/n64game_save.o \
 	$(BUILD_DIR)/n64game_telemetry.o \
+	$(BUILD_DIR)/player_render_assets.o \
 	$(BUILD_DIR)/quarrune_render_assets.o
 
 .PHONY: all clean stage-rom
@@ -92,9 +108,29 @@ $(ANNEX_KIT_MASK): $(ANNEX_KIT_SOURCE_DIR)/tex_annex_resonance_mask_ia8_32x32.pn
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
 
+$(PLAYER_MODEL) $(PLAYER_IDLE) $(PLAYER_WALK) $(PLAYER_RUN) &: $(PLAYER_SOURCE_DIR)/player_ari.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(PLAYER_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(PLAYER_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(PLAYER_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(PLAYER_MODEL)"
+	@test -f "$(PLAYER_IDLE)"
+	@test -f "$(PLAYER_WALK)"
+	@test -f "$(PLAYER_RUN)"
+
+$(PLAYER_BODY): $(PLAYER_SOURCE_DIR)/tex_player_ari_body_ci8_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(PLAYER_FACE): $(PLAYER_SOURCE_DIR)/tex_player_ari_face_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
 $(BUILD_DIR)/$(ROM_NAME).dfs: \
 	$(QUARRUNE_RUNTIME_CANDIDATES) \
-	$(ANNEX_KIT_RUNTIME_CANDIDATES)
+	$(ANNEX_KIT_RUNTIME_CANDIDATES) \
+	$(PLAYER_RUNTIME_CANDIDATES)
 
 $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME OPENING"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k

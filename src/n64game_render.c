@@ -1,5 +1,6 @@
 #include "n64game_render.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -14,8 +15,19 @@ enum {
     ACTOR_MATRIX_COUNT = 5,
     ANNEX_KIT_MATRIX_COUNT = N64GAME_ANNEX_SECTOR_COUNT,
     ANNEX_CAMERA_FADE_FRAMES = 8,
+    ANNEX_CAMERA_BOOM_DISTANCE = 18,
+    ANNEX_CAMERA_LOOK_LEAD = 5,
+    ANNEX_CAMERA_SAFE_HALF_EXTENT = 20,
+    ANNEX_CAMERA_SWITCH_LOCAL_Z =
+        ANNEX_CAMERA_SAFE_HALF_EXTENT - ANNEX_CAMERA_BOOM_DISTANCE,
+    PLAYER_BONE_COUNT = 24,
+    PLAYER_YAW_DEADZONE_Q8 = 4,
+    PLAYER_WALK_SPEED_Q8 = 85,
+    PLAYER_RUN_SPEED_Q8 = 154,
 };
 
+static const char PLAYER_MODEL_PATH[] =
+    "rom:/chr/chr.player.ari/player_ari.t3dm";
 static const char QUARRUNE_MODEL_PATH[] =
     "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
 static const char ANNEX_KIT_MODEL_PATH[] =
@@ -33,7 +45,41 @@ static const float ANNEX_KIT_SCALE_Z = 0.0825f;
 static const float ANNEX_KIT_CENTER_OFFSET_Z = 8.25f;
 static const float ANNEX_WORLD_FLOOR_Y = -18.0f;
 static const float ANNEX_KIT_BATTLE_SCALE_MULTIPLIER = 1.6f;
+static const float ANNEX_PLAYER_SCALE = 0.0833333f;
 static const float ANNEX_QUARRUNE_SCALE = 0.10f;
+
+static const char *const PLAYER_ANIMATION_NAMES[] = {
+    "idle_a",
+    "walk",
+    "run",
+};
+
+static const char *const PLAYER_BONE_NAMES[PLAYER_BONE_COUNT] = {
+    "b_root_c",
+    "b_pelvis_c",
+    "b_spine_a_c",
+    "b_spine_b_c",
+    "b_chest_c",
+    "b_neck_c",
+    "b_head_c",
+    "b_ponytail_c",
+    "b_clavicle_l",
+    "b_upperarm_l",
+    "b_forearm_l",
+    "b_hand_l",
+    "b_clavicle_r",
+    "b_upperarm_r",
+    "b_forearm_r",
+    "b_hand_r",
+    "b_thigh_l",
+    "b_shin_l",
+    "b_foot_l",
+    "b_toe_l",
+    "b_thigh_r",
+    "b_shin_r",
+    "b_foot_r",
+    "b_toe_r",
+};
 
 static const float ANNEX_KIT_YAWS[N64GAME_ANNEX_SECTOR_COUNT] = {
     [N64GAME_ANNEX_ATRIUM] = 0.0f,
@@ -238,6 +284,152 @@ static void setup_actor_vertices(N64GameRenderer *renderer)
     }
 }
 
+static bool player_model_contract_ok(const T3DModel *model)
+{
+    if (model == NULL || t3d_model_get_skeleton(model) == NULL ||
+        t3d_model_get_animation_count(model) !=
+            (uint32_t)(sizeof(PLAYER_ANIMATION_NAMES) /
+                       sizeof(PLAYER_ANIMATION_NAMES[0]))) {
+        return false;
+    }
+    const T3DChunkSkeleton *const skeleton = t3d_model_get_skeleton(model);
+    if (skeleton->boneCount != (uint16_t)PLAYER_BONE_COUNT) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < sizeof(PLAYER_ANIMATION_NAMES) /
+             sizeof(PLAYER_ANIMATION_NAMES[0]);
+         ++index) {
+        const T3DChunkAnim *const animation = t3d_model_get_animation(
+            model, PLAYER_ANIMATION_NAMES[index]
+        );
+        if (animation == NULL || animation->duration <= 0.0f ||
+            animation->filePath == NULL || animation->filePath[0] == '\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool player_skeleton_contract_ok(T3DSkeleton *skeleton)
+{
+    if (skeleton == NULL || skeleton->bones == NULL ||
+        skeleton->boneMatricesFP == NULL || skeleton->skeletonRef == NULL ||
+        skeleton->skeletonRef->boneCount != (uint16_t)PLAYER_BONE_COUNT) {
+        return false;
+    }
+    for (size_t index = 0U; index < (size_t)PLAYER_BONE_COUNT; ++index) {
+        if (t3d_skeleton_find_bone(skeleton, PLAYER_BONE_NAMES[index]) !=
+            (int)index) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool setup_player(N64GameRenderer *renderer)
+{
+    if (!player_render_assets_load(&renderer->player_assets)) {
+        debugf("[player] render-asset load failed\n");
+        return false;
+    }
+    renderer->player_model = t3d_model_load(PLAYER_MODEL_PATH);
+    if (!player_model_contract_ok(renderer->player_model)) {
+        debugf("[player] model contract failed: %s\n", PLAYER_MODEL_PATH);
+        return false;
+    }
+
+    renderer->player_skeleton = t3d_skeleton_create_buffered(
+        renderer->player_model, (int)renderer->buffer_count
+    );
+    if (!player_skeleton_contract_ok(&renderer->player_skeleton)) {
+        debugf("[player] skeleton contract or allocation failed\n");
+        return false;
+    }
+    renderer->player_idle_pose = t3d_skeleton_clone(
+        &renderer->player_skeleton, false
+    );
+    renderer->player_walk_pose = t3d_skeleton_clone(
+        &renderer->player_skeleton, false
+    );
+    renderer->player_run_pose = t3d_skeleton_clone(
+        &renderer->player_skeleton, false
+    );
+    if (renderer->player_idle_pose.bones == NULL ||
+        renderer->player_walk_pose.bones == NULL ||
+        renderer->player_run_pose.bones == NULL) {
+        debugf("[player] animation-pose allocation failed\n");
+        return false;
+    }
+
+    renderer->player_idle_anim = t3d_anim_create(
+        renderer->player_model, PLAYER_ANIMATION_NAMES[0]
+    );
+    renderer->player_walk_anim = t3d_anim_create(
+        renderer->player_model, PLAYER_ANIMATION_NAMES[1]
+    );
+    renderer->player_run_anim = t3d_anim_create(
+        renderer->player_model, PLAYER_ANIMATION_NAMES[2]
+    );
+    if (renderer->player_idle_anim.animRef == NULL ||
+        renderer->player_walk_anim.animRef == NULL ||
+        renderer->player_run_anim.animRef == NULL ||
+        renderer->player_idle_anim.file == NULL ||
+        renderer->player_walk_anim.file == NULL ||
+        renderer->player_run_anim.file == NULL) {
+        debugf("[player] animation-stream load failed\n");
+        return false;
+    }
+    t3d_anim_attach(&renderer->player_idle_anim, &renderer->player_idle_pose);
+    t3d_anim_attach(&renderer->player_walk_anim, &renderer->player_walk_pose);
+    t3d_anim_attach(&renderer->player_run_anim, &renderer->player_run_pose);
+    t3d_anim_set_time(&renderer->player_idle_anim, 0.0f);
+    t3d_anim_set_time(&renderer->player_walk_anim, 0.0f);
+    t3d_anim_set_time(&renderer->player_run_anim, 0.0f);
+    t3d_anim_update(&renderer->player_idle_anim, 0.0f);
+    t3d_anim_update(&renderer->player_walk_anim, 0.0f);
+    t3d_anim_update(&renderer->player_run_anim, 0.0f);
+    t3d_skeleton_blend(
+        &renderer->player_skeleton,
+        &renderer->player_idle_pose,
+        &renderer->player_walk_pose,
+        0.0f
+    );
+    t3d_skeleton_blend(
+        &renderer->player_skeleton,
+        &renderer->player_skeleton,
+        &renderer->player_run_pose,
+        0.0f
+    );
+    for (uint32_t index = 0U; index < renderer->buffer_count; ++index) {
+        t3d_skeleton_update(&renderer->player_skeleton);
+    }
+
+    rspq_block_begin();
+    t3d_model_draw_custom(
+        renderer->player_model,
+        (T3DModelDrawConf){
+            .userData = &renderer->player_assets,
+            .dynTextureCb = player_render_assets_dynamic_texture_cb,
+            .matrices = (const T3DMat4FP *)t3d_segment_placeholder(
+                T3D_SEGMENT_SKELETON
+            ),
+        }
+    );
+    renderer->player_draw_block = rspq_block_end();
+    if (renderer->player_draw_block == NULL) {
+        debugf("[player] draw-block recording failed\n");
+        return false;
+    }
+    if (!player_render_assets_callback_ok(&renderer->player_assets)) {
+        debugf("[player] dynamic-texture callback contract failed\n");
+        return false;
+    }
+    renderer->player_yaw = 0.0f;
+    renderer->player_ready = true;
+    return true;
+}
+
 static bool setup_quarrune(N64GameRenderer *renderer)
 {
     if (!quarrune_render_assets_load(&renderer->quarrune_assets)) {
@@ -333,7 +525,8 @@ bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer)
 bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
-        renderer->floor_vertices != NULL || renderer->quarrune_ready) {
+        renderer->floor_vertices != NULL || renderer->player_ready ||
+        renderer->quarrune_ready) {
         return false;
     }
 
@@ -372,6 +565,7 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
             (uint32_t)ANNEX_KIT_MATRIX_COUNT,
             renderer->buffer_count
         ) ||
+        !setup_player(renderer) ||
         !setup_quarrune(renderer)) {
         n64game_renderer_destroy(renderer);
         return false;
@@ -394,6 +588,22 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     }
     n64game_static_model_free(&renderer->annex_kit);
     rspq_wait();
+    if (renderer->player_draw_block != NULL) {
+        rspq_block_free(renderer->player_draw_block);
+        renderer->player_draw_block = NULL;
+    }
+    t3d_anim_destroy(&renderer->player_run_anim);
+    t3d_anim_destroy(&renderer->player_walk_anim);
+    t3d_anim_destroy(&renderer->player_idle_anim);
+    t3d_skeleton_destroy(&renderer->player_run_pose);
+    t3d_skeleton_destroy(&renderer->player_walk_pose);
+    t3d_skeleton_destroy(&renderer->player_idle_pose);
+    t3d_skeleton_destroy(&renderer->player_skeleton);
+    if (renderer->player_model != NULL) {
+        t3d_model_free(renderer->player_model);
+        renderer->player_model = NULL;
+    }
+    (void)player_render_assets_unload(&renderer->player_assets);
     if (renderer->quarrune_draw_block != NULL) {
         rspq_block_free(renderer->quarrune_draw_block);
         renderer->quarrune_draw_block = NULL;
@@ -430,6 +640,101 @@ static void draw_floor(const N64GameRenderer *renderer)
     t3d_tri_draw(0, 1, 2);
     t3d_tri_draw(0, 2, 3);
     t3d_tri_sync();
+}
+
+static float clamp_unit(float value)
+{
+    if (value < 0.0f) {
+        return 0.0f;
+    }
+    if (value > 1.0f) {
+        return 1.0f;
+    }
+    return value;
+}
+
+static void update_player_pose(
+    N64GameRenderer *renderer,
+    const N64GameCore *game
+)
+{
+    static const float FIXED_DELTA_SECONDS = 1.0f / 30.0f;
+    const bool locomotion_frozen = game->paused ||
+        game->menu != N64GAME_MENU_CLOSED ||
+        game->dialogue != N64GAME_DIALOGUE_NONE;
+    const float velocity_x_q8 = locomotion_frozen ?
+        0.0f : (float)game->player_velocity_x_q8;
+    const float velocity_z_q8 = locomotion_frozen ?
+        0.0f : (float)game->player_velocity_z_q8;
+    const float speed_q8 = sqrtf(
+        velocity_x_q8 * velocity_x_q8 + velocity_z_q8 * velocity_z_q8
+    );
+
+    if (speed_q8 > (float)PLAYER_YAW_DEADZONE_Q8) {
+        /*
+         * Ari faces Blender -Y, which exports as Tiny3D local +Z. Tiny3D's
+         * +Y Euler convention therefore needs the negative X/Z heading.
+         */
+        renderer->player_yaw = -atan2f(velocity_x_q8, velocity_z_q8);
+    }
+
+    const float walk_blend = clamp_unit(
+        speed_q8 / (float)PLAYER_WALK_SPEED_Q8
+    );
+    const float run_blend = clamp_unit(
+        (speed_q8 - (float)PLAYER_WALK_SPEED_Q8) /
+        (float)(PLAYER_RUN_SPEED_Q8 - PLAYER_WALK_SPEED_Q8)
+    );
+    const float walk_cycle_speed = locomotion_frozen ?
+        0.0f : speed_q8 / (float)PLAYER_WALK_SPEED_Q8;
+    const float run_cycle_speed = locomotion_frozen ?
+        0.0f : speed_q8 / (float)PLAYER_RUN_SPEED_Q8;
+
+    t3d_anim_set_speed(&renderer->player_idle_anim, 1.0f);
+    t3d_anim_set_speed(&renderer->player_walk_anim, walk_cycle_speed);
+    t3d_anim_set_speed(&renderer->player_run_anim, run_cycle_speed);
+    t3d_anim_update(&renderer->player_idle_anim, FIXED_DELTA_SECONDS);
+    t3d_anim_update(&renderer->player_walk_anim, FIXED_DELTA_SECONDS);
+    t3d_anim_update(&renderer->player_run_anim, FIXED_DELTA_SECONDS);
+    t3d_skeleton_blend(
+        &renderer->player_skeleton,
+        &renderer->player_idle_pose,
+        &renderer->player_walk_pose,
+        walk_blend
+    );
+    t3d_skeleton_blend(
+        &renderer->player_skeleton,
+        &renderer->player_skeleton,
+        &renderer->player_run_pose,
+        run_blend
+    );
+    t3d_skeleton_update(&renderer->player_skeleton);
+}
+
+static void draw_player(
+    N64GameRenderer *renderer,
+    const N64GameCore *game,
+    float x,
+    float z
+)
+{
+    assertf(renderer->player_ready, "Ari player renderer is not ready");
+    update_player_pose(renderer, game);
+    const float scales[3] = {
+        ANNEX_PLAYER_SCALE,
+        ANNEX_PLAYER_SCALE,
+        ANNEX_PLAYER_SCALE,
+    };
+    const float rotations[3] = {0.0f, renderer->player_yaw, 0.0f};
+    const float translation[3] = {x, ANNEX_WORLD_FLOOR_Y, z};
+    const size_t matrix_slot = (size_t)renderer->frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_skeleton_use(&renderer->player_skeleton);
+    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
+    rspq_block_run(renderer->player_draw_block);
+    t3d_matrix_pop(1);
 }
 
 static void draw_actor(
@@ -984,9 +1289,71 @@ static void draw_annex_menu(const N64GameCore *game)
     }
 }
 
+static void annex_camera_player_local_position(
+    N64GameAnnexSector sector,
+    float yaw,
+    float player_x,
+    float player_z,
+    float *player_local_x,
+    float *player_local_z
+)
+{
+    int32_t anchor_x_q8 = 0;
+    int32_t anchor_z_q8 = 0;
+    n64game_annex_safe_anchor(sector, &anchor_x_q8, &anchor_z_q8);
+    const float delta_x = player_x - (float)anchor_x_q8 / 256.0f;
+    const float delta_z = player_z - (float)anchor_z_q8 / 256.0f;
+    const float sine = fm_sinf(yaw);
+    const float cosine = fm_cosf(yaw);
+    *player_local_x = cosine * delta_x + sine * delta_z;
+    *player_local_z = -sine * delta_x + cosine * delta_z;
+}
+
+static float clamp_annex_camera_local(float value)
+{
+    if (value < -(float)ANNEX_CAMERA_SAFE_HALF_EXTENT) {
+        return -(float)ANNEX_CAMERA_SAFE_HALF_EXTENT;
+    }
+    if (value > (float)ANNEX_CAMERA_SAFE_HALF_EXTENT) {
+        return (float)ANNEX_CAMERA_SAFE_HALF_EXTENT;
+    }
+    return value;
+}
+
+static void update_annex_camera_rail(
+    N64GameRenderer *renderer,
+    N64GameAnnexSector sector,
+    float player_local_z
+)
+{
+    const bool sector_changed = renderer->annex_camera_ready &&
+        renderer->annex_camera_sector != sector;
+    if (!renderer->annex_camera_ready || sector_changed) {
+        renderer->annex_camera_sector = sector;
+        renderer->annex_camera_boom_side = player_local_z > 0.0f ? -1 : 1;
+        renderer->annex_camera_ready = true;
+        if (sector_changed) {
+            renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES;
+        }
+        return;
+    }
+
+    int8_t next_side = renderer->annex_camera_boom_side;
+    if (next_side > 0 &&
+        player_local_z > (float)ANNEX_CAMERA_SWITCH_LOCAL_Z) {
+        next_side = -1;
+    } else if (next_side < 0 &&
+               player_local_z < -(float)ANNEX_CAMERA_SWITCH_LOCAL_Z) {
+        next_side = 1;
+    }
+    if (next_side != renderer->annex_camera_boom_side) {
+        renderer->annex_camera_boom_side = next_side;
+        renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES;
+    }
+}
+
 static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    static const float PLAYER_SCALE = 0.24f;
     static const float SERA_SCALE = 0.38f;
     static const float TAVI_SCALE = 0.32f;
     static const float BEACON_SCALE = 0.34f;
@@ -999,28 +1366,53 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         (unsigned long)sector
     );
     const float yaw = ANNEX_KIT_YAWS[sector];
-    if (!renderer->annex_camera_ready) {
-        renderer->annex_camera_sector = game->annex_sector;
-        renderer->annex_camera_ready = true;
-    } else if (renderer->annex_camera_sector != game->annex_sector) {
-        renderer->annex_camera_sector = game->annex_sector;
-        renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES;
-    }
+    float player_local_x = 0.0f;
+    float player_local_z = 0.0f;
+    annex_camera_player_local_position(
+        game->annex_sector,
+        yaw,
+        player_x,
+        player_z,
+        &player_local_x,
+        &player_local_z
+    );
+    update_annex_camera_rail(renderer, game->annex_sector, player_local_z);
+    assertf(
+        renderer->annex_camera_boom_side == -1 ||
+            renderer->annex_camera_boom_side == 1,
+        "Annex camera rail side is invalid: %d",
+        (int)renderer->annex_camera_boom_side
+    );
+    const float camera_boom_z = (float)(
+        renderer->annex_camera_boom_side * ANNEX_CAMERA_BOOM_DISTANCE
+    );
+    const float target_lead_z = (float)(
+        -renderer->annex_camera_boom_side * ANNEX_CAMERA_LOOK_LEAD
+    );
+    const float camera_local_x = clamp_annex_camera_local(player_local_x);
+    const float camera_local_z = clamp_annex_camera_local(
+        player_local_z + camera_boom_z
+    );
+    const float camera_offset_local_x = camera_local_x - player_local_x;
+    const float camera_offset_local_z = camera_local_z - player_local_z;
     float camera_x = 0.0f;
     float camera_z = 0.0f;
     float target_x = 0.0f;
     float target_z = 0.0f;
-    rotate_annex_local_offset(yaw, 15.0f, 23.0f, &camera_x, &camera_z);
-    rotate_annex_local_offset(yaw, 0.8f, -10.0f, &target_x, &target_z);
-    const fm_vec3_t camera = {{player_x + camera_x, 0.0f, player_z + camera_z}};
-    const fm_vec3_t target = {{player_x + target_x, -9.0f, player_z + target_z}};
+    rotate_annex_local_offset(
+        yaw,
+        camera_offset_local_x,
+        camera_offset_local_z,
+        &camera_x,
+        &camera_z
+    );
+    rotate_annex_local_offset(yaw, 0.0f, target_lead_z, &target_x, &target_z);
+    const fm_vec3_t camera = {{player_x + camera_x, -4.0f, player_z + camera_z}};
+    const fm_vec3_t target = {{player_x + target_x, -12.0f, player_z + target_z}};
     begin_world_render(renderer, &camera, &target);
     draw_annex_kit_module(renderer, game->annex_sector);
     const float angle = (float)game->scene_ticks * 0.018f;
-    draw_actor(
-        renderer, 0U, 4U, player_x, grounded_actor_origin(PLAYER_SCALE),
-        player_z, PLAYER_SCALE, angle
-    );
+    draw_player(renderer, game, player_x, player_z);
     switch (game->annex_sector) {
     case N64GAME_ANNEX_ATRIUM:
         draw_actor(

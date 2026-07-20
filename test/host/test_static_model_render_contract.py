@@ -177,6 +177,7 @@ class StaticModelRenderContractTests(unittest.TestCase):
 
     def test_native_camera_tracks_the_active_module_without_remote_actor_clutter(self) -> None:
         rotate = self.function_body("rotate_annex_local_offset")
+        rail = self.function_body("update_annex_camera_rail")
         annex = self.function_body("draw_annex")
         battle = self.function_body("draw_battle")
         for token in (
@@ -186,23 +187,29 @@ class StaticModelRenderContractTests(unittest.TestCase):
             self.assertIn(token, rotate)
         for token in (
             "ANNEX_KIT_YAWS[sector]",
-            "rotate_annex_local_offset(yaw, 15.0f, 23.0f",
-            "rotate_annex_local_offset(yaw, 0.8f, -10.0f",
-            "player_x + camera_x, 0.0f, player_z + camera_z",
-            "player_x + target_x, -9.0f, player_z + target_z",
-            "PLAYER_SCALE = 0.24f",
+            "camera_local_x = clamp_annex_camera_local(player_local_x)",
+            "player_local_z + camera_boom_z",
+            "camera_offset_local_x = camera_local_x - player_local_x",
+            "camera_offset_local_z = camera_local_z - player_local_z",
+            "camera_offset_local_x,",
+            "camera_offset_local_z,",
+            "rotate_annex_local_offset(yaw, 0.0f, target_lead_z",
+            "player_x + camera_x, -4.0f, player_z + camera_z",
+            "player_x + target_x, -12.0f, player_z + target_z",
             "switch (game->annex_sector)",
             "case N64GAME_ANNEX_ATRIUM:",
             "case N64GAME_ANNEX_WORKSHOP:",
             "case N64GAME_ANNEX_OVERLOOK:",
         ):
             self.assertIn(token, annex)
+        self.assertIn("ANNEX_PLAYER_SCALE = 0.0833333f", self.source)
         self.assertIn("N64GameAnnexSector annex_camera_sector;", self.header)
         self.assertIn("uint8_t annex_camera_fade_ticks;", self.header)
+        self.assertIn("int8_t annex_camera_boom_side;", self.header)
         self.assertIn("bool annex_camera_ready;", self.header)
         self.assertIn("ANNEX_CAMERA_FADE_FRAMES = 8", self.source)
-        self.assertIn("renderer->annex_camera_sector != game->annex_sector", annex)
-        self.assertIn("renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES", annex)
+        self.assertIn("renderer->annex_camera_sector != sector", rail)
+        self.assertIn("renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES", rail)
         self.assertIn("fade_to_black(fade_alpha);", annex)
         self.assertIn("--renderer->annex_camera_fade_ticks;", annex)
         self.assertNotIn("player_z + 88.0f", annex)

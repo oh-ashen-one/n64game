@@ -35,6 +35,15 @@ class BuildContractTests(unittest.TestCase):
         self.assertEqual(sys.flags.no_user_site, 1)
         self.assertEqual(sys.flags.dont_write_bytecode, 1)
 
+    def test_release_sources_have_no_native_visual_autopilot(self) -> None:
+        for relative_path in (
+            "mk/rom.mk",
+            "src/n64game_core.c",
+            "src/n64game_render.c",
+        ):
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn("N64GAME_NATIVE_VISUAL_AUTOPILOT", source)
+
     @staticmethod
     def pinned_rom_fixture() -> bytearray:
         ipl3_source = (ROOT / "vendor" / "libdragon" / "tools" / "ipl3.h").read_text(encoding="utf-8")
@@ -66,13 +75,14 @@ class BuildContractTests(unittest.TestCase):
 
     def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 8)
+        self.assertEqual(report["runtime_candidate_count"], 11)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
             [
                 "model_glb", "texture_png", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
             ],
         )
         self.assertTrue(all(
@@ -224,6 +234,7 @@ class BuildContractTests(unittest.TestCase):
             "n64game_render.o",
             "n64game_save.o",
             "n64game_telemetry.o",
+            "player_render_assets.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
 
@@ -262,6 +273,35 @@ class BuildContractTests(unittest.TestCase):
         self.assertNotIn("tex_annex_architecture_ci8_64x64", makefile)
         self.assertIn("$(ANNEX_KIT_RUNTIME_CANDIDATES)", makefile)
         self.assertNotIn("mkasset", makefile)
+
+    def test_player_candidate_emits_exact_skinned_model_streams_and_sprites(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("PLAYER_SOURCE_DIR := runtime-candidates/chr/chr.player.ari", makefile)
+        self.assertIn("PLAYER_FILESYSTEM_DIR := filesystem/chr/chr.player.ari", makefile)
+        for output in (
+            "player_ari.t3dm",
+            "player_ari.0.sdata",
+            "player_ari.1.sdata",
+            "player_ari.2.sdata",
+        ):
+            self.assertIn(output, makefile)
+        self.assertIn(
+            "$(PLAYER_MODEL) $(PLAYER_IDLE) $(PLAYER_WALK) $(PLAYER_RUN) &:",
+            makefile,
+        )
+        self.assertIn(
+            '$(T3D_GLTF_TO_3D) "$<" "$(PLAYER_MODEL)" --base-scale=64 --asset-path=runtime-candidates',
+            makefile,
+        )
+        self.assertIn(
+            "--format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn(
+            "--format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn("$(PLAYER_RUNTIME_CANDIDATES)", makefile)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
