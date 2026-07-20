@@ -11,8 +11,7 @@ enum {
     STYLE_MUTED = 2,
     STYLE_WARNING = 3,
     STYLE_SELECTED = 4,
-    ACTOR_STYLE_COUNT = 8,
-    ACTOR_MATRIX_COUNT = 5,
+    ACTOR_MATRIX_COUNT = 2,
     ANNEX_KIT_MATRIX_COUNT = N64GAME_ANNEX_SECTOR_COUNT,
     ANNEX_CAMERA_FADE_FRAMES = 8,
     ANNEX_CAMERA_BOOM_DISTANCE = 18,
@@ -46,6 +45,9 @@ static const float ANNEX_KIT_CENTER_OFFSET_Z = 8.25f;
 static const float ANNEX_WORLD_FLOOR_Y = -18.0f;
 static const float ANNEX_KIT_BATTLE_SCALE_MULTIPLIER = 1.6f;
 static const float ANNEX_PLAYER_SCALE = 0.0833333f;
+static const float ANNEX_SERA_SCALE = 0.0833333f;
+static const float ANNEX_TAVI_SCALE = 0.0833333f;
+static const float ANNEX_BEACON_SCALE = 0.10f;
 static const float ANNEX_QUARRUNE_SCALE = 0.10f;
 static const float BATTLE_QUARRUNE_SCALE = 0.20f;
 static const float BATTLE_SUPPORT_SCALES[N64GAME_SUPPORT_ECHO_COUNT] = {
@@ -102,17 +104,6 @@ static const float ANNEX_KIT_YAWS[N64GAME_ANNEX_SECTOR_COUNT] = {
     [N64GAME_ANNEX_SIMULATION] = 1.5707963f,
     [N64GAME_ANNEX_WORKSHOP] = -1.5707963f,
     [N64GAME_ANNEX_OVERLOOK] = 3.1415927f,
-};
-
-static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
-    UINT32_C(0xD7A253FF),
-    UINT32_C(0x79C9D4FF),
-    UINT32_C(0x3AA6A0FF),
-    UINT32_C(0xD45E49FF),
-    UINT32_C(0xE4C49AFF),
-    UINT32_C(0x5DDDC6FF),
-    UINT32_C(0xA36BD1FF),
-    UINT32_C(0xC88B4AFF),
 };
 
 static void text_at(float x, float y, uint8_t style, float width, const char *text)
@@ -279,25 +270,6 @@ void n64game_static_model_free(N64GameStaticModel *asset)
         free_uncached(asset->matrices);
     }
     *asset = (N64GameStaticModel){0};
-}
-
-static void setup_actor_vertices(N64GameRenderer *renderer)
-{
-    const uint16_t top = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, 1.0f, 0.0f}});
-    const uint16_t left = t3d_vert_pack_normal(&(fm_vec3_t){{-0.7f, -0.4f, 0.6f}});
-    const uint16_t right = t3d_vert_pack_normal(&(fm_vec3_t){{0.7f, -0.4f, 0.6f}});
-    const uint16_t back = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, -0.4f, -0.9f}});
-    for (size_t style = 0U; style < ACTOR_STYLE_COUNT; ++style) {
-        const uint32_t color = ACTOR_COLORS[style];
-        renderer->actor_vertices[style * 2U] = (T3DVertPacked){
-            .posA = {0, 22, 0}, .rgbaA = color, .normA = top,
-            .posB = {-14, -16, 12}, .rgbaB = color, .normB = left,
-        };
-        renderer->actor_vertices[style * 2U + 1U] = (T3DVertPacked){
-            .posA = {14, -16, 12}, .rgbaA = color, .normA = right,
-            .posB = {0, -16, -16}, .rgbaB = color, .normB = back,
-        };
-    }
 }
 
 static bool player_model_contract_ok(const T3DModel *model)
@@ -542,14 +514,12 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
         renderer->floor_vertices != NULL || renderer->player_ready ||
-        renderer->quarrune_ready || renderer->support_echoes_ready) {
+        renderer->quarrune_ready || renderer->support_echoes_ready ||
+        renderer->story_cast_ready) {
         return false;
     }
 
     renderer->floor_vertices = malloc_uncached(sizeof(T3DVertPacked) * 2U);
-    renderer->actor_vertices = malloc_uncached(
-        sizeof(T3DVertPacked) * 2U * ACTOR_STYLE_COUNT
-    );
     renderer->buffer_count = display_get_num_buffers();
     if (renderer->buffer_count == 0U || renderer->buffer_count > UINT16_MAX) {
         n64game_renderer_destroy(renderer);
@@ -558,8 +528,7 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     renderer->actor_matrices = malloc_uncached(
         sizeof(T3DMat4FP) * ACTOR_MATRIX_COUNT * (size_t)renderer->buffer_count
     );
-    if (renderer->floor_vertices == NULL || renderer->actor_vertices == NULL ||
-        renderer->actor_matrices == NULL) {
+    if (renderer->floor_vertices == NULL || renderer->actor_matrices == NULL) {
         n64game_renderer_destroy(renderer);
         return false;
     }
@@ -572,7 +541,6 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
         .posA = {160, -18, 108}, .rgbaA = UINT32_C(0x294B50FF), .normA = up,
         .posB = {-130, -18, 108}, .rgbaB = UINT32_C(0x3A5551FF), .normB = up,
     };
-    setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
     if (renderer->viewport._matFP == NULL ||
         !n64game_static_model_load(
@@ -585,11 +553,15 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
         !setup_quarrune(renderer) ||
         !support_echo_renderer_init(
             &renderer->support_echoes, renderer->buffer_count
+        ) ||
+        !story_cast_renderer_init(
+            &renderer->story_cast, renderer->buffer_count
         )) {
         n64game_renderer_destroy(renderer);
         return false;
     }
     renderer->support_echoes_ready = true;
+    renderer->story_cast_ready = true;
     return true;
 }
 
@@ -607,6 +579,7 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
         return;
     }
     n64game_static_model_free(&renderer->annex_kit);
+    story_cast_renderer_destroy(&renderer->story_cast);
     support_echo_renderer_destroy(&renderer->support_echoes);
     rspq_wait();
     if (renderer->player_draw_block != NULL) {
@@ -639,9 +612,6 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     t3d_viewport_destroy(&renderer->viewport);
     if (renderer->actor_matrices != NULL) {
         free_uncached(renderer->actor_matrices);
-    }
-    if (renderer->actor_vertices != NULL) {
-        free_uncached(renderer->actor_vertices);
     }
     if (renderer->floor_vertices != NULL) {
         free_uncached(renderer->floor_vertices);
@@ -712,23 +682,32 @@ static void update_player_pose(
         0.0f : speed_q8 / (float)PLAYER_RUN_SPEED_Q8;
 
     t3d_anim_set_speed(&renderer->player_idle_anim, 1.0f);
-    t3d_anim_set_speed(&renderer->player_walk_anim, walk_cycle_speed);
-    t3d_anim_set_speed(&renderer->player_run_anim, run_cycle_speed);
     t3d_anim_update(&renderer->player_idle_anim, FIXED_DELTA_SECONDS);
-    t3d_anim_update(&renderer->player_walk_anim, FIXED_DELTA_SECONDS);
-    t3d_anim_update(&renderer->player_run_anim, FIXED_DELTA_SECONDS);
-    t3d_skeleton_blend(
-        &renderer->player_skeleton,
-        &renderer->player_idle_pose,
-        &renderer->player_walk_pose,
-        walk_blend
-    );
-    t3d_skeleton_blend(
-        &renderer->player_skeleton,
-        &renderer->player_skeleton,
-        &renderer->player_run_pose,
-        run_blend
-    );
+    if (speed_q8 > (float)PLAYER_YAW_DEADZONE_Q8) {
+        t3d_anim_set_speed(&renderer->player_walk_anim, walk_cycle_speed);
+        t3d_anim_set_speed(&renderer->player_run_anim, run_cycle_speed);
+        t3d_anim_update(&renderer->player_walk_anim, FIXED_DELTA_SECONDS);
+        t3d_anim_update(&renderer->player_run_anim, FIXED_DELTA_SECONDS);
+        t3d_skeleton_blend(
+            &renderer->player_skeleton,
+            &renderer->player_idle_pose,
+            &renderer->player_walk_pose,
+            walk_blend
+        );
+        t3d_skeleton_blend(
+            &renderer->player_skeleton,
+            &renderer->player_skeleton,
+            &renderer->player_run_pose,
+            run_blend
+        );
+    } else {
+        t3d_skeleton_blend(
+            &renderer->player_skeleton,
+            &renderer->player_idle_pose,
+            &renderer->player_idle_pose,
+            0.0f
+        );
+    }
     t3d_skeleton_update(&renderer->player_skeleton);
 }
 
@@ -758,38 +737,6 @@ static void draw_player(
     t3d_matrix_pop(1);
 }
 
-static void draw_actor(
-    N64GameRenderer *renderer,
-    size_t matrix_index,
-    size_t style,
-    float x,
-    float y,
-    float z,
-    float scale,
-    float angle
-)
-{
-    rdpq_mode_tlut(TLUT_NONE);
-    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
-    t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
-    const float scales[3] = {scale, scale, scale};
-    const float rotations[3] = {0.0f, angle, 0.0f};
-    const float translation[3] = {x, y, z};
-    const size_t matrix_slot = matrix_index * (size_t)renderer->buffer_count +
-        (size_t)renderer->frame_index;
-    t3d_mat4fp_from_srt_euler(
-        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
-    );
-    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
-    t3d_vert_load(&renderer->actor_vertices[style * 2U], 0, 4);
-    t3d_matrix_pop(1);
-    t3d_tri_draw(0, 1, 2);
-    t3d_tri_draw(0, 3, 1);
-    t3d_tri_draw(0, 2, 3);
-    t3d_tri_draw(1, 3, 2);
-    t3d_tri_sync();
-}
-
 static void draw_quarrune(
     N64GameRenderer *renderer,
     size_t matrix_index,
@@ -813,11 +760,6 @@ static void draw_quarrune(
     t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
     rspq_block_run(renderer->quarrune_draw_block);
     t3d_matrix_pop(1);
-}
-
-static float grounded_actor_origin(float scale)
-{
-    return ANNEX_WORLD_FLOOR_Y + 16.0f * scale;
 }
 
 static void rotate_annex_local_offset(
@@ -1375,9 +1317,6 @@ static void update_annex_camera_rail(
 
 static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    static const float SERA_SCALE = 0.38f;
-    static const float TAVI_SCALE = 0.32f;
-    static const float BEACON_SCALE = 0.34f;
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
     const uint32_t sector = (uint32_t)game->annex_sector;
@@ -1385,6 +1324,11 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         sector < (uint32_t)N64GAME_ANNEX_SECTOR_COUNT,
         "Annex camera sector is invalid: %lu",
         (unsigned long)sector
+    );
+    assertf(
+        renderer->story_cast_ready &&
+            story_cast_renderer_update(&renderer->story_cast, game),
+        "Story-cast renderer update failed"
     );
     const float yaw = ANNEX_KIT_YAWS[sector];
     float player_local_x = 0.0f;
@@ -1436,29 +1380,151 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
     draw_player(renderer, game, player_x, player_z);
     switch (game->annex_sector) {
     case N64GAME_ANNEX_ATRIUM:
-        draw_actor(
-            renderer, 1U, 5U, -38.0f, grounded_actor_origin(SERA_SCALE),
-            -8.0f, SERA_SCALE, 0.3f
+        /*
+         * Keep authored NPCs inside their ten-unit interaction halos but off
+         * the halo centers, so the player cannot cover the speaker at the
+         * normal prompt position.
+         */
+        assertf(
+            story_cast_renderer_draw(
+                &renderer->story_cast,
+                N64GAME_STORY_CAST_SERA,
+                renderer->frame_index,
+                -36.0f,
+                ANNEX_WORLD_FLOOR_Y,
+                4.0f,
+                ANNEX_SERA_SCALE,
+                0.3f
+            ),
+            "Sera draw failed"
         );
-        draw_actor(
-            renderer, 2U, 7U, 5.0f, grounded_actor_origin(TAVI_SCALE),
-            -34.0f, TAVI_SCALE, -0.4f
+        assertf(
+            story_cast_renderer_draw(
+                &renderer->story_cast,
+                N64GAME_STORY_CAST_TAVI,
+                renderer->frame_index,
+                8.0f,
+                ANNEX_WORLD_FLOOR_Y,
+                -26.0f,
+                ANNEX_TAVI_SCALE,
+                -0.4f
+            ),
+            "Tavi draw failed"
         );
+        break;
+    case N64GAME_ANNEX_SIMULATION:
+        if (game->quest == N64GAME_QUEST_READY_FOR_TRIAL ||
+            game->quest == N64GAME_QUEST_RESONANCE_TRIAL ||
+            game->dialogue == N64GAME_DIALOGUE_SERA_TRIAL ||
+            game->dialogue == N64GAME_DIALOGUE_BATTLE_VICTORY) {
+            assertf(
+                story_cast_renderer_draw(
+                    &renderer->story_cast,
+                    N64GAME_STORY_CAST_SERA,
+                    renderer->frame_index,
+                    -74.0f,
+                    ANNEX_WORLD_FLOOR_Y,
+                    10.0f,
+                    ANNEX_SERA_SCALE,
+                    -1.3f
+                ),
+                "Simulation Sera draw failed"
+            );
+        }
         break;
     case N64GAME_ANNEX_WORKSHOP:
         draw_quarrune(
-            renderer, 3U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f,
+            renderer, 1U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f,
             ANNEX_QUARRUNE_SCALE,
             0.12f + fm_sinf(angle * 1.4f) * 0.035f
         );
         break;
     case N64GAME_ANNEX_OVERLOOK:
-        draw_actor(
-            renderer, 4U, 6U, 100.0f, grounded_actor_origin(BEACON_SCALE),
-            50.0f, BEACON_SCALE, -angle
+        assertf(
+            story_cast_renderer_draw(
+                &renderer->story_cast,
+                N64GAME_STORY_CAST_BEACON,
+                renderer->frame_index,
+                100.0f,
+                ANNEX_WORLD_FLOOR_Y,
+                44.0f,
+                ANNEX_BEACON_SCALE,
+                0.15f
+            ),
+            "Beacon draw failed"
         );
+        if (game->quest == N64GAME_QUEST_BEACON_OVERLOOK) {
+            assertf(
+                story_cast_renderer_draw(
+                    &renderer->story_cast,
+                    N64GAME_STORY_CAST_SERA,
+                    renderer->frame_index,
+                    116.0f,
+                    ANNEX_WORLD_FLOOR_Y,
+                    44.0f,
+                    ANNEX_SERA_SCALE,
+                    0.3f
+                ),
+                "Overlook Sera draw failed"
+            );
+            assertf(
+                story_cast_renderer_draw(
+                    &renderer->story_cast,
+                    N64GAME_STORY_CAST_TAVI,
+                    renderer->frame_index,
+                    90.0f,
+                    ANNEX_WORLD_FLOOR_Y,
+                    40.0f,
+                    ANNEX_TAVI_SCALE,
+                    -0.4f
+                ),
+                "Overlook Tavi draw failed"
+            );
+            assertf(
+                renderer->support_echoes_ready &&
+                    (((game->scene_ticks & UINT32_C(1)) != 0U) ||
+                     support_echo_renderer_update_ambient(
+                         &renderer->support_echoes,
+                         N64GAME_SUPPORT_ECHO_AYSELOR
+                     )),
+                "Overlook Ayselor ambient update failed"
+            );
+            assertf(
+                support_echo_renderer_draw_shadow(
+                    &renderer->support_echoes,
+                    N64GAME_SUPPORT_ECHO_AYSELOR,
+                    renderer->frame_index,
+                    108.0f,
+                    ANNEX_WORLD_FLOOR_Y,
+                    40.0f,
+                    12.0f
+                ),
+                "Overlook Ayselor shadow draw failed"
+            );
+            draw_quarrune(
+                renderer,
+                1U,
+                122.0f,
+                ANNEX_WORLD_FLOOR_Y,
+                38.0f,
+                ANNEX_QUARRUNE_SCALE,
+                -1.65f + fm_sinf(angle * 1.4f) * 0.025f
+            );
+            assertf(
+                support_echo_renderer_draw(
+                    &renderer->support_echoes,
+                    N64GAME_SUPPORT_ECHO_AYSELOR,
+                    renderer->frame_index,
+                    108.0f,
+                    ANNEX_WORLD_FLOOR_Y,
+                    40.0f,
+                    0.21f,
+                    3.7f
+                ),
+                "Overlook Ayselor draw failed"
+            );
+        }
         break;
-    case N64GAME_ANNEX_SIMULATION:
     case N64GAME_ANNEX_SECTOR_COUNT:
         break;
     }

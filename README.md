@@ -27,6 +27,8 @@ This screenshot is the small Gate 3 diagnostic—not gameplay or representative 
 - `Start` or `Z`: open or close Pause
 - `C-down`: open or close the Field Relay after it is unlocked
 
+When launched through `scripts/run-ares` on the pinned macOS Ares v148 build, the wrapper supplies a deterministic keyboard map: arrow keys are the D-pad, keyboard `Z` is N64 `A`, keyboard `X` is N64 `B`, keyboard `C` is N64 C-down, `Space` is N64 `Z`, and `Return` is N64 `Start`. Click the game window once before playing so macOS sends keyboard events to Ares.
+
 ## Creative direction
 
 The game uses an original retro desert-science-fiction setting:

@@ -386,11 +386,51 @@ static void test_one_shot_completion_and_knockout_hit_window(void)
     assert(renderer.instances[0].reposition_anim.set_time_count == 1U);
 }
 
+static void test_ambient_update_resets_battle_motion_and_updates_one_actor(void)
+{
+    SupportEchoRenderer renderer;
+    initialize_renderer(&renderer, 1.0f, 1.0f);
+    N64GameBattle battle = initialized_battle();
+
+    set_damage_event(&battle, 4U, 0U, N64GAME_TARGET_ALL);
+    assert(support_echo_renderer_update(&renderer, &battle));
+    const uint32_t skeleton_updates[N64GAME_SUPPORT_ECHO_COUNT] = {
+        renderer.instances[0].skeleton.update_count,
+        renderer.instances[1].skeleton.update_count,
+        renderer.instances[2].skeleton.update_count,
+    };
+    const uint32_t idle_updates[N64GAME_SUPPORT_ECHO_COUNT] = {
+        renderer.instances[0].idle_anim.update_count,
+        renderer.instances[1].idle_anim.update_count,
+        renderer.instances[2].idle_anim.update_count,
+    };
+
+    assert(support_echo_renderer_update_ambient(
+        &renderer, N64GAME_SUPPORT_ECHO_AYSELOR
+    ));
+    assert(!renderer.observed_event_serial_valid);
+    for (unsigned index = 0U;
+         index < (unsigned)N64GAME_SUPPORT_ECHO_COUNT;
+         ++index) {
+        assert(renderer.instances[index].motion ==
+               N64GAME_SUPPORT_ECHO_MOTION_IDLE);
+        assert(!t3d_anim_is_playing(&renderer.instances[index].reposition_anim));
+        assert(!t3d_anim_is_playing(&renderer.instances[index].hit_anim));
+        const uint32_t expected_delta =
+            index == (unsigned)N64GAME_SUPPORT_ECHO_AYSELOR ? 1U : 0U;
+        assert(renderer.instances[index].skeleton.update_count ==
+               skeleton_updates[index] + expected_delta);
+        assert(renderer.instances[index].idle_anim.update_count ==
+               idle_updates[index] + expected_delta);
+    }
+}
+
 int main(void)
 {
     test_target_all_side_mapping_and_duplicate_suppression();
     test_reset_and_serial_reuse();
     test_one_shot_completion_and_knockout_hit_window();
+    test_ambient_update_resets_battle_motion_and_updates_one_actor();
     puts("support Echoform renderer behavior harness: PASS");
     return 0;
 }

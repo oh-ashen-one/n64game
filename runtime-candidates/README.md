@@ -4,7 +4,15 @@ This directory contains materialized inputs used only to prove the real N64 conv
 
 These files are explicitly **not** Gate evidence, approvals, reviewed production source, or final art. They do not change `config/runtime-assets.tsv`, the Gate 5 exporter implementation lock, or any `PENDING` review decision. Every candidate must still pass the required native 320x240 review and remaining art gates; a later authorized promotion must replace this temporary lane with canonical `assets-src/` and reviewed output, then remove the corresponding candidate rows and files.
 
-The current lane contains the Quarrune hero model plus three source textures; one reusable open-top Annex threshold module plus three source textures; Ari's concept-stage hero model plus CI8 body and CI4 face sources; and battle-distance candidates for Ayselor, Gyreclast, and Kivarrax with one body, accent, and blob-shadow source apiece. Ari's single GLB includes only the exact native-iteration clips `idle_a`, `walk`, and `run`; the Tiny3D converter emits their three `.sdata` streams beside the model. This is a deliberately reduced movement proof, not the final hero/distance mesh pair or the retained animation package.
+The current lane contains the Quarrune hero model plus three source textures; one reusable open-top Annex threshold module plus three source textures; Ari's concept-stage hero model plus CI8 body and CI4 face sources; battle-distance candidates for Ayselor, Gyreclast, and Kivarrax; and authored story-distance candidates for Sera, Tavi, and the Annex beacon decoder. Ari's single GLB includes only the exact native-iteration clips `idle_a`, `walk`, and `run`; the Tiny3D converter emits their three `.sdata` streams beside the model. This is a deliberately reduced movement proof, not the final hero/distance mesh pair or the retained animation package.
+
+The story-cast candidates replace the last tetrahedral scene stand-ins in the runtime lane. Their source bytes are hash-locked, externally textured, rigid-skinned models; their runtime renderer requires every model, exact skeleton, and animation stream and fails initialization rather than drawing a primitive fallback.
+
+| Story candidate | Triangles | Materials | Joints | Retained clips |
+| --- | ---: | ---: | ---: | --- |
+| Dr. Sera Venn distance | 1,182 | 4 | 22 | `idle_a`, `diagnostic_scan`, `explain_starter`, `react_fracture` |
+| Tavi distance | 780 | 4 | 20 | `idle_a`, `greet`, `listen`, `reaction` |
+| Annex beacon decoder | 766 | 4 | 10 | `idle_aim`, `beacon_acquire`, `fracture` |
 
 The three supporting Echoform candidates retain only the benchmark subset `idle_a`, `reposition`, and `hit`. Their source-package budgets are locked here so accidental placeholder regressions fail before conversion:
 

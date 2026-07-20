@@ -92,6 +92,59 @@ PLAYER_RUNTIME_CANDIDATES := \
 	$(PLAYER_RUN) \
 	$(PLAYER_BODY) \
 	$(PLAYER_FACE)
+SERA_SOURCE_DIR := runtime-candidates/chr/chr.sera_venn
+SERA_FILESYSTEM_DIR := filesystem/chr/chr.sera_venn
+SERA_MODEL := $(SERA_FILESYSTEM_DIR)/sera_venn_distance.t3dm
+SERA_IDLE := $(SERA_FILESYSTEM_DIR)/sera_venn_distance.0.sdata
+SERA_DIAGNOSTIC := $(SERA_FILESYSTEM_DIR)/sera_venn_distance.1.sdata
+SERA_EXPLAIN := $(SERA_FILESYSTEM_DIR)/sera_venn_distance.2.sdata
+SERA_REACT := $(SERA_FILESYSTEM_DIR)/sera_venn_distance.3.sdata
+SERA_BODY := $(SERA_FILESYSTEM_DIR)/tex_sera_venn_body_ci4_64x64.sprite
+SERA_FACE := $(SERA_FILESYSTEM_DIR)/tex_sera_venn_face_ci4_32x32.sprite
+SERA_ACCENT := $(SERA_FILESYSTEM_DIR)/tex_sera_venn_accent_ci4_32x32.sprite
+SERA_RUNTIME_CANDIDATES := \
+	$(SERA_MODEL) \
+	$(SERA_IDLE) \
+	$(SERA_DIAGNOSTIC) \
+	$(SERA_EXPLAIN) \
+	$(SERA_REACT) \
+	$(SERA_BODY) \
+	$(SERA_FACE) \
+	$(SERA_ACCENT)
+TAVI_SOURCE_DIR := runtime-candidates/chr/chr.tavi
+TAVI_FILESYSTEM_DIR := filesystem/chr/chr.tavi
+TAVI_MODEL := $(TAVI_FILESYSTEM_DIR)/tavi_distance.t3dm
+TAVI_IDLE := $(TAVI_FILESYSTEM_DIR)/tavi_distance.0.sdata
+TAVI_GREET := $(TAVI_FILESYSTEM_DIR)/tavi_distance.1.sdata
+TAVI_LISTEN := $(TAVI_FILESYSTEM_DIR)/tavi_distance.2.sdata
+TAVI_REACTION := $(TAVI_FILESYSTEM_DIR)/tavi_distance.3.sdata
+TAVI_BODY := $(TAVI_FILESYSTEM_DIR)/tex_tavi_body_ci4_64x64.sprite
+TAVI_FACE_ACCENT := $(TAVI_FILESYSTEM_DIR)/tex_tavi_face_accent_ci4_32x32.sprite
+TAVI_RUNTIME_CANDIDATES := \
+	$(TAVI_MODEL) \
+	$(TAVI_IDLE) \
+	$(TAVI_GREET) \
+	$(TAVI_LISTEN) \
+	$(TAVI_REACTION) \
+	$(TAVI_BODY) \
+	$(TAVI_FACE_ACCENT)
+BEACON_SOURCE_DIR := runtime-candidates/prop/prop.annex.beacon_decoder
+BEACON_FILESYSTEM_DIR := filesystem/prop/prop.annex.beacon_decoder
+BEACON_MODEL := $(BEACON_FILESYSTEM_DIR)/annex_beacon_decoder.t3dm
+BEACON_IDLE := $(BEACON_FILESYSTEM_DIR)/annex_beacon_decoder.0.sdata
+BEACON_ACQUIRE := $(BEACON_FILESYSTEM_DIR)/annex_beacon_decoder.1.sdata
+BEACON_FRACTURE := $(BEACON_FILESYSTEM_DIR)/annex_beacon_decoder.2.sdata
+BEACON_BODY := $(BEACON_FILESYSTEM_DIR)/tex_annex_beacon_body_ci4_64x64.sprite
+BEACON_SIGNAL := $(BEACON_FILESYSTEM_DIR)/tex_annex_beacon_signal_ci4_32x32.sprite
+BEACON_SHADOW := $(BEACON_FILESYSTEM_DIR)/tex_annex_beacon_shadow_ia8_32x32.sprite
+BEACON_RUNTIME_CANDIDATES := \
+	$(BEACON_MODEL) \
+	$(BEACON_IDLE) \
+	$(BEACON_ACQUIRE) \
+	$(BEACON_FRACTURE) \
+	$(BEACON_BODY) \
+	$(BEACON_SIGNAL) \
+	$(BEACON_SHADOW)
 
 include $(N64_INST)/include/n64.mk
 include $(T3D_ROOT)/t3d.mk
@@ -107,6 +160,7 @@ OBJS := \
 	$(BUILD_DIR)/n64game_telemetry.o \
 	$(BUILD_DIR)/player_render_assets.o \
 	$(BUILD_DIR)/quarrune_render_assets.o \
+	$(BUILD_DIR)/story_cast_renderer.o \
 	$(BUILD_DIR)/support_echo_render_assets.o \
 	$(BUILD_DIR)/support_echo_renderer.o
 
@@ -252,13 +306,85 @@ $(PLAYER_FACE): $(PLAYER_SOURCE_DIR)/tex_player_ari_face_ci4_32x32.png
 	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
 
+$(SERA_MODEL) $(SERA_IDLE) $(SERA_DIAGNOSTIC) $(SERA_EXPLAIN) $(SERA_REACT) &: $(SERA_SOURCE_DIR)/sera_venn_distance.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(SERA_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(SERA_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(SERA_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(SERA_MODEL)"
+	@test -f "$(SERA_IDLE)"
+	@test -f "$(SERA_DIAGNOSTIC)"
+	@test -f "$(SERA_EXPLAIN)"
+	@test -f "$(SERA_REACT)"
+
+$(SERA_BODY): $(SERA_SOURCE_DIR)/tex_sera_venn_body_ci4_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(SERA_FACE): $(SERA_SOURCE_DIR)/tex_sera_venn_face_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(SERA_ACCENT): $(SERA_SOURCE_DIR)/tex_sera_venn_accent_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(TAVI_MODEL) $(TAVI_IDLE) $(TAVI_GREET) $(TAVI_LISTEN) $(TAVI_REACTION) &: $(TAVI_SOURCE_DIR)/tavi_distance.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(TAVI_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(TAVI_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(TAVI_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(TAVI_MODEL)"
+	@test -f "$(TAVI_IDLE)"
+	@test -f "$(TAVI_GREET)"
+	@test -f "$(TAVI_LISTEN)"
+	@test -f "$(TAVI_REACTION)"
+
+$(TAVI_BODY): $(TAVI_SOURCE_DIR)/tex_tavi_body_ci4_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(TAVI_FACE_ACCENT): $(TAVI_SOURCE_DIR)/tex_tavi_face_accent_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(BEACON_MODEL) $(BEACON_IDLE) $(BEACON_ACQUIRE) $(BEACON_FRACTURE) &: $(BEACON_SOURCE_DIR)/annex_beacon_decoder.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(BEACON_FILESYSTEM_DIR)
+	@echo "    [T3D-CANDIDATE] $(BEACON_MODEL)"
+	$(T3D_GLTF_TO_3D) "$<" "$(BEACON_MODEL)" --base-scale=64 --asset-path=runtime-candidates
+	@test -f "$(BEACON_MODEL)"
+	@test -f "$(BEACON_IDLE)"
+	@test -f "$(BEACON_ACQUIRE)"
+	@test -f "$(BEACON_FRACTURE)"
+
+$(BEACON_BODY): $(BEACON_SOURCE_DIR)/tex_annex_beacon_body_ci4_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(BEACON_SIGNAL): $(BEACON_SOURCE_DIR)/tex_annex_beacon_signal_ci4_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(BEACON_SHADOW): $(BEACON_SOURCE_DIR)/tex_annex_beacon_shadow_ia8_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
 $(BUILD_DIR)/$(ROM_NAME).dfs: \
 	$(QUARRUNE_RUNTIME_CANDIDATES) \
 	$(AYSELOR_RUNTIME_CANDIDATES) \
 	$(GYRECLAST_RUNTIME_CANDIDATES) \
 	$(KIVARRAX_RUNTIME_CANDIDATES) \
 	$(ANNEX_KIT_RUNTIME_CANDIDATES) \
-	$(PLAYER_RUNTIME_CANDIDATES)
+	$(PLAYER_RUNTIME_CANDIDATES) \
+	$(SERA_RUNTIME_CANDIDATES) \
+	$(TAVI_RUNTIME_CANDIDATES) \
+	$(BEACON_RUNTIME_CANDIDATES)
 
 $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME OPENING"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k

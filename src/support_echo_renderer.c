@@ -341,11 +341,13 @@ static void apply_battle_event(
     }
 }
 
-static void update_instance(SupportEchoInstance *instance)
+static void update_instance(
+    SupportEchoInstance *instance,
+    float delta_seconds
+)
 {
-    static const float FIXED_DELTA_SECONDS = 1.0f / 30.0f;
     static const float BLEND_SECONDS = 0.10f;
-    t3d_anim_update(&instance->idle_anim, FIXED_DELTA_SECONDS);
+    t3d_anim_update(&instance->idle_anim, delta_seconds);
 
     T3DSkeleton *motion_pose = &instance->idle_pose;
     float motion_blend = 0.0f;
@@ -355,7 +357,7 @@ static void update_instance(SupportEchoInstance *instance)
                 &instance->hit_anim : &instance->reposition_anim;
         motion_pose = instance->motion == N64GAME_SUPPORT_ECHO_MOTION_HIT ?
             &instance->hit_pose : &instance->reposition_pose;
-        t3d_anim_update(motion_anim, FIXED_DELTA_SECONDS);
+        t3d_anim_update(motion_anim, delta_seconds);
         if (t3d_anim_is_playing(motion_anim)) {
             const float time = t3d_anim_get_time(motion_anim);
             const float remaining = t3d_anim_get_length(motion_anim) - time;
@@ -380,6 +382,7 @@ bool support_echo_renderer_update(
     const N64GameBattle *battle
 )
 {
+    static const float FIXED_DELTA_SECONDS = 1.0f / 30.0f;
     if (renderer == NULL || !renderer->ready || battle == NULL) {
         return false;
     }
@@ -400,8 +403,33 @@ bool support_echo_renderer_update(
     for (unsigned index = 0U;
          index < (unsigned)N64GAME_SUPPORT_ECHO_COUNT;
          ++index) {
-        update_instance(&renderer->instances[index]);
+        update_instance(&renderer->instances[index], FIXED_DELTA_SECONDS);
     }
+    return true;
+}
+
+bool support_echo_renderer_update_ambient(
+    SupportEchoRenderer *renderer,
+    N64GameSupportEchoKind kind
+)
+{
+    static const float AMBIENT_DELTA_SECONDS = 2.0f / 30.0f;
+    if (renderer == NULL || !renderer->ready ||
+        (unsigned)kind >= (unsigned)N64GAME_SUPPORT_ECHO_COUNT ||
+        !renderer->instances[kind].ready) {
+        return false;
+    }
+    for (unsigned index = 0U;
+         index < (unsigned)N64GAME_SUPPORT_ECHO_COUNT;
+         ++index) {
+        if (renderer->instances[index].motion !=
+            N64GAME_SUPPORT_ECHO_MOTION_IDLE) {
+            reset_motion(&renderer->instances[index]);
+        }
+    }
+    renderer->observed_event_serial = 0U;
+    renderer->observed_event_serial_valid = false;
+    update_instance(&renderer->instances[kind], AMBIENT_DELTA_SECONDS);
     return true;
 }
 

@@ -60,6 +60,15 @@ bool support_echo_renderer_update(
     const N64GameBattle *battle
 );
 
+/*
+ * Leaves battle motion behind and advances only one visible ambient actor.
+ * This keeps non-battle scenes from updating hidden Echoform skeletons.
+ */
+bool support_echo_renderer_update_ambient(
+    SupportEchoRenderer *renderer,
+    N64GameSupportEchoKind kind
+);
+
 bool support_echo_renderer_draw_shadow(
     SupportEchoRenderer *renderer,
     N64GameSupportEchoKind kind,

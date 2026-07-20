@@ -133,9 +133,13 @@ class SupportEchoRenderContractTests(unittest.TestCase):
 
     def test_fixed_step_events_drive_one_shots_and_preserve_knockout_hit_pose(self) -> None:
         update = function_body(RENDER_SOURCE, "support_echo_renderer_update")
+        ambient_update = function_body(
+            RENDER_SOURCE, "support_echo_renderer_update_ambient"
+        )
         update_instance = function_body(RENDER_SOURCE, "update_instance")
         apply_event = function_body(RENDER_SOURCE, "apply_battle_event")
         draw_battle = function_body(GAME_RENDER_SOURCE, "draw_battle")
+        draw_annex = function_body(GAME_RENDER_SOURCE, "draw_annex")
         self.assertIn("uint32_t event_serial;", CORE_HEADER)
         apply_action = function_body(CORE_SOURCE, "apply_action")
         self.assertLess(
@@ -143,12 +147,21 @@ class SupportEchoRenderContractTests(unittest.TestCase):
             apply_action.index("battle->last_event = (N64GameBattleEvent){0};"),
         )
         self.assertIn("battle->event_serial", update)
-        self.assertIn("1.0f / 30.0f", update_instance)
+        self.assertIn("delta_seconds", update_instance)
+        self.assertIn("1.0f / 30.0f", update)
+        self.assertIn("2.0f / 30.0f", ambient_update)
         self.assertIn("t3d_anim_is_playing(motion_anim)", update_instance)
         self.assertIn("t3d_skeleton_blend(", update_instance)
         self.assertIn("N64GAME_TARGET_ALL", apply_event)
         self.assertIn("N64GAME_SUPPORT_ECHO_MOTION_HIT", apply_event)
         self.assertIn("knockout_motion", draw_battle)
+        self.assertIn("reset_motion(&renderer->instances[index])", ambient_update)
+        self.assertIn(
+            "update_instance(&renderer->instances[kind], AMBIENT_DELTA_SECONDS)",
+            ambient_update,
+        )
+        self.assertIn("support_echo_renderer_update_ambient(", draw_annex)
+        self.assertNotIn("&renderer->support_echoes, &game->battle", draw_annex)
 
     def test_battle_uses_three_real_models_and_shadows_without_procedural_fallback(self) -> None:
         finish = function_body(GAME_RENDER_SOURCE, "n64game_renderer_finish_init")

@@ -143,7 +143,10 @@ class StaticModelRenderContractTests(unittest.TestCase):
             "{ Q8(84), Q8(148), Q8(36), Q8(100), N64GAME_ANNEX_OVERLOOK, true }",
         ):
             self.assertIn(room, self.annex_source)
-        self.assertIn("return ANNEX_WORLD_FLOOR_Y + 16.0f * scale;", self.source)
+        self.assertNotIn("grounded_actor_origin", self.source)
+        self.assertIn("ANNEX_SERA_SCALE = 0.0833333f", self.source)
+        self.assertIn("ANNEX_TAVI_SCALE = 0.0833333f", self.source)
+        self.assertIn("ANNEX_BEACON_SCALE = 0.10f", self.source)
         centered = self.function_body("centered_annex_kit_translation")
         self.assertIn("ANNEX_KIT_CENTER_OFFSET_Z * scale_multiplier", centered)
         self.assertIn(
@@ -216,11 +219,13 @@ class StaticModelRenderContractTests(unittest.TestCase):
         self.assertIn("ANNEX_QUARRUNE_SCALE = 0.10f", self.source)
         self.assertIn("BATTLE_QUARRUNE_SCALE = 0.20f", self.source)
         self.assertIn(
-            "renderer, 3U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f",
+            "renderer, 1U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f",
             annex,
         )
         self.assertIn("ANNEX_QUARRUNE_SCALE", annex)
         self.assertIn("BATTLE_QUARRUNE_SCALE", battle)
+        self.assertNotIn("draw_actor(", annex)
+        self.assertIn("N64GAME_STORY_CAST_BEACON", annex)
 
 
 if __name__ == "__main__":

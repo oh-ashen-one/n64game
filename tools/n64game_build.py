@@ -381,6 +381,72 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.png",
             "rom:/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.sprite",
         ),
+        (
+            "candidate.chr.sera_venn.distance",
+            "model_glb",
+            "runtime-candidates/chr/chr.sera_venn/sera_venn_distance.glb",
+            "rom:/chr/chr.sera_venn/sera_venn_distance.t3dm",
+        ),
+        (
+            "candidate.chr.sera_venn.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_body_ci4_64x64.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.chr.sera_venn.face",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_face_ci4_32x32.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_face_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.chr.sera_venn.accent",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_accent_ci4_32x32.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.chr.tavi.distance",
+            "model_glb",
+            "runtime-candidates/chr/chr.tavi/tavi_distance.glb",
+            "rom:/chr/chr.tavi/tavi_distance.t3dm",
+        ),
+        (
+            "candidate.chr.tavi.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.tavi/tex_tavi_body_ci4_64x64.png",
+            "rom:/chr/chr.tavi/tex_tavi_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.chr.tavi.face_accent",
+            "texture_png",
+            "runtime-candidates/chr/chr.tavi/tex_tavi_face_accent_ci4_32x32.png",
+            "rom:/chr/chr.tavi/tex_tavi_face_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.model",
+            "model_glb",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/annex_beacon_decoder.glb",
+            "rom:/prop/prop.annex.beacon_decoder/annex_beacon_decoder.t3dm",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.body",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_body_ci4_64x64.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.signal",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_signal_ci4_32x32.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_signal_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.shadow",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_shadow_ia8_32x32.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_shadow_ia8_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -423,7 +489,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
     if tuple(observed_identity) != expected:
         raise ContractError(
             "runtime candidate identity/path census is not the exact Quarrune, Annex, Ari, "
-            "Ayselor, Gyreclast, and Kivarrax proof set"
+            "Ayselor, Gyreclast, Kivarrax, Sera, Tavi, and beacon proof set"
         )
     return {
         "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
@@ -431,7 +497,8 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
         "scope": (
-            "Quarrune, Annex, Ari, Ayselor, Gyreclast, and Kivarrax in-engine proof only; "
+            "Quarrune, Annex, Ari, Ayselor, Gyreclast, Kivarrax, Sera, Tavi, and beacon "
+            "in-engine proof only; "
             "not Gate evidence or production approval"
         ),
         "entries": rows,

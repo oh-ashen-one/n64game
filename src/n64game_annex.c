@@ -52,7 +52,7 @@ static const AnnexPoint SAFE_ANCHORS[N64GAME_ANNEX_SECTOR_COUNT] = {
 static const AnnexInteractionDef INTERACTIONS[] = {
     {
         N64GAME_ANNEX_INTERACTION_SERA,
-        { Q8(-38), Q8(-8) },
+        { Q8(-32), Q8(4) },
         "TALK TO SERA",
     },
     {
@@ -62,7 +62,7 @@ static const AnnexInteractionDef INTERACTIONS[] = {
     },
     {
         N64GAME_ANNEX_INTERACTION_TAVI,
-        { Q8(5), Q8(-34) },
+        { Q8(4), Q8(-22) },
         "TALK TO TAVI",
     },
     {

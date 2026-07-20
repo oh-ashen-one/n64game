@@ -75,7 +75,7 @@ class BuildContractTests(unittest.TestCase):
 
     def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 23)
+        self.assertEqual(report["runtime_candidate_count"], 34)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
@@ -85,6 +85,9 @@ class BuildContractTests(unittest.TestCase):
                 "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
             ],
         )
@@ -353,7 +356,25 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn(digest, wrapper)
         self.assertIn("--setting General/HomebrewMode=true", wrapper)
         self.assertIn("--setting Nintendo64/ExpansionPak=false", wrapper)
+        self.assertIn("--setting Input/Driver=SDL", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
+        expected_keyboard_bindings = {
+            "Up": 88,
+            "Down": 89,
+            "Left": 90,
+            "Right": 91,
+            "B": 63,
+            "A": 65,
+            "C-Down": 42,
+            "Z": 94,
+            "Start": 93,
+        }
+        for control, input_id in expected_keyboard_bindings.items():
+            setting = (
+                "Nintendo64/Input/Controller.Port.1/Gamepad/"
+                f"{control}=0x1/0/{input_id};;"
+            )
+            self.assertIn(setting, wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 
     def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:

@@ -99,10 +99,14 @@ class PlayerRendererIntegrationContractTests(unittest.TestCase):
             "t3d_skeleton_update(&renderer->player_skeleton)",
         ):
             self.assertIn(token, update)
+        self.assertIn(
+            "if (speed_q8 > (float)PLAYER_YAW_DEADZONE_Q8)", update
+        )
+        self.assertIn("&renderer->player_idle_pose,\n            0.0f", update)
         yaw_guard = update.index("speed_q8 > (float)PLAYER_YAW_DEADZONE_Q8")
         yaw_write = update.index("renderer->player_yaw = -atan2f")
         self.assertLess(yaw_guard, yaw_write)
-        self.assertEqual(update.count("t3d_skeleton_blend("), 2)
+        self.assertEqual(update.count("t3d_skeleton_blend("), 3)
 
     def test_annex_has_no_procedural_player_fallback(self) -> None:
         draw_player = self.function_body("draw_player")
