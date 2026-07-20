@@ -146,8 +146,12 @@ class StaticModelRenderContractTests(unittest.TestCase):
         self.assertIn("return ANNEX_WORLD_FLOOR_Y + 16.0f * scale;", self.source)
         centered = self.function_body("centered_annex_kit_translation")
         self.assertIn("ANNEX_KIT_CENTER_OFFSET_Z * scale_multiplier", centered)
-        self.assertIn("fm_sinf(yaw) * offset", centered)
-        self.assertIn("fm_cosf(yaw) * offset", centered)
+        self.assertIn(
+            "rotate_annex_local_offset(yaw, 0.0f, offset, &offset_x, &offset_z)",
+            centered,
+        )
+        self.assertIn("translation[0] = anchor_x + offset_x", centered)
+        self.assertIn("translation[2] = anchor_z + offset_z", centered)
         module = self.function_body("draw_annex_kit_module")
         backdrop = self.function_body("draw_battle_kit_backdrop")
         self.assertIn("centered_annex_kit_translation(", module)
@@ -170,6 +174,45 @@ class StaticModelRenderContractTests(unittest.TestCase):
             battle.index("begin_world_render(renderer"),
             battle.index("draw_battle_kit_backdrop(renderer)"),
         )
+
+    def test_native_camera_tracks_the_active_module_without_remote_actor_clutter(self) -> None:
+        rotate = self.function_body("rotate_annex_local_offset")
+        annex = self.function_body("draw_annex")
+        battle = self.function_body("draw_battle")
+        for token in (
+            "cosine * local_x - sine * local_z",
+            "sine * local_x + cosine * local_z",
+        ):
+            self.assertIn(token, rotate)
+        for token in (
+            "ANNEX_KIT_YAWS[sector]",
+            "rotate_annex_local_offset(yaw, 15.0f, 23.0f",
+            "rotate_annex_local_offset(yaw, 0.8f, -10.0f",
+            "player_x + camera_x, 0.0f, player_z + camera_z",
+            "player_x + target_x, -9.0f, player_z + target_z",
+            "PLAYER_SCALE = 0.24f",
+            "switch (game->annex_sector)",
+            "case N64GAME_ANNEX_ATRIUM:",
+            "case N64GAME_ANNEX_WORKSHOP:",
+            "case N64GAME_ANNEX_OVERLOOK:",
+        ):
+            self.assertIn(token, annex)
+        self.assertIn("N64GameAnnexSector annex_camera_sector;", self.header)
+        self.assertIn("uint8_t annex_camera_fade_ticks;", self.header)
+        self.assertIn("bool annex_camera_ready;", self.header)
+        self.assertIn("ANNEX_CAMERA_FADE_FRAMES = 8", self.source)
+        self.assertIn("renderer->annex_camera_sector != game->annex_sector", annex)
+        self.assertIn("renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES", annex)
+        self.assertIn("fade_to_black(fade_alpha);", annex)
+        self.assertIn("--renderer->annex_camera_fade_ticks;", annex)
+        self.assertNotIn("player_z + 88.0f", annex)
+        self.assertIn("ANNEX_QUARRUNE_SCALE = 0.10f", self.source)
+        self.assertIn(
+            "renderer, 3U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f",
+            annex,
+        )
+        self.assertIn("ANNEX_QUARRUNE_SCALE", annex)
+        self.assertIn("ANNEX_QUARRUNE_SCALE", battle)
 
 
 if __name__ == "__main__":

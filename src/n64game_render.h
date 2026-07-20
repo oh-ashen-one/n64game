@@ -36,8 +36,11 @@ typedef struct {
     rspq_block_t *quarrune_draw_block;
     uint32_t buffer_count;
     uint32_t frame_index;
+    N64GameAnnexSector annex_camera_sector;
+    uint8_t annex_camera_fade_ticks;
     bool font_registered;
     bool quarrune_ready;
+    bool annex_camera_ready;
 } N64GameRenderer;
 
 typedef enum {

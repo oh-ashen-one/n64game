@@ -13,6 +13,7 @@ enum {
     ACTOR_STYLE_COUNT = 8,
     ACTOR_MATRIX_COUNT = 5,
     ANNEX_KIT_MATRIX_COUNT = N64GAME_ANNEX_SECTOR_COUNT,
+    ANNEX_CAMERA_FADE_FRAMES = 8,
 };
 
 static const char QUARRUNE_MODEL_PATH[] =
@@ -32,6 +33,7 @@ static const float ANNEX_KIT_SCALE_Z = 0.0825f;
 static const float ANNEX_KIT_CENTER_OFFSET_Z = 8.25f;
 static const float ANNEX_WORLD_FLOOR_Y = -18.0f;
 static const float ANNEX_KIT_BATTLE_SCALE_MULTIPLIER = 1.6f;
+static const float ANNEX_QUARRUNE_SCALE = 0.10f;
 
 static const float ANNEX_KIT_YAWS[N64GAME_ANNEX_SECTOR_COUNT] = {
     [N64GAME_ANNEX_ATRIUM] = 0.0f,
@@ -492,6 +494,20 @@ static float grounded_actor_origin(float scale)
     return ANNEX_WORLD_FLOOR_Y + 16.0f * scale;
 }
 
+static void rotate_annex_local_offset(
+    float yaw,
+    float local_x,
+    float local_z,
+    float *world_x,
+    float *world_z
+)
+{
+    const float sine = fm_sinf(yaw);
+    const float cosine = fm_cosf(yaw);
+    *world_x = cosine * local_x - sine * local_z;
+    *world_z = sine * local_x + cosine * local_z;
+}
+
 static void centered_annex_kit_translation(
     float anchor_x,
     float anchor_z,
@@ -501,9 +517,12 @@ static void centered_annex_kit_translation(
 )
 {
     const float offset = ANNEX_KIT_CENTER_OFFSET_Z * scale_multiplier;
-    translation[0] = anchor_x + fm_sinf(yaw) * offset;
+    float offset_x = 0.0f;
+    float offset_z = 0.0f;
+    rotate_annex_local_offset(yaw, 0.0f, offset, &offset_x, &offset_z);
+    translation[0] = anchor_x + offset_x;
     translation[1] = ANNEX_WORLD_FLOOR_Y;
-    translation[2] = anchor_z + fm_cosf(yaw) * offset;
+    translation[2] = anchor_z + offset_z;
 }
 
 static void draw_annex_kit_module(
@@ -967,14 +986,34 @@ static void draw_annex_menu(const N64GameCore *game)
 
 static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    static const float PLAYER_SCALE = 0.35f;
+    static const float PLAYER_SCALE = 0.24f;
     static const float SERA_SCALE = 0.38f;
     static const float TAVI_SCALE = 0.32f;
     static const float BEACON_SCALE = 0.34f;
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
-    const fm_vec3_t camera = {{player_x, 62.0f, player_z + 88.0f}};
-    const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
+    const uint32_t sector = (uint32_t)game->annex_sector;
+    assertf(
+        sector < (uint32_t)N64GAME_ANNEX_SECTOR_COUNT,
+        "Annex camera sector is invalid: %lu",
+        (unsigned long)sector
+    );
+    const float yaw = ANNEX_KIT_YAWS[sector];
+    if (!renderer->annex_camera_ready) {
+        renderer->annex_camera_sector = game->annex_sector;
+        renderer->annex_camera_ready = true;
+    } else if (renderer->annex_camera_sector != game->annex_sector) {
+        renderer->annex_camera_sector = game->annex_sector;
+        renderer->annex_camera_fade_ticks = ANNEX_CAMERA_FADE_FRAMES;
+    }
+    float camera_x = 0.0f;
+    float camera_z = 0.0f;
+    float target_x = 0.0f;
+    float target_z = 0.0f;
+    rotate_annex_local_offset(yaw, 15.0f, 23.0f, &camera_x, &camera_z);
+    rotate_annex_local_offset(yaw, 0.8f, -10.0f, &target_x, &target_z);
+    const fm_vec3_t camera = {{player_x + camera_x, 0.0f, player_z + camera_z}};
+    const fm_vec3_t target = {{player_x + target_x, -9.0f, player_z + target_z}};
     begin_world_render(renderer, &camera, &target);
     draw_annex_kit_module(renderer, game->annex_sector);
     const float angle = (float)game->scene_ticks * 0.018f;
@@ -982,22 +1021,34 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         renderer, 0U, 4U, player_x, grounded_actor_origin(PLAYER_SCALE),
         player_z, PLAYER_SCALE, angle
     );
-    draw_actor(
-        renderer, 1U, 5U, -38.0f, grounded_actor_origin(SERA_SCALE),
-        -8.0f, SERA_SCALE, 0.3f
-    );
-    draw_actor(
-        renderer, 2U, 7U, 5.0f, grounded_actor_origin(TAVI_SCALE),
-        -34.0f, TAVI_SCALE, -0.4f
-    );
-    draw_quarrune(
-        renderer, 3U, 52.0f, ANNEX_WORLD_FLOOR_Y, 18.0f, 0.40f,
-        0.12f + fm_sinf(angle * 1.4f) * 0.035f
-    );
-    draw_actor(
-        renderer, 4U, 6U, 100.0f, grounded_actor_origin(BEACON_SCALE),
-        50.0f, BEACON_SCALE, -angle
-    );
+    switch (game->annex_sector) {
+    case N64GAME_ANNEX_ATRIUM:
+        draw_actor(
+            renderer, 1U, 5U, -38.0f, grounded_actor_origin(SERA_SCALE),
+            -8.0f, SERA_SCALE, 0.3f
+        );
+        draw_actor(
+            renderer, 2U, 7U, 5.0f, grounded_actor_origin(TAVI_SCALE),
+            -34.0f, TAVI_SCALE, -0.4f
+        );
+        break;
+    case N64GAME_ANNEX_WORKSHOP:
+        draw_quarrune(
+            renderer, 3U, 48.0f, ANNEX_WORLD_FLOOR_Y, 10.0f,
+            ANNEX_QUARRUNE_SCALE,
+            0.12f + fm_sinf(angle * 1.4f) * 0.035f
+        );
+        break;
+    case N64GAME_ANNEX_OVERLOOK:
+        draw_actor(
+            renderer, 4U, 6U, 100.0f, grounded_actor_origin(BEACON_SCALE),
+            50.0f, BEACON_SCALE, -angle
+        );
+        break;
+    case N64GAME_ANNEX_SIMULATION:
+    case N64GAME_ANNEX_SECTOR_COUNT:
+        break;
+    }
 
     panel(8, 8, 250, 31);
     text_at(16.0f, 15.0f, STYLE_ACCENT, 228.0f, objective_text(game->quest));
@@ -1010,6 +1061,14 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         draw_annex_menu(game);
     } else if (game->dialogue != N64GAME_DIALOGUE_NONE) {
         draw_dialogue(game);
+    }
+    if (renderer->annex_camera_fade_ticks > 0U) {
+        const uint8_t fade_alpha = (uint8_t)(
+            (uint32_t)renderer->annex_camera_fade_ticks * UINT32_C(255) /
+            (uint32_t)ANNEX_CAMERA_FADE_FRAMES
+        );
+        fade_to_black(fade_alpha);
+        --renderer->annex_camera_fade_ticks;
     }
 }
 
@@ -1327,7 +1386,8 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
                 draw_quarrune(
                     renderer, actor,
                     POSITIONS[actor][0], ANNEX_WORLD_FLOOR_Y, POSITIONS[actor][1],
-                    0.42f, 0.10f + fm_sinf(angle * 2.0f) * 0.035f
+                    ANNEX_QUARRUNE_SCALE,
+                    0.10f + fm_sinf(angle * 2.0f) * 0.035f
                 );
             } else {
                 draw_actor(renderer, actor, actor,
