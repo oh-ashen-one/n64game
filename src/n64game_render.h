@@ -20,6 +20,8 @@ typedef struct {
     T3DVertPacked *floor_vertices;
     T3DVertPacked *actor_vertices;
     T3DMat4FP *actor_matrices;
+    T3DModel *annex_model;
+    rspq_block_t *annex_draw_block;
     T3DModel *quarrune_model;
     T3DSkeleton quarrune_skeleton;
     QuarruneRenderAssets quarrune_assets;
@@ -27,6 +29,7 @@ typedef struct {
     uint32_t buffer_count;
     uint32_t frame_index;
     bool font_registered;
+    bool annex_ready;
     bool quarrune_ready;
 } N64GameRenderer;
 

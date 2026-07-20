@@ -267,6 +267,30 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.png",
             "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite",
         ),
+        (
+            "candidate.env.annex.threshold",
+            "model_glb",
+            "runtime-candidates/annex/intermediate/annex_threshold.glb",
+            "rom:/env/annex/annex_threshold.t3dm",
+        ),
+        (
+            "candidate.env.annex.architecture",
+            "texture_png",
+            "runtime-candidates/annex/filesystem/env/annex/tex_annex_architecture_ci4_64x64.png",
+            "rom:/env/annex/tex_annex_architecture_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.env.annex.trim",
+            "texture_png",
+            "runtime-candidates/annex/filesystem/env/annex/tex_annex_trim_resonance_ci4_64x32.png",
+            "rom:/env/annex/tex_annex_trim_resonance_ci4_64x32.sprite",
+        ),
+        (
+            "candidate.env.annex.resonance_mask",
+            "texture_png",
+            "runtime-candidates/annex/filesystem/env/annex/tex_annex_resonance_mask_ia8_32x32.png",
+            "rom:/env/annex/tex_annex_resonance_mask_ia8_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -307,13 +331,13 @@ def validate_runtime_candidates() -> dict[str, Any]:
             }
         )
     if tuple(observed_identity) != expected:
-        raise ContractError("runtime candidate identity/path census is not the exact Quarrune proof set")
+        raise ContractError("runtime candidate identity/path census is not the exact static proof set")
     return {
         "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
         "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
-        "scope": "Quarrune static in-engine proof only; not Gate evidence or production approval",
+        "scope": "Quarrune and Annex static in-engine proofs only; not Gate evidence or production approval",
         "entries": rows,
     }
 
@@ -424,7 +448,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune static proof; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune and Annex static proofs; not Gate evidence)\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

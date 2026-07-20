@@ -11,9 +11,11 @@ enum {
     STYLE_WARNING = 3,
     STYLE_SELECTED = 4,
     ACTOR_STYLE_COUNT = 8,
-    ACTOR_MATRIX_COUNT = 5,
+    ANNEX_MATRIX_INDEX = 5,
+    ACTOR_MATRIX_COUNT = 6,
 };
 
+static const char ANNEX_MODEL_PATH[] = "rom:/env/annex/annex_threshold.t3dm";
 static const char QUARRUNE_MODEL_PATH[] =
     "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
 
@@ -111,6 +113,25 @@ static void setup_actor_vertices(N64GameRenderer *renderer)
     }
 }
 
+static bool setup_annex(N64GameRenderer *renderer)
+{
+    renderer->annex_model = t3d_model_load(ANNEX_MODEL_PATH);
+    if (renderer->annex_model == NULL) {
+        debugf("[annex] model load failed: %s\n", ANNEX_MODEL_PATH);
+        return false;
+    }
+
+    rspq_block_begin();
+    t3d_model_draw(renderer->annex_model);
+    renderer->annex_draw_block = rspq_block_end();
+    if (renderer->annex_draw_block == NULL) {
+        debugf("[annex] draw-block recording failed\n");
+        return false;
+    }
+    renderer->annex_ready = true;
+    return true;
+}
+
 static bool setup_quarrune(N64GameRenderer *renderer)
 {
     if (!quarrune_render_assets_load(&renderer->quarrune_assets)) {
@@ -206,7 +227,8 @@ bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer)
 bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
-        renderer->floor_vertices != NULL || renderer->quarrune_ready) {
+        renderer->floor_vertices != NULL || renderer->annex_ready ||
+        renderer->quarrune_ready) {
         return false;
     }
 
@@ -238,7 +260,8 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     };
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
-    if (renderer->viewport._matFP == NULL || !setup_quarrune(renderer)) {
+    if (renderer->viewport._matFP == NULL || !setup_annex(renderer) ||
+        !setup_quarrune(renderer)) {
         n64game_renderer_destroy(renderer);
         return false;
     }
@@ -263,9 +286,16 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
         rspq_block_free(renderer->quarrune_draw_block);
         renderer->quarrune_draw_block = NULL;
     }
+    if (renderer->annex_draw_block != NULL) {
+        rspq_block_free(renderer->annex_draw_block);
+        renderer->annex_draw_block = NULL;
+    }
     t3d_skeleton_destroy(&renderer->quarrune_skeleton);
     if (renderer->quarrune_model != NULL) {
         t3d_model_free(renderer->quarrune_model);
+    }
+    if (renderer->annex_model != NULL) {
+        t3d_model_free(renderer->annex_model);
     }
     if (renderer->quarrune_assets.lifetime != NULL) {
         (void)quarrune_render_assets_unload(&renderer->quarrune_assets);
@@ -352,6 +382,65 @@ static void draw_quarrune(
     t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
     rspq_block_run(renderer->quarrune_draw_block);
     t3d_matrix_pop(1);
+}
+
+static void draw_annex_model(
+    N64GameRenderer *renderer,
+    float x,
+    float y,
+    float z,
+    float scale,
+    float angle
+)
+{
+    assertf(renderer->annex_ready, "Annex renderer is not ready");
+    const float scales[3] = {scale, scale, scale};
+    const float rotations[3] = {0.0f, angle, 0.0f};
+    const float translation[3] = {x, y, z};
+    const size_t matrix_slot = ANNEX_MATRIX_INDEX *
+        (size_t)renderer->buffer_count + (size_t)renderer->frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
+    rspq_block_run(renderer->annex_draw_block);
+    t3d_matrix_pop(1);
+}
+
+static void draw_annex_sector_model(
+    N64GameRenderer *renderer,
+    N64GameAnnexSector sector
+)
+{
+    float x = 0.0f;
+    float z = -6.0f;
+    float scale = 0.08f;
+    float angle = 0.0f;
+    switch (sector) {
+    case N64GAME_ANNEX_ATRIUM:
+        break;
+    case N64GAME_ANNEX_SIMULATION:
+        x = -56.0f;
+        z = -4.0f;
+        scale = 0.055f;
+        angle = T3D_DEG_TO_RAD(90.0f);
+        break;
+    case N64GAME_ANNEX_WORKSHOP:
+        x = 52.0f;
+        z = 7.0f;
+        scale = 0.05f;
+        angle = T3D_DEG_TO_RAD(-90.0f);
+        break;
+    case N64GAME_ANNEX_OVERLOOK:
+        x = 76.0f;
+        z = 50.0f;
+        scale = 0.045f;
+        angle = T3D_DEG_TO_RAD(180.0f);
+        break;
+    case N64GAME_ANNEX_SECTOR_COUNT:
+        return;
+    }
+    draw_annex_model(renderer, x, -18.0f, z, scale, angle);
 }
 
 static void begin_world_render(
@@ -672,6 +761,7 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
     const fm_vec3_t camera = {{player_x, 62.0f, player_z + 88.0f}};
     const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
     begin_world_render(renderer, &camera, &target);
+    draw_annex_sector_model(renderer, game->annex_sector);
     const float angle = (float)game->scene_ticks * 0.018f;
     draw_actor(renderer, 0U, 4U, player_x, -1.0f, player_z, 0.75f, angle);
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
@@ -789,6 +879,7 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
     const fm_vec3_t camera = {{0.0f, 56.0f, 112.0f}};
     const fm_vec3_t target = {{0.0f, -4.0f, 0.0f}};
     begin_world_render(renderer, &camera, &target);
+    draw_annex_model(renderer, 0.0f, -18.0f, -52.0f, 0.09f, 0.0f);
     static const float POSITIONS[4][3] = {
         {-31.0f, -2.0f, -34.0f}, {26.0f, 0.0f, -30.0f},
         {-28.0f, -2.0f, -76.0f}, {31.0f, -1.0f, -70.0f},

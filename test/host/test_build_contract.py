@@ -64,13 +64,16 @@ class BuildContractTests(unittest.TestCase):
         report = build.validate_runtime_assets()
         self.assertEqual(report["runtime_asset_count"], 0)
 
-    def test_quarrune_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
+    def test_static_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 4)
+        self.assertEqual(report["runtime_candidate_count"], 8)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
-            ["model_glb", "texture_png", "texture_png", "texture_png"],
+            [
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+            ],
         )
         self.assertTrue(all(
             entry["status"] == "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE"
@@ -212,6 +215,29 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("quarrune_render_assets_dynamic_texture_cb", renderer)
         self.assertIn("rspq_block_run(renderer->quarrune_draw_block)", renderer)
         self.assertIn("n64game_renderer_destroy", renderer)
+
+    def test_annex_candidate_uses_exact_conversion_and_sector_aware_renderer(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("--asset-path=$(ANNEX_SOURCE_DIR)/filesystem", makefile)
+        self.assertIn(
+            "--format CI4 --tiles 64,64 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn(
+            "--format CI4 --tiles 64,32 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn(
+            "$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES) $(ANNEX_RUNTIME_CANDIDATES)",
+            makefile,
+        )
+
+        renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
+        self.assertIn('"rom:/env/annex/annex_threshold.t3dm"', renderer)
+        self.assertIn("t3d_model_draw(renderer->annex_model)", renderer)
+        self.assertIn("rspq_block_run(renderer->annex_draw_block)", renderer)
+        self.assertIn("draw_annex_sector_model(renderer, game->annex_sector)", renderer)
+        self.assertIn("ACTOR_MATRIX_COUNT = 6", renderer)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")

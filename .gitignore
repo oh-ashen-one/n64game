@@ -20,7 +20,7 @@ references/private/
 
 # libdragon / Tiny3D build outputs
 build/
-filesystem/
+/filesystem/
 *.o
 *.a
 *.d
