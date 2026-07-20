@@ -47,10 +47,17 @@ def build_glb(path: Path, bad_upper_uv: bool = False) -> None:
             {"name": "body_top", "extras": {"authored": True}},
             {"name": "body_bottom", "extras": {"authored": True}},
             {"name": "accent", "extras": {"authored": True}},
+            {"name": "solid_trim", "extras": {"authored": True}},
+            {"name": "route_light", "extras": {"authored": True}},
+            {"name": "tinted_screen", "extras": {"authored": True}},
         ],
         "meshes": [{"primitives": [
             {"attributes": {"TEXCOORD_0": index}, "material": index, "mode": 4}
             for index in range(3)
+        ] + [
+            {"attributes": {}, "material": 3, "mode": 4},
+            {"attributes": {}, "material": 4, "mode": 4},
+            {"attributes": {"TEXCOORD_0": 2}, "material": 5, "mode": 4},
         ]}],
     }
     json_bytes = json.dumps(document, separators=(",", ":")).encode()
@@ -99,6 +106,31 @@ def material_map(path: Path) -> None:
                 "source_v_range": [0.0, 1.0],
                 "cull_back": False,
             },
+            "solid_trim": {
+                "binding": {
+                    "kind": "solid_primitive",
+                    "color": [0.12, 0.28, 0.26, 1.0],
+                },
+                "cull_back": True,
+            },
+            "route_light": {
+                "binding": {
+                    "kind": "solid_primitive_unlit",
+                    "color": [0.95, 0.42, 0.08, 1.0],
+                },
+                "cull_back": False,
+            },
+            "tinted_screen": {
+                "binding": {
+                    "kind": "static_png_tinted",
+                    "path": "../filesystem/echo/echo.ayselor/screen.png",
+                    "width": 64,
+                    "height": 32,
+                    "color": [0.02, 0.55, 0.72, 1.0],
+                },
+                "source_v_range": [0.0, 1.0],
+                "cull_back": False,
+            },
         },
     }, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -138,6 +170,26 @@ class Tiny3DMaterialBinderTests(unittest.TestCase):
             )
             self.assertEqual(records["body_top"]["rdp_settings"]["g_mdsft_text_filt"], 0)
             self.assertEqual(records["body_bottom"]["rdp_settings"]["g_cull_back"], 1)
+            self.assertEqual(records["solid_trim"]["combiner1"]["A"], 3)
+            self.assertEqual(records["solid_trim"]["set_prim"], 1)
+            self.assertEqual(records["solid_trim"]["prim_color"], [0.12, 0.28, 0.26, 1.0])
+            self.assertNotIn("tex0", records["solid_trim"])
+            self.assertEqual(records["route_light"]["combiner1"], {
+                "A": 8,
+                "B": 8,
+                "C": 16,
+                "D": 3,
+                "A_alpha": 7,
+                "B_alpha": 7,
+                "C_alpha": 7,
+                "D_alpha": 3,
+            })
+            self.assertEqual(records["route_light"]["set_prim"], 1)
+            self.assertNotIn("tex0", records["route_light"])
+            self.assertEqual(records["tinted_screen"]["combiner1"]["C"], 3)
+            self.assertEqual(records["tinted_screen"]["set_prim"], 1)
+            self.assertEqual(records["tinted_screen"]["tex0"]["S"]["high"], 63.0)
+            self.assertEqual(records["tinted_screen"]["tex0"]["T"]["high"], 31.0)
             self.assertTrue(document["materials"][0]["extras"]["authored"])
 
             observed = []
@@ -162,6 +214,21 @@ class Tiny3DMaterialBinderTests(unittest.TestCase):
             material_map(mapping)
             with self.assertRaisesRegex(TOOL.MaterialBindingError, "leaves its declared atlas region"):
                 TOOL.run(source, mapping, root / "output.glb")
+
+    def test_invalid_solid_primitive_color_fails_closed_without_output(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="n64game-material-binder-solid-") as directory:
+            root = Path(directory)
+            source = root / "source.glb"
+            mapping = root / "map.json"
+            output = root / "output.glb"
+            build_glb(source)
+            material_map(mapping)
+            value = json.loads(mapping.read_text(encoding="utf-8"))
+            value["materials"]["solid_trim"]["binding"]["color"][2] = 1.25
+            mapping.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(TOOL.MaterialBindingError, "outside 0..1"):
+                TOOL.run(source, mapping, output)
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

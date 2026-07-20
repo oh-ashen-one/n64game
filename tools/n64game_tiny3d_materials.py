@@ -3,7 +3,8 @@
 
 Blender's generic glTF exporter preserves the project's material metadata but
 does not emit the nested ``f3d_mat`` structure consumed by Tiny3D's pinned
-importer. This tool adds that structure from an explicit per-material map and,
+importer. This tool adds that structure from an explicit per-material map,
+supports lit and unlit primitive-color materials without fake textures, and,
 when requested, remaps an authored half of a 64x64 atlas into region-local
 64x32 UV coordinates for safe CI8 split uploads.
 """
@@ -15,7 +16,7 @@ import json
 import re
 import struct
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 
 SCHEMA = "n64game-tiny3d-material-map-v1"
@@ -25,6 +26,7 @@ JSON_CHUNK = 0x4E4F534A
 BIN_CHUNK = 0x004E4942
 REFERENCE = re.compile(r"^0x[0-9A-Fa-f]{8}$")
 STATIC_PNG = re.compile(r"^\.\./filesystem/[A-Za-z0-9][A-Za-z0-9._/-]*\.png$")
+SOLID_KINDS = {"solid_primitive", "solid_primitive_unlit"}
 
 
 class MaterialBindingError(RuntimeError):
@@ -85,18 +87,37 @@ def _number(value: Any, label: str) -> float:
     return result
 
 
-def _binding_record(name: str, record: Any) -> Tuple[Mapping[str, Any], Tuple[float, float], bool]:
+def _binding_record(
+    name: str,
+    record: Any,
+) -> Tuple[Mapping[str, Any], Optional[Tuple[float, float]], bool]:
     if not isinstance(record, dict):
         raise MaterialBindingError(f"material {name} record is not an object")
-    if set(record) != {"binding", "source_v_range", "cull_back"}:
-        raise MaterialBindingError(f"material {name} record keys are not exact")
+    if "binding" not in record or "cull_back" not in record:
+        raise MaterialBindingError(f"material {name} record lacks required keys")
     binding = record["binding"]
-    source_range = record["source_v_range"]
     cull_back = record["cull_back"]
-    if not isinstance(binding, dict) or not isinstance(source_range, list) or len(source_range) != 2:
-        raise MaterialBindingError(f"material {name} binding or UV range is invalid")
+    if not isinstance(binding, dict):
+        raise MaterialBindingError(f"material {name} binding is invalid")
     if not isinstance(cull_back, bool):
         raise MaterialBindingError(f"material {name} cull_back is not boolean")
+    if binding.get("kind") in SOLID_KINDS:
+        if set(record) != {"binding", "cull_back"} or set(binding) != {"kind", "color"}:
+            raise MaterialBindingError(f"material {name} solid binding keys are not exact")
+        color = binding["color"]
+        if not isinstance(color, list) or len(color) != 4:
+            raise MaterialBindingError(f"material {name} primitive color is invalid")
+        for channel, value in enumerate(color):
+            number = _number(value, f"material {name} primitive color channel {channel}")
+            if number < 0.0 or number > 1.0:
+                raise MaterialBindingError(f"material {name} primitive color is outside 0..1")
+        return binding, None, cull_back
+
+    if set(record) != {"binding", "source_v_range", "cull_back"}:
+        raise MaterialBindingError(f"material {name} textured record keys are not exact")
+    source_range = record["source_v_range"]
+    if not isinstance(source_range, list) or len(source_range) != 2:
+        raise MaterialBindingError(f"material {name} UV range is invalid")
     low = _number(source_range[0], f"material {name} UV low")
     high = _number(source_range[1], f"material {name} UV high")
     if low < 0.0 or high > 1.0 or high - low < 0.01:
@@ -113,6 +134,16 @@ def _axis(high: int) -> Dict[str, Any]:
         "mirror": 0,
         "clamp": 1,
     }
+
+
+def _binding_color(binding: Mapping[str, Any], label: str) -> List[float]:
+    color = binding.get("color")
+    if not isinstance(color, list) or len(color) != 4:
+        raise MaterialBindingError(f"{label} primitive color is invalid")
+    result = [_number(value, f"{label} primitive color") for value in color]
+    if any(value < 0.0 or value > 1.0 for value in result):
+        raise MaterialBindingError(f"{label} primitive color is outside 0..1")
+    return result
 
 
 def _texture(binding: Mapping[str, Any], label: str) -> Mapping[str, Any]:
@@ -132,16 +163,21 @@ def _texture(binding: Mapping[str, Any], label: str) -> Mapping[str, Any]:
             "tex_reference": reference,
             "tex_reference_size": [width, height],
         }
-    elif kind == "static_png":
-        if set(binding) != {"kind", "path", "width", "height"}:
+    elif kind in {"static_png", "static_png_tinted"}:
+        required = {"kind", "path", "width", "height"}
+        if kind == "static_png_tinted":
+            required.add("color")
+        if set(binding) != required:
             raise MaterialBindingError(f"{label} static binding keys are not exact")
         path = binding["path"]
         width = binding["width"]
         height = binding["height"]
         if not isinstance(path, str) or not STATIC_PNG.fullmatch(path) or "//" in path:
             raise MaterialBindingError(f"{label} static PNG path is invalid")
-        if (width, height) not in {(32, 32), (64, 64), (128, 64), (128, 128)}:
+        if (width, height) not in {(32, 32), (64, 32), (64, 64), (128, 64), (128, 128)}:
             raise MaterialBindingError(f"{label} static texture dimensions are unsupported")
+        if kind == "static_png_tinted":
+            _binding_color(binding, label)
         result = {
             "use_tex_reference": 0,
             "tex": {"name": path},
@@ -154,17 +190,34 @@ def _texture(binding: Mapping[str, Any], label: str) -> Mapping[str, Any]:
 
 
 def _f3d_material(binding: Mapping[str, Any], cull_back: bool, label: str) -> Mapping[str, Any]:
-    combiner = {
-        "A": 1,
-        "B": 8,
-        "C": 4,
-        "D": 7,
-        "A_alpha": 1,
-        "B_alpha": 7,
-        "C_alpha": 4,
-        "D_alpha": 7,
-    }
-    return {
+    kind = binding.get("kind")
+    textured = kind not in SOLID_KINDS
+    tinted = kind == "static_png_tinted"
+    if kind == "solid_primitive_unlit":
+        # Fast64 selector indices for (0 - 0) * 0 + PRIMITIVE. These are
+        # field-specific enum indices, not the similarly named GBI mux values.
+        combiner = {
+            "A": 8,
+            "B": 8,
+            "C": 16,
+            "D": 3,
+            "A_alpha": 7,
+            "B_alpha": 7,
+            "C_alpha": 7,
+            "D_alpha": 3,
+        }
+    else:
+        combiner = {
+            "A": 1 if textured else 3,
+            "B": 8,
+            "C": 3 if tinted else 4,
+            "D": 7,
+            "A_alpha": 1 if textured else 3,
+            "B_alpha": 7,
+            "C_alpha": 3 if tinted else 4,
+            "D_alpha": 7,
+        }
+    result: Dict[str, Any] = {
         "combiner1": combiner,
         "combiner2": combiner,
         "set_blend": 0,
@@ -179,8 +232,13 @@ def _f3d_material(binding: Mapping[str, Any], cull_back: bool, label: str) -> Ma
             "set_rendermode": 0,
         },
         "draw_layer": {"oot": 0, "sm64": 1},
-        "tex0": _texture(binding, label),
     }
+    if textured:
+        result["tex0"] = _texture(binding, label)
+    if not textured or tinted:
+        result["set_prim"] = 1
+        result["prim_color"] = _binding_color(binding, label)
+    return result
 
 
 def _remap_uv_accessor(
@@ -269,7 +327,10 @@ def bind_materials(
     if set(names) != set(spec_materials):
         raise MaterialBindingError("material map does not exactly cover the GLB materials")
 
-    records: Dict[int, Tuple[Mapping[str, Any], Tuple[float, float], bool]] = {}
+    records: Dict[
+        int,
+        Tuple[Mapping[str, Any], Optional[Tuple[float, float]], bool],
+    ] = {}
     by_name = {name: index for index, name in enumerate(names)}
     for name, record in spec_materials.items():
         records[by_name[name]] = _binding_record(name, record)
@@ -286,14 +347,15 @@ def bind_materials(
             attributes = primitive.get("attributes")
             if not isinstance(material_index, int) or material_index not in records:
                 raise MaterialBindingError("primitive material index is invalid")
-            if not isinstance(attributes, dict) or not isinstance(attributes.get("TEXCOORD_0"), int):
-                raise MaterialBindingError("textured primitive lacks TEXCOORD_0")
-            accessor_index = attributes["TEXCOORD_0"]
             source_range = records[material_index][1]
-            prior = accessor_ranges.get(accessor_index)
-            if prior is not None and prior != source_range:
-                raise MaterialBindingError("one TEXCOORD_0 accessor has conflicting atlas regions")
-            accessor_ranges[accessor_index] = source_range
+            if source_range is not None:
+                if not isinstance(attributes, dict) or not isinstance(attributes.get("TEXCOORD_0"), int):
+                    raise MaterialBindingError("textured primitive lacks TEXCOORD_0")
+                accessor_index = attributes["TEXCOORD_0"]
+                prior = accessor_ranges.get(accessor_index)
+                if prior is not None and prior != source_range:
+                    raise MaterialBindingError("one TEXCOORD_0 accessor has conflicting atlas regions")
+                accessor_ranges[accessor_index] = source_range
             used_materials.add(material_index)
     if used_materials != set(records):
         raise MaterialBindingError("one or more mapped materials are unused")
