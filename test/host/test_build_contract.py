@@ -374,6 +374,9 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--setting Nintendo64/ExpansionPak=false", wrapper)
         self.assertIn("--setting Input/Driver=SDL", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
+        self.assertIn("--open-input-monitoring) OPEN_INPUT_MONITORING=1 ;;", wrapper)
+        self.assertIn("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent", wrapper)
+        self.assertIn("ares_bundle_id=dev.ares.ares", wrapper)
         expected_keyboard_bindings = {
             "L-Up": "0x1/0/92;0x1/0/62;",
             "L-Down": "0x1/0/93;0x1/0/58;",

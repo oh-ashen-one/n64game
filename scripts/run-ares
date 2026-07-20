@@ -8,12 +8,14 @@ EXPECTED_ROM_SHA_SET=0
 EXPECTED_EEPROM_SHA=""
 EXPECTED_EEPROM_SHA_SET=0
 CHECK_ONLY=0
+OPEN_INPUT_MONITORING=0
 ROM_SET=0
 
 for argument in "$@"; do
     case "$argument" in
         --homebrew-mode) ;;
         --check-only) CHECK_ONLY=1 ;;
+        --open-input-monitoring) OPEN_INPUT_MONITORING=1 ;;
         --expected-rom-sha256=*)
             if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 ]]; then
                 printf 'duplicate --expected-rom-sha256 argument\n' >&2
@@ -87,6 +89,12 @@ VERSION_CANONICAL="ares version v148"
 
 printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
     "$VERSION_CANONICAL" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+
+if [[ "$OPEN_INPUT_MONITORING" -eq 1 ]]; then
+    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent'
+    printf 'opened_input_monitoring=true\nares_bundle_id=dev.ares.ares\n'
+    exit 0
+fi
 
 if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 ]]; then
     ROM_FILENAME="$(basename "$ROM")"

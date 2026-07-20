@@ -31,6 +31,18 @@ When launched through `scripts/run-ares` on the pinned macOS Ares v148 build, th
 
 On macOS, add the signed Ares app (`dev.ares.ares`) under **System Settings → Privacy & Security → Input Monitoring**, then restart Ares. Ares v148 polls keyboard state through Quartz; without this permission all keyboard mappings can appear dead. Click the game window once after relaunching.
 
+If arrows, `WASD`, or `Z` still do nothing, launch from this repo instead of opening Ares manually:
+
+```sh
+scripts/run-ares --homebrew-mode
+```
+
+To jump straight to the macOS permission pane for the pinned Ares app:
+
+```sh
+scripts/run-ares --homebrew-mode --open-input-monitoring
+```
+
 ## Creative direction
 
 The game uses an original retro desert-science-fiction setting:
