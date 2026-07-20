@@ -1,0 +1,10 @@
+schema: n64game-rights-evidence-v1
+subject_id: prop.annex.sim_dais
+rights_basis: project-original
+rights_holder_id: oh-ashen-one.project
+output_license: project-all-rights-reserved
+evidence_kind: PROJECT_ORIGINAL
+input_records: assets-src/prop/prop.annex.sim_dais/prop_annex_sim_dais_concept.blend@d8cb1cb67f6f5ce93e2b8be7870009a3632b058989c17bd4c67294c5c21c8515|2026-07-20T00:05:34Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
+third_party_notices: NONE
+reviewer_id: openai.codex-rights-auditor
+verified_at: 2026-07-20T00:05:34Z
