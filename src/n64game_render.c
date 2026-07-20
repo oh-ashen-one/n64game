@@ -12,10 +12,33 @@ enum {
     STYLE_SELECTED = 4,
     ACTOR_STYLE_COUNT = 8,
     ACTOR_MATRIX_COUNT = 5,
+    ANNEX_KIT_MATRIX_COUNT = N64GAME_ANNEX_SECTOR_COUNT,
 };
 
 static const char QUARRUNE_MODEL_PATH[] =
     "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
+static const char ANNEX_KIT_MODEL_PATH[] =
+    "rom:/env/env.annex.threshold_kit/annex_threshold_kit.t3dm";
+
+/*
+ * The candidate's authored bounds are converted with --base-scale=64. Keep
+ * these two alignment values centralized until native 320x240 captures lock
+ * the final export origin and scale.
+ */
+static const float ANNEX_KIT_SCALE_X = 0.0833333f;
+static const float ANNEX_KIT_SCALE_Y = 0.12f;
+static const float ANNEX_KIT_SCALE_Z = 0.0825f;
+/* Converted local Z bounds are [-488, 288], so their scaled center is -8.25. */
+static const float ANNEX_KIT_CENTER_OFFSET_Z = 8.25f;
+static const float ANNEX_WORLD_FLOOR_Y = -18.0f;
+static const float ANNEX_KIT_BATTLE_SCALE_MULTIPLIER = 1.6f;
+
+static const float ANNEX_KIT_YAWS[N64GAME_ANNEX_SECTOR_COUNT] = {
+    [N64GAME_ANNEX_ATRIUM] = 0.0f,
+    [N64GAME_ANNEX_SIMULATION] = 1.5707963f,
+    [N64GAME_ANNEX_WORKSHOP] = -1.5707963f,
+    [N64GAME_ANNEX_OVERLOOK] = 3.1415927f,
+};
 
 static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
     UINT32_C(0xD7A253FF),
@@ -90,6 +113,108 @@ static void hp_bar(int x, int y, int width, int hp, int maximum)
     const color_t color = safe_hp * 4 > maximum ?
         RGBA32(81, 211, 166, 255) : RGBA32(218, 93, 70, 255);
     fill_rect(x, y, x + fill, y + 5, color);
+}
+
+bool n64game_static_model_load(
+    N64GameStaticModel *asset,
+    const char *rom_path,
+    uint32_t matrix_count,
+    uint32_t buffer_count
+)
+{
+    if (asset == NULL || rom_path == NULL || rom_path[0] == '\0' ||
+        matrix_count == 0U || buffer_count == 0U || asset->model != NULL ||
+        asset->matrices != NULL || asset->draw_block != NULL || asset->ready) {
+        return false;
+    }
+    if ((size_t)matrix_count > SIZE_MAX / (size_t)buffer_count) {
+        return false;
+    }
+    const size_t slot_count = (size_t)matrix_count * (size_t)buffer_count;
+    if (slot_count > SIZE_MAX / sizeof(T3DMat4FP)) {
+        return false;
+    }
+
+    T3DModel *const model = t3d_model_load(rom_path);
+    if (model == NULL) {
+        debugf("[static-model] model load failed: %s\n", rom_path);
+        return false;
+    }
+    T3DMat4FP *const matrices = malloc_uncached(
+        sizeof(T3DMat4FP) * slot_count
+    );
+    if (matrices == NULL) {
+        debugf("[static-model] matrix allocation failed: %s\n", rom_path);
+        t3d_model_free(model);
+        return false;
+    }
+
+    rspq_block_begin();
+    t3d_model_draw(model);
+    rspq_block_t *const draw_block = rspq_block_end();
+    if (draw_block == NULL) {
+        debugf("[static-model] draw-block recording failed: %s\n", rom_path);
+        free_uncached(matrices);
+        t3d_model_free(model);
+        return false;
+    }
+
+    *asset = (N64GameStaticModel){
+        .model = model,
+        .matrices = matrices,
+        .draw_block = draw_block,
+        .matrix_count = matrix_count,
+        .buffer_count = buffer_count,
+        .ready = true,
+    };
+    return true;
+}
+
+bool n64game_static_model_draw(
+    N64GameStaticModel *asset,
+    uint32_t matrix_index,
+    uint32_t frame_index,
+    const float scales[3],
+    const float rotations[3],
+    const float translation[3]
+)
+{
+    if (asset == NULL || !asset->ready || asset->model == NULL ||
+        asset->matrices == NULL || asset->draw_block == NULL ||
+        matrix_index >= asset->matrix_count || frame_index >= asset->buffer_count ||
+        scales == NULL || rotations == NULL || translation == NULL) {
+        return false;
+    }
+    const size_t matrix_slot = (size_t)matrix_index * (size_t)asset->buffer_count +
+        (size_t)frame_index;
+    t3d_mat4fp_from_srt_euler(
+        &asset->matrices[matrix_slot], scales, rotations, translation
+    );
+    t3d_matrix_push(&asset->matrices[matrix_slot]);
+    rspq_block_run(asset->draw_block);
+    t3d_matrix_pop(1);
+    return true;
+}
+
+void n64game_static_model_free(N64GameStaticModel *asset)
+{
+    if (asset == NULL) {
+        return;
+    }
+    if (asset->draw_block != NULL || asset->model != NULL ||
+        asset->matrices != NULL) {
+        rspq_wait();
+    }
+    if (asset->draw_block != NULL) {
+        rspq_block_free(asset->draw_block);
+    }
+    if (asset->model != NULL) {
+        t3d_model_free(asset->model);
+    }
+    if (asset->matrices != NULL) {
+        free_uncached(asset->matrices);
+    }
+    *asset = (N64GameStaticModel){0};
 }
 
 static void setup_actor_vertices(N64GameRenderer *renderer)
@@ -229,16 +354,23 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     }
     const uint16_t up = t3d_vert_pack_normal(&(fm_vec3_t){{0.0f, 1.0f, 0.0f}});
     renderer->floor_vertices[0] = (T3DVertPacked){
-        .posA = {-100, -18, -76}, .rgbaA = UINT32_C(0x5D4937FF), .normA = up,
-        .posB = {100, -18, -76}, .rgbaB = UINT32_C(0x815D3EFF), .normB = up,
+        .posA = {-130, -18, -52}, .rgbaA = UINT32_C(0x5D4937FF), .normA = up,
+        .posB = {160, -18, -52}, .rgbaB = UINT32_C(0x815D3EFF), .normB = up,
     };
     renderer->floor_vertices[1] = (T3DVertPacked){
-        .posA = {100, -18, 76}, .rgbaA = UINT32_C(0x294B50FF), .normA = up,
-        .posB = {-100, -18, 76}, .rgbaB = UINT32_C(0x3A5551FF), .normB = up,
+        .posA = {160, -18, 108}, .rgbaA = UINT32_C(0x294B50FF), .normA = up,
+        .posB = {-130, -18, 108}, .rgbaB = UINT32_C(0x3A5551FF), .normB = up,
     };
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
-    if (renderer->viewport._matFP == NULL || !setup_quarrune(renderer)) {
+    if (renderer->viewport._matFP == NULL ||
+        !n64game_static_model_load(
+            &renderer->annex_kit,
+            ANNEX_KIT_MODEL_PATH,
+            (uint32_t)ANNEX_KIT_MATRIX_COUNT,
+            renderer->buffer_count
+        ) ||
+        !setup_quarrune(renderer)) {
         n64game_renderer_destroy(renderer);
         return false;
     }
@@ -258,6 +390,7 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     if (renderer == NULL) {
         return;
     }
+    n64game_static_model_free(&renderer->annex_kit);
     rspq_wait();
     if (renderer->quarrune_draw_block != NULL) {
         rspq_block_free(renderer->quarrune_draw_block);
@@ -352,6 +485,96 @@ static void draw_quarrune(
     t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
     rspq_block_run(renderer->quarrune_draw_block);
     t3d_matrix_pop(1);
+}
+
+static float grounded_actor_origin(float scale)
+{
+    return ANNEX_WORLD_FLOOR_Y + 16.0f * scale;
+}
+
+static void centered_annex_kit_translation(
+    float anchor_x,
+    float anchor_z,
+    float yaw,
+    float scale_multiplier,
+    float translation[3]
+)
+{
+    const float offset = ANNEX_KIT_CENTER_OFFSET_Z * scale_multiplier;
+    translation[0] = anchor_x + fm_sinf(yaw) * offset;
+    translation[1] = ANNEX_WORLD_FLOOR_Y;
+    translation[2] = anchor_z + fm_cosf(yaw) * offset;
+}
+
+static void draw_annex_kit_module(
+    N64GameRenderer *renderer,
+    N64GameAnnexSector active_sector
+)
+{
+    const uint32_t sector = (uint32_t)active_sector;
+    assertf(
+        sector < (uint32_t)N64GAME_ANNEX_SECTOR_COUNT,
+        "Annex kit sector is invalid: %lu",
+        (unsigned long)sector
+    );
+    const float scales[3] = {
+        ANNEX_KIT_SCALE_X, ANNEX_KIT_SCALE_Y, ANNEX_KIT_SCALE_Z,
+    };
+    int32_t anchor_x_q8 = 0;
+    int32_t anchor_z_q8 = 0;
+    n64game_annex_safe_anchor(active_sector, &anchor_x_q8, &anchor_z_q8);
+    const float yaw = ANNEX_KIT_YAWS[sector];
+    const float rotations[3] = {0.0f, yaw, 0.0f};
+    float translation[3];
+    centered_annex_kit_translation(
+        (float)anchor_x_q8 / 256.0f,
+        (float)anchor_z_q8 / 256.0f,
+        yaw,
+        1.0f,
+        translation
+    );
+    assertf(
+        n64game_static_model_draw(
+            &renderer->annex_kit,
+            sector,
+            renderer->frame_index,
+            scales,
+            rotations,
+            translation
+        ),
+        "Annex kit module draw failed for sector %lu",
+        (unsigned long)sector
+    );
+}
+
+static void draw_battle_kit_backdrop(N64GameRenderer *renderer)
+{
+    const float scales[3] = {
+        ANNEX_KIT_SCALE_X * ANNEX_KIT_BATTLE_SCALE_MULTIPLIER,
+        ANNEX_KIT_SCALE_Y * ANNEX_KIT_BATTLE_SCALE_MULTIPLIER,
+        ANNEX_KIT_SCALE_Z * ANNEX_KIT_BATTLE_SCALE_MULTIPLIER,
+    };
+    const float yaw = 3.1415927f;
+    const float rotations[3] = {0.0f, yaw, 0.0f};
+    float translation[3];
+    centered_annex_kit_translation(
+        0.0f,
+        -50.0f,
+        yaw,
+        ANNEX_KIT_BATTLE_SCALE_MULTIPLIER,
+        translation
+    );
+    assertf(
+        n64game_static_model_draw(
+            &renderer->annex_kit,
+            0U,
+            renderer->frame_index,
+            scales,
+            rotations,
+            translation
+        ),
+        "Battle Annex kit backdrop draw failed"
+    );
 }
 
 static void begin_world_render(
@@ -744,20 +967,37 @@ static void draw_annex_menu(const N64GameCore *game)
 
 static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
 {
+    static const float PLAYER_SCALE = 0.35f;
+    static const float SERA_SCALE = 0.38f;
+    static const float TAVI_SCALE = 0.32f;
+    static const float BEACON_SCALE = 0.34f;
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
     const fm_vec3_t camera = {{player_x, 62.0f, player_z + 88.0f}};
     const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
     begin_world_render(renderer, &camera, &target);
+    draw_annex_kit_module(renderer, game->annex_sector);
     const float angle = (float)game->scene_ticks * 0.018f;
-    draw_actor(renderer, 0U, 4U, player_x, -1.0f, player_z, 0.75f, angle);
-    draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
-    draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
+    draw_actor(
+        renderer, 0U, 4U, player_x, grounded_actor_origin(PLAYER_SCALE),
+        player_z, PLAYER_SCALE, angle
+    );
+    draw_actor(
+        renderer, 1U, 5U, -38.0f, grounded_actor_origin(SERA_SCALE),
+        -8.0f, SERA_SCALE, 0.3f
+    );
+    draw_actor(
+        renderer, 2U, 7U, 5.0f, grounded_actor_origin(TAVI_SCALE),
+        -34.0f, TAVI_SCALE, -0.4f
+    );
     draw_quarrune(
-        renderer, 3U, 52.0f, -18.0f, 18.0f, 0.40f,
+        renderer, 3U, 52.0f, ANNEX_WORLD_FLOOR_Y, 18.0f, 0.40f,
         0.12f + fm_sinf(angle * 1.4f) * 0.035f
     );
-    draw_actor(renderer, 4U, 6U, 74.0f, -6.0f, 40.0f, 0.72f, -angle);
+    draw_actor(
+        renderer, 4U, 6U, 100.0f, grounded_actor_origin(BEACON_SCALE),
+        50.0f, BEACON_SCALE, -angle
+    );
 
     panel(8, 8, 250, 31);
     text_at(16.0f, 15.0f, STYLE_ACCENT, 228.0f, objective_text(game->quest));
@@ -1071,12 +1311,14 @@ static void draw_battle_menu(const N64GameCore *game)
 
 static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
 {
+    static const float BATTLE_ACTOR_SCALE = 0.50f;
     const fm_vec3_t camera = {{0.0f, 56.0f, 112.0f}};
     const fm_vec3_t target = {{0.0f, -4.0f, 0.0f}};
     begin_world_render(renderer, &camera, &target);
-    static const float POSITIONS[4][3] = {
-        {-31.0f, -2.0f, -34.0f}, {26.0f, 0.0f, -30.0f},
-        {-28.0f, -2.0f, -76.0f}, {31.0f, -1.0f, -70.0f},
+    draw_battle_kit_backdrop(renderer);
+    static const float POSITIONS[4][2] = {
+        {-31.0f, -34.0f}, {26.0f, -30.0f},
+        {-28.0f, -76.0f}, {31.0f, -70.0f},
     };
     const float angle = (float)game->scene_ticks * 0.012f;
     for (uint8_t actor = 0U; actor < 4U; ++actor) {
@@ -1084,13 +1326,15 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
             if (actor == 0U) {
                 draw_quarrune(
                     renderer, actor,
-                    POSITIONS[actor][0], -18.0f, POSITIONS[actor][2],
+                    POSITIONS[actor][0], ANNEX_WORLD_FLOOR_Y, POSITIONS[actor][1],
                     0.42f, 0.10f + fm_sinf(angle * 2.0f) * 0.035f
                 );
             } else {
                 draw_actor(renderer, actor, actor,
-                           POSITIONS[actor][0], POSITIONS[actor][1], POSITIONS[actor][2],
-                           0.82f, actor < 2U ? angle : -angle);
+                           POSITIONS[actor][0],
+                           grounded_actor_origin(BATTLE_ACTOR_SCALE),
+                           POSITIONS[actor][1], BATTLE_ACTOR_SCALE,
+                           actor < 2U ? angle : -angle);
             }
         }
     }

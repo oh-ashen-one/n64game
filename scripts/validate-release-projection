@@ -247,7 +247,7 @@ def validate_default_deny(rows: list[Row], root: Path) -> tuple[set[str], int]:
         parts = candidate_id.split(".")
         if len(parts) < 4 or parts[0] != "candidate":
             raise ProjectionError(f"runtime-candidates.tsv line {line_number} has an unmappable ID")
-        owner = ".".join(parts[1:3])
+        owner = ".".join(parts[1:-1])
         if owner not in retained:
             raise ProjectionError(f"runtime candidate owner is outside retained release: {owner}")
     return retained, len(forbidden)

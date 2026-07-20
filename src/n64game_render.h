@@ -15,11 +15,21 @@
 #include "quarrune_render_assets.h"
 
 typedef struct {
+    T3DModel *model;
+    T3DMat4FP *matrices;
+    rspq_block_t *draw_block;
+    uint32_t matrix_count;
+    uint32_t buffer_count;
+    bool ready;
+} N64GameStaticModel;
+
+typedef struct {
     rdpq_font_t *font;
     T3DViewport viewport;
     T3DVertPacked *floor_vertices;
     T3DVertPacked *actor_vertices;
     T3DMat4FP *actor_matrices;
+    N64GameStaticModel annex_kit;
     T3DModel *quarrune_model;
     T3DSkeleton quarrune_skeleton;
     QuarruneRenderAssets quarrune_assets;
@@ -36,6 +46,22 @@ typedef enum {
     N64GAME_LOADING_SAVE_DATA,
     N64GAME_LOADING_READY,
 } N64GameLoadingStage;
+
+bool n64game_static_model_load(
+    N64GameStaticModel *asset,
+    const char *rom_path,
+    uint32_t matrix_count,
+    uint32_t buffer_count
+);
+bool n64game_static_model_draw(
+    N64GameStaticModel *asset,
+    uint32_t matrix_index,
+    uint32_t frame_index,
+    const float scales[3],
+    const float rotations[3],
+    const float translation[3]
+);
+void n64game_static_model_free(N64GameStaticModel *asset);
 
 bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer);
 bool n64game_renderer_finish_init(N64GameRenderer *renderer);

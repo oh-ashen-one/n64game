@@ -15,6 +15,17 @@ QUARRUNE_RUNTIME_CANDIDATES := \
 	$(QUARRUNE_BODY) \
 	$(QUARRUNE_ACCENT) \
 	$(QUARRUNE_SHADOW)
+ANNEX_KIT_SOURCE_DIR := runtime-candidates/env/env.annex.threshold_kit
+ANNEX_KIT_FILESYSTEM_DIR := filesystem/env/env.annex.threshold_kit
+ANNEX_KIT_MODEL := $(ANNEX_KIT_FILESYSTEM_DIR)/annex_threshold_kit.t3dm
+ANNEX_KIT_ARCHITECTURE := $(ANNEX_KIT_FILESYSTEM_DIR)/tex_annex_architecture_ci4_64x64.sprite
+ANNEX_KIT_TRIM := $(ANNEX_KIT_FILESYSTEM_DIR)/tex_annex_trim_resonance_ci4_64x32.sprite
+ANNEX_KIT_MASK := $(ANNEX_KIT_FILESYSTEM_DIR)/tex_annex_resonance_mask_ia8_32x32.sprite
+ANNEX_KIT_RUNTIME_CANDIDATES := \
+	$(ANNEX_KIT_MODEL) \
+	$(ANNEX_KIT_ARCHITECTURE) \
+	$(ANNEX_KIT_TRIM) \
+	$(ANNEX_KIT_MASK)
 
 include $(N64_INST)/include/n64.mk
 include $(T3D_ROOT)/t3d.mk
@@ -61,7 +72,29 @@ $(QUARRUNE_SHADOW): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_blob_shadow_ia8_32x32.pn
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
 
-$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES)
+$(ANNEX_KIT_MODEL): $(ANNEX_KIT_SOURCE_DIR)/annex_threshold_kit.glb | $(T3D_GLTF_TO_3D)
+	@mkdir -p $(dir $@)
+	@echo "    [T3D-CANDIDATE] $@"
+	$(T3D_GLTF_TO_3D) "$<" "$@" --base-scale=64 --asset-path=runtime-candidates
+
+$(ANNEX_KIT_ARCHITECTURE): $(ANNEX_KIT_SOURCE_DIR)/tex_annex_architecture_ci4_64x64.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(ANNEX_KIT_TRIM): $(ANNEX_KIT_SOURCE_DIR)/tex_annex_trim_resonance_ci4_64x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 64,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(ANNEX_KIT_MASK): $(ANNEX_KIT_SOURCE_DIR)/tex_annex_resonance_mask_ia8_32x32.png
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(BUILD_DIR)/$(ROM_NAME).dfs: \
+	$(QUARRUNE_RUNTIME_CANDIDATES) \
+	$(ANNEX_KIT_RUNTIME_CANDIDATES)
 
 $(ROM_NAME).z64: N64_ROM_TITLE = "N64GAME OPENING"
 $(ROM_NAME).z64: N64_ROM_SAVETYPE = eeprom4k

@@ -808,7 +808,7 @@ static void test_annex_acceleration_run_and_collision(void)
     n64game_core_update(&walking, (N64GameInput){0});
     assert(walking.player_velocity_x_q8 < moving_velocity_q8);
 
-    n64game_core_set_player_position(&walking, 0, 30 * 256);
+    n64game_core_set_player_position(&walking, 0, 22 * 256);
     for (unsigned tick = 0U; tick < 80U; ++tick) {
         n64game_core_update(
             &walking,
@@ -818,7 +818,7 @@ static void test_annex_acceleration_run_and_collision(void)
             }
         );
     }
-    assert(walking.player_z_q8 == 32 * 256);
+    assert(walking.player_z_q8 == 24 * 256);
     assert(n64game_annex_position_valid(
         walking.player_x_q8, walking.player_z_q8
     ));

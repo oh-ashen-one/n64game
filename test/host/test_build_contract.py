@@ -64,13 +64,16 @@ class BuildContractTests(unittest.TestCase):
         report = build.validate_runtime_assets()
         self.assertEqual(report["runtime_asset_count"], 0)
 
-    def test_quarrune_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
+    def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 4)
+        self.assertEqual(report["runtime_candidate_count"], 8)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
-            ["model_glb", "texture_png", "texture_png", "texture_png"],
+            [
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+            ],
         )
         self.assertTrue(all(
             entry["status"] == "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE"
@@ -233,7 +236,8 @@ class BuildContractTests(unittest.TestCase):
                 f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
                 makefile,
             )
-        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
+        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs:", makefile)
+        self.assertIn("$(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
         self.assertIn("$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs", makefile)
         self.assertNotIn("mkasset", makefile)
 
@@ -243,6 +247,21 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("quarrune_render_assets_dynamic_texture_cb", renderer)
         self.assertIn("rspq_block_run(renderer->quarrune_draw_block)", renderer)
         self.assertIn("n64game_renderer_destroy", renderer)
+
+    def test_annex_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("ANNEX_KIT_SOURCE_DIR := runtime-candidates/env/env.annex.threshold_kit", makefile)
+        self.assertIn("ANNEX_KIT_FILESYSTEM_DIR := filesystem/env/env.annex.threshold_kit", makefile)
+        self.assertIn("$(ANNEX_KIT_SOURCE_DIR)/annex_threshold_kit.glb", makefile)
+        self.assertIn('$(T3D_GLTF_TO_3D) "$<" "$@" --base-scale=64 --asset-path=runtime-candidates', makefile)
+        for format_name, tile_size in (("CI4", "64,64"), ("CI4", "64,32"), ("IA8", "32,32")):
+            self.assertIn(
+                f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
+                makefile,
+            )
+        self.assertNotIn("tex_annex_architecture_ci8_64x64", makefile)
+        self.assertIn("$(ANNEX_KIT_RUNTIME_CANDIDATES)", makefile)
+        self.assertNotIn("mkasset", makefile)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
