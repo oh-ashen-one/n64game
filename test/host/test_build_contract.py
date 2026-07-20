@@ -173,6 +173,8 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("display_set_fps_limit(30.0f)", source)
         self.assertIn("t3d_init", source)
         self.assertIn("dfs_init(DFS_DEFAULT_LOCATION)", source)
+        self.assertIn("n64game_audio_init();", source)
+        self.assertIn("play_input_feedback(input);", source)
         self.assertIn("n64game_core_update", source)
         self.assertIn("n64game_renderer_draw", source)
         self.assertIn("n64game_renderer_init_bootstrap", source)
@@ -238,6 +240,7 @@ class BuildContractTests(unittest.TestCase):
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for object_name in (
             "n64game_annex.o",
+            "n64game_audio.o",
             "n64game_core.o",
             "n64game_render.o",
             "n64game_save.o",
@@ -341,6 +344,15 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn(elf_rule, makefile)
         self.assertNotIn(duplicate_rule, makefile)
         self.assertIn("include $(T3D_ROOT)/t3d.mk", makefile)
+
+    def test_runtime_audio_is_procedural_and_asset_free(self) -> None:
+        source = (ROOT / "src" / "n64game_audio.c").read_text(encoding="utf-8")
+        self.assertIn("audio_init(", source)
+        self.assertIn("audio_set_buffer_callback(audio_fill);", source)
+        self.assertIn("N64GAME_AUDIO_SAMPLE_RATE 22050", source)
+        self.assertNotIn("wav64_load", source)
+        self.assertNotIn("xm64player", source)
+        self.assertNotIn("rom:/", source)
 
     def test_conversion_suppression_is_scoped_to_the_tiny3d_header(self) -> None:
         source = (ROOT / "src" / "n64game_render.h").read_text(encoding="utf-8")

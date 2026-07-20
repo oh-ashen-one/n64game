@@ -8,6 +8,7 @@
 
 #include <libdragon.h>
 
+#include "n64game_audio.h"
 #include "n64game_core.h"
 #include "n64game_render.h"
 #include "n64game_save.h"
@@ -348,6 +349,26 @@ static bool input_pressed(N64GameInput input, N64GameInputButton button)
     return (input.pressed & (uint16_t)button) != 0U;
 }
 
+static void play_input_feedback(N64GameInput input)
+{
+    if (input_pressed(input, N64GAME_INPUT_CONFIRM)) {
+        n64game_audio_trigger(N64GAME_AUDIO_CUE_CONFIRM);
+    } else if (input_pressed(input, N64GAME_INPUT_CANCEL)) {
+        n64game_audio_trigger(N64GAME_AUDIO_CUE_CANCEL);
+    } else if (input_pressed(input, N64GAME_INPUT_RELAY)) {
+        n64game_audio_trigger(N64GAME_AUDIO_CUE_RELAY);
+    } else if (
+        input_pressed(input, N64GAME_INPUT_UP) ||
+        input_pressed(input, N64GAME_INPUT_DOWN) ||
+        input_pressed(input, N64GAME_INPUT_LEFT) ||
+        input_pressed(input, N64GAME_INPUT_RIGHT) ||
+        input_pressed(input, N64GAME_INPUT_START) ||
+        input_pressed(input, N64GAME_INPUT_PAUSE)
+    ) {
+        n64game_audio_trigger(N64GAME_AUDIO_CUE_NAVIGATE);
+    }
+}
+
 static size_t save_slot_offset(uint8_t slot)
 {
     return (size_t)slot * N64GAME_SAVE_BYTES;
@@ -492,6 +513,7 @@ int main(void)
     );
     display_set_fps_limit(30.0f);
     rdpq_init();
+    n64game_audio_init();
 
     N64GameRenderer renderer;
     assertf(
@@ -591,6 +613,12 @@ int main(void)
             n64game_core_update_controller(
                 &game, input, controller_connected, clear_edge_frame
             );
+        }
+        if (controller_connected && !clear_edge_frame) {
+            play_input_feedback(input);
+        }
+        if (scene_before != game.scene) {
+            n64game_audio_trigger(N64GAME_AUDIO_CUE_TRANSITION);
         }
         const bool explicit_final_save_retry =
             scene_before == N64GAME_SCENE_END_CHAPTER &&
