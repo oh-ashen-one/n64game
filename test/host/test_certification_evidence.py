@@ -454,6 +454,46 @@ class CertificationEvidenceTests(unittest.TestCase):
             self.assert_rejected()
             self.package.replace_log(relative, original_text)
 
+        with self.subTest("timing above ten minutes"):
+            relative = "logs/timing-1.log"
+            original_text = (self.package.root / relative).read_text(encoding="utf-8")
+            mutated = original_text.replace("wall_ticks=400100 duration_ticks=400000", "wall_ticks=700100 duration_ticks=700000")
+            self.package.replace_log(relative, mutated)
+            self.assert_rejected()
+            self.package.replace_log(relative, original_text)
+
+        with self.subTest("two individually legal runs still miss the 6-8 minute median"):
+            originals = {}
+            for relative in ("logs/timing-1.log", "logs/timing-2.log"):
+                originals[relative] = (self.package.root / relative).read_text(encoding="utf-8")
+                mutated = originals[relative].replace(
+                    "wall_ticks=400100 duration_ticks=400000",
+                    "wall_ticks=590100 duration_ticks=590000",
+                )
+                self.package.replace_log(relative, mutated)
+            self.assert_rejected()
+            for relative, original_text in originals.items():
+                self.package.replace_log(relative, original_text)
+
+        with self.subTest("active control below four minutes"):
+            relative = "logs/timing-1.log"
+            original_text = (self.package.root / relative).read_text(encoding="utf-8")
+            mutated = original_text.replace("active_control_ticks=8000", "active_control_ticks=7199")
+            self.package.replace_log(relative, mutated)
+            self.assert_rejected()
+            self.package.replace_log(relative, original_text)
+
+        with self.subTest("timing runs use different guest clocks"):
+            relative = "logs/timing-2.log"
+            original_text = (self.package.root / relative).read_text(encoding="utf-8")
+            mutated = original_text.replace(
+                "ticks_per_second=1000 target_fps=30 budget_ticks=34 tolerance_ticks=1",
+                "ticks_per_second=1001 target_fps=30 budget_ticks=34 tolerance_ticks=2",
+            )
+            self.package.replace_log(relative, mutated)
+            self.assert_rejected()
+            self.package.replace_log(relative, original_text)
+
     def test_final_save_order_freshness_and_stable_clock_deaths_are_rejected(self) -> None:
         relative = "logs/timing-1.log"
         original_text = (self.package.root / relative).read_text(encoding="utf-8")
