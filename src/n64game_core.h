@@ -14,6 +14,8 @@
 #define N64GAME_RESONANCE_MAX 100
 #define N64GAME_QUARRUNE_MAX_HP 92
 #define N64GAME_AYSELOR_MAX_HP 78
+#define N64GAME_BATTLE_STAGE_MIN (-2)
+#define N64GAME_BATTLE_STAGE_MAX 2
 #define N64GAME_TARGET_ALL UINT8_C(0xFF)
 #define N64GAME_MOVE_FINISHER UINT8_C(4)
 
@@ -116,9 +118,15 @@ typedef enum {
 
 typedef enum {
     N64GAME_EFFECT_DAMAGE = 0,
+    N64GAME_EFFECT_DAMAGE_STAGGER_CHANCE,
     N64GAME_EFFECT_DAMAGE_STAGGER,
-    N64GAME_EFFECT_GUARD,
-    N64GAME_EFFECT_HEAL,
+    N64GAME_EFFECT_DAMAGE_GROUND,
+    N64GAME_EFFECT_GUARD_UP,
+    N64GAME_EFFECT_SPEED_UP,
+    N64GAME_EFFECT_EMPOWER_NEXT_DAMAGE,
+    N64GAME_EFFECT_HEAL_CLEAR_STAGGER,
+    N64GAME_EFFECT_POWER_DOWN,
+    N64GAME_EFFECT_GUARD_DOWN,
     N64GAME_EFFECT_FINISHER,
 } N64GameMoveEffect;
 
@@ -130,6 +138,10 @@ typedef struct {
     uint8_t power;
     uint8_t resonance_gain;
     int8_t priority;
+    uint8_t effect_chance_percent;
+    uint8_t stage_rounds;
+    uint8_t cooldown_rounds;
+    bool once_per_encounter;
 } N64GameMoveDef;
 
 typedef struct {
@@ -140,9 +152,19 @@ typedef struct {
     int16_t power;
     int16_t guard;
     int16_t speed;
+    int8_t power_stage;
     int8_t guard_stage;
+    int8_t speed_stage;
+    uint8_t power_stage_expires_round;
+    uint8_t guard_stage_expires_round;
+    uint8_t speed_stage_expires_round;
     uint8_t stagger_rounds;
+    uint8_t used_move_mask;
+    uint8_t move_ready_round[N64GAME_BATTLE_MOVE_COUNT];
+    uint8_t partner_setup_round;
     bool player_side;
+    bool empowered_damage;
+    bool empowered_by_partner;
 } N64GameBattleActor;
 
 typedef struct {
@@ -184,6 +206,8 @@ typedef struct {
     uint8_t queue_cursor;
     uint8_t round;
     uint8_t resonance;
+    uint8_t linked_followthrough_round;
+    uint32_t random_state;
     bool reward_applied;
 } N64GameBattle;
 

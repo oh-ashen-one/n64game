@@ -197,6 +197,232 @@ static void resolve_round(N64GameBattle *battle)
     }
 }
 
+typedef struct {
+    const char *name;
+    N64GameAffinity affinity;
+    N64GameTargetRule target;
+    N64GameMoveEffect effect;
+    uint8_t power;
+    uint8_t resonance;
+    uint8_t chance;
+    uint8_t stage_rounds;
+    uint8_t cooldown_rounds;
+    bool once;
+} ExpectedMove;
+
+static void inject_action(
+    N64GameBattle *battle,
+    uint8_t actor,
+    uint8_t move,
+    uint8_t target
+)
+{
+    const N64GameMoveDef *const definition = n64game_move_def(
+        battle->actors[actor].id, move
+    );
+    assert(definition != NULL);
+    battle->phase = N64GAME_BATTLE_PRESENT;
+    battle->queue_count = 2U;
+    battle->queue_cursor = 0U;
+    battle->queue[0] = (N64GameBattleAction){
+        .actor = actor,
+        .move = move,
+        .target = target,
+        .priority = definition->priority,
+        .valid = true,
+    };
+    battle->queue[1] = (N64GameBattleAction){0};
+    assert(n64game_battle_resolve_next(battle));
+    assert(battle->phase == N64GAME_BATTLE_PRESENT);
+    assert(battle->queue_cursor == 1U);
+}
+
+static void test_canonical_retained_move_definitions_and_effects(void)
+{
+    static const ExpectedMove EXPECTED[N64GAME_BATTLE_ACTOR_COUNT]
+        [N64GAME_BATTLE_MOVE_COUNT] = {
+        [N64GAME_ECHO_QUARRUNE] = {
+            {"RIDGE RAM", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_DAMAGE, 28, 6, 0, 0, 0, false},
+            {"BRACE RELAY", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ONE_ALLY,
+             N64GAME_EFFECT_GUARD_UP, 0, 14, 0, 2, 0, false},
+            {"GROUNDING RING", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ALL_ENEMIES,
+             N64GAME_EFFECT_DAMAGE_GROUND, 14, 6, 0, 0, 0, false},
+            {"STEADY PULSE", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ONE_ALLY,
+             N64GAME_EFFECT_HEAL_CLEAR_STAGGER, 12, 0, 0, 0, 0, true},
+        },
+        [N64GAME_ECHO_AYSELOR] = {
+            {"SIROCCO SLICE", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_DAMAGE, 26, 6, 0, 0, 0, false},
+            {"LIFT CURRENT", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ALLY,
+             N64GAME_EFFECT_SPEED_UP, 0, 14, 0, 2, 0, false},
+            {"DAZZLE WAKE", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ALL_ENEMIES,
+             N64GAME_EFFECT_DAMAGE_STAGGER_CHANCE, 12, 6, 35, 0, 0, false},
+            {"GUIDING DRAFT", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ALLY,
+             N64GAME_EFFECT_EMPOWER_NEXT_DAMAGE, 0, 12, 0, 0, 0, false},
+        },
+        [N64GAME_ECHO_GYRECLAST] = {
+            {"AUGER KNUCKLE", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_DAMAGE, 27, 0, 0, 0, 0, false},
+            {"DUST SCREEN", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ALL_ENEMIES,
+             N64GAME_EFFECT_POWER_DOWN, 0, 0, 0, 1, 0, false},
+            {"FAULT PIN", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_DAMAGE_STAGGER, 18, 0, 100, 0, 2, false},
+            {"CARAPACE BRACE", N64GAME_AFFINITY_STRATA, N64GAME_TARGET_SELF,
+             N64GAME_EFFECT_GUARD_UP, 0, 0, 0, 2, 0, false},
+        },
+        [N64GAME_ECHO_KIVARRAX] = {
+            {"CROSSWIND CUT", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_DAMAGE, 25, 0, 0, 0, 0, false},
+            {"SLIPSTREAM", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ALLY,
+             N64GAME_EFFECT_SPEED_UP, 0, 0, 0, 2, 0, false},
+            {"PRESSURE DROP", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ONE_ENEMY,
+             N64GAME_EFFECT_GUARD_DOWN, 0, 0, 0, 2, 0, false},
+            {"TALON SWEEP", N64GAME_AFFINITY_GALE, N64GAME_TARGET_ALL_ENEMIES,
+             N64GAME_EFFECT_DAMAGE, 12, 0, 0, 0, 0, false},
+        },
+    };
+
+    for (uint8_t actor = 0U; actor < N64GAME_BATTLE_ACTOR_COUNT; ++actor) {
+        for (uint8_t move = 0U; move < N64GAME_BATTLE_MOVE_COUNT; ++move) {
+            const N64GameMoveDef *const actual = n64game_move_def(
+                (N64GameEchoform)actor, move
+            );
+            const ExpectedMove *const expected = &EXPECTED[actor][move];
+            assert(actual != NULL);
+            assert(strcmp(actual->name, expected->name) == 0);
+            assert(actual->affinity == expected->affinity);
+            assert(actual->target_rule == expected->target);
+            assert(actual->effect == expected->effect);
+            assert(actual->power == expected->power);
+            assert(actual->resonance_gain == expected->resonance);
+            assert(actual->effect_chance_percent == expected->chance);
+            assert(actual->stage_rounds == expected->stage_rounds);
+            assert(actual->cooldown_rounds == expected->cooldown_rounds);
+            assert(actual->once_per_encounter == expected->once);
+            assert(actual->priority == 0);
+        }
+    }
+    assert(n64game_move_def((N64GameEchoform)N64GAME_BATTLE_ACTOR_COUNT, 0U) == NULL);
+    assert(n64game_move_def(N64GAME_ECHO_QUARRUNE, N64GAME_BATTLE_MOVE_COUNT) == NULL);
+
+    N64GameBattle battle;
+    n64game_battle_begin(&battle);
+    assert(battle.actors[2].affinity == N64GAME_AFFINITY_STRATA);
+    assert(battle.actors[3].affinity == N64GAME_AFFINITY_GALE);
+
+    inject_action(&battle, 1U, 3U, 0U);
+    assert(battle.actors[0].empowered_damage);
+    assert(battle.actors[0].empowered_by_partner);
+    assert(battle.actors[0].partner_setup_round == 1U);
+    assert(battle.resonance == 12U);
+    const int16_t gyreclast_hp = battle.actors[2].hp;
+    inject_action(&battle, 0U, 0U, 2U);
+    assert(gyreclast_hp - battle.actors[2].hp == 37);
+    assert(!battle.actors[0].empowered_damage);
+    assert(!battle.actors[0].empowered_by_partner);
+    assert(battle.actors[0].partner_setup_round == 0U);
+    assert(battle.resonance == 30U);
+
+    n64game_battle_begin(&battle);
+    battle.actors[1].hp = 50;
+    battle.actors[1].stagger_rounds = 1U;
+    inject_action(&battle, 0U, 3U, 1U);
+    assert(battle.actors[1].hp == 62);
+    assert(battle.actors[1].stagger_rounds == 0U);
+    assert(battle.resonance == 8U);
+    assert(!n64game_battle_target_legal(&battle, 0U, 3U, 1U));
+    assert(battle.actors[1].partner_setup_round == 1U);
+    inject_action(&battle, 1U, 0U, 3U);
+    assert(battle.resonance == 26U);
+    assert(battle.actors[1].partner_setup_round == 0U);
+
+    n64game_battle_begin(&battle);
+    for (unsigned use = 0U; use < 2U; ++use) {
+        inject_action(&battle, 0U, 1U, 1U);
+    }
+    assert(battle.actors[1].guard_stage == N64GAME_BATTLE_STAGE_MAX);
+    assert(battle.actors[1].guard_stage_expires_round == 3U);
+    battle.round = 2U;
+    inject_action(&battle, 0U, 1U, 1U);
+    assert(!battle.last_event.skipped);
+    assert(battle.actors[1].guard_stage == N64GAME_BATTLE_STAGE_MAX);
+    assert(battle.actors[1].guard_stage_expires_round == 4U);
+    assert(battle.resonance == 42U);
+    for (unsigned use = 0U; use < 5U; ++use) {
+        inject_action(&battle, 3U, 2U, 1U);
+    }
+    assert(battle.actors[1].guard_stage == N64GAME_BATTLE_STAGE_MIN);
+    assert(!battle.last_event.skipped);
+
+    n64game_battle_begin(&battle);
+    battle.actors[1].hp = 0;
+    inject_action(&battle, 0U, 1U, 1U);
+    assert(battle.last_event.target == 0U);
+    assert(battle.actors[0].guard_stage == 1);
+    assert(battle.resonance == 0U);
+    assert(battle.actors[0].partner_setup_round == 0U);
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 0U, 1U, 1U);
+    assert(battle.actors[1].partner_setup_round == 1U);
+    inject_action(&battle, 1U, 0U, 3U);
+    assert(battle.resonance == 32U);
+    assert(battle.linked_followthrough_round == 1U);
+    inject_action(&battle, 1U, 0U, 3U);
+    assert(battle.resonance == 38U);
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 0U, 1U, 1U);
+    battle.round = 2U;
+    inject_action(&battle, 1U, 0U, 3U);
+    assert(battle.resonance == 20U);
+    assert(battle.linked_followthrough_round == 0U);
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 1U, 1U, 0U);
+    assert(battle.actors[0].speed_stage == 1);
+    assert(battle.actors[0].partner_setup_round == 1U);
+    inject_action(&battle, 0U, 0U, 2U);
+    assert(battle.resonance == 32U);
+
+    n64game_battle_begin(&battle);
+    battle.actors[2].power_stage = 2;
+    battle.actors[3].power_stage = 2;
+    inject_action(&battle, 0U, 2U, N64GAME_TARGET_ALL);
+    assert(battle.actors[2].power_stage == 1);
+    assert(battle.actors[3].power_stage == 1);
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 1U, 2U, N64GAME_TARGET_ALL);
+    assert(battle.actors[2].stagger_rounds == 1U);
+    assert(battle.actors[3].stagger_rounds == 0U);
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 2U, 2U, 0U);
+    assert(battle.actors[0].stagger_rounds == 1U);
+    assert(battle.actors[2].move_ready_round[2] == 4U);
+    assert(!n64game_battle_target_legal(&battle, 2U, 2U, 0U));
+    battle.round = 4U;
+    assert(n64game_battle_target_legal(&battle, 2U, 2U, 0U));
+
+    n64game_battle_begin(&battle);
+    inject_action(&battle, 2U, 1U, N64GAME_TARGET_ALL);
+    inject_action(&battle, 2U, 1U, N64GAME_TARGET_ALL);
+    inject_action(&battle, 2U, 1U, N64GAME_TARGET_ALL);
+    assert(battle.actors[0].power_stage == N64GAME_BATTLE_STAGE_MIN);
+    assert(battle.actors[1].power_stage == N64GAME_BATTLE_STAGE_MIN);
+    inject_action(&battle, 3U, 1U, 2U);
+    assert(battle.actors[2].speed_stage == 1);
+    inject_action(&battle, 2U, 3U, 2U);
+    assert(battle.actors[2].guard_stage == 1);
+    const int16_t quarrune_hp = battle.actors[0].hp;
+    const int16_t ayselor_hp = battle.actors[1].hp;
+    inject_action(&battle, 3U, 3U, N64GAME_TARGET_ALL);
+    assert(battle.actors[0].hp < quarrune_hp);
+    assert(battle.actors[1].hp < ayselor_hp);
+}
+
 static void test_input_only_release_route(void)
 {
     N64GameCore game;
@@ -598,8 +824,9 @@ static void test_battle_legality_order_retarget_and_retry(void)
     assert(n64game_battle_commit_action(&battle, 1U, 0U, 3U));
     resolve_round(&battle);
     assert(battle.phase == N64GAME_BATTLE_COMMAND);
-    assert(battle.actors[3].guard_stage == 1);
-    assert(battle.resonance == 32U);
+    assert(battle.actors[1].guard_stage == 1);
+    assert(battle.actors[2].speed_stage == 1);
+    assert(battle.resonance == 20U);
 
     assert(n64game_battle_commit_action(&battle, 0U, 0U, 2U));
     assert(n64game_battle_commit_action(&battle, 1U, 0U, 2U));
@@ -911,6 +1138,7 @@ static void test_save_journal_survives_each_copy_on_write_boundary(void)
 
 int main(void)
 {
+    test_canonical_retained_move_definitions_and_effects();
     test_input_only_release_route();
     test_annex_acceleration_run_and_collision();
     test_manual_save_requires_a_fresh_menu_entry();
