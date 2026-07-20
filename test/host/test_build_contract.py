@@ -359,15 +359,15 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--setting Input/Driver=SDL", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
         expected_keyboard_bindings = {
-            "Up": 88,
-            "Down": 89,
-            "Left": 90,
-            "Right": 91,
+            "Up": 92,
+            "Down": 93,
+            "Left": 94,
+            "Right": 95,
             "B": 63,
             "A": 65,
             "C-Down": 42,
-            "Z": 94,
-            "Start": 93,
+            "Z": 98,
+            "Start": 97,
         }
         for control, input_id in expected_keyboard_bindings.items():
             setting = (
