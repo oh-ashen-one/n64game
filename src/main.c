@@ -475,6 +475,7 @@ static bool save_writer_pump(
 
 int main(void)
 {
+    static const unsigned long LOADING_STAGE_HOLD_MS = 180UL;
     const uint64_t boot_ticks = get_ticks();
     debug_init_emulog();
     debug_init_usblog();
@@ -498,10 +499,12 @@ int main(void)
         "N64GAME loading renderer allocation failed"
     );
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_RUNTIME);
+    wait_ms(LOADING_STAGE_HOLD_MS);
 
     joypad_init();
     t3d_init((T3DInitParams){});
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_ANNEX_ASSETS);
+    wait_ms(LOADING_STAGE_HOLD_MS);
     assertf(
         n64game_renderer_finish_init(&renderer),
         "N64GAME renderer allocation failed"
@@ -513,6 +516,7 @@ int main(void)
     n64game_core_init(&continue_game);
 
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_SAVE_DATA);
+    wait_ms(LOADING_STAGE_HOLD_MS);
     const eeprom_type_t save_type = eeprom_present();
     const bool save_available = save_type != EEPROM_NONE;
     uint32_t save_sequence = 0U;
@@ -536,6 +540,7 @@ int main(void)
         );
     }
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_READY);
+    wait_ms(LOADING_STAGE_HOLD_MS);
 
     heap_stats_t heap_stats;
     sys_get_heap_stats(&heap_stats);
