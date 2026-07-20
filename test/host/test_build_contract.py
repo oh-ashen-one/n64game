@@ -181,6 +181,8 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("N64GAME_LOADING_ANNEX_ASSETS", source)
         self.assertIn("N64GAME_LOADING_SAVE_DATA", source)
         self.assertIn("N64GAME_LOADING_READY", source)
+        self.assertIn("LOADING_STAGE_HOLD_MS = 180UL", source)
+        self.assertEqual(source.count("wait_ms(LOADING_STAGE_HOLD_MS);"), 4)
         self.assertLess(
             source.index("n64game_renderer_init_bootstrap"),
             source.index("t3d_init((T3DInitParams){})"),
@@ -243,6 +245,20 @@ class BuildContractTests(unittest.TestCase):
             "player_render_assets.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
+
+    def test_opening_cutscene_slot_and_loading_treatment_stay_spec_exact(self) -> None:
+        render_source = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
+        self.assertIn('"INSERT CUTSCENE HERE"', render_source)
+        self.assertIn('"A OR START TO BEGIN"', render_source)
+        self.assertIn('"STORYBOARD PACKAGE INCLUDED"', render_source)
+        self.assertIn('"PLAYBACK WINDOW / 4:3 / 54.5 SEC"', render_source)
+        self.assertIn('"SOLACE INTERCEPTION"', render_source)
+        self.assertIn('"LOADING MERIDIAN ANNEX"', render_source)
+        self.assertIn('"SIGNAL PATH READY"', render_source)
+        self.assertLess(
+            render_source.index('"PLAYBACK WINDOW / 4:3 / 54.5 SEC"'),
+            render_source.index('"INSERT CUTSCENE HERE"'),
+        )
 
     def test_quarrune_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
