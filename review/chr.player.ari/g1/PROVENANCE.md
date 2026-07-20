@@ -4,9 +4,9 @@ subset_sha256: 4e1a0c8180fa4008b0bfe937ebea26b3056cd600af3b44d7ae167fdbd06554b5
 subset_allowlist: NONE
 creator_id: openai.codex-n64game
 rights_holder_id: oh-ashen-one.project
-source_manifest: assets-src/chr/chr.player.ari/SOURCE_MANIFEST.sha256@88bfbb0eef8f665feda842d33b0ef6e378a0a7c4ffdd237d3d754547030de4a4
+source_manifest: assets-src/chr/chr.player.ari/SOURCE_MANIFEST.sha256@2dda4ea9b08aac46b89c702dc06c774ffd4cb597c51602b61cb234eb5e81e2e3
 output_manifest: NONE
 rights_basis: generated-provider-terms
-rights_evidence: assets-src/chr/chr.player.ari/RIGHTS.md@af80f699d62a7d8a4a620893a7ebe37b5fdb3554bd2096f94eaf529ceb4ec887
+rights_evidence: assets-src/chr/chr.player.ari/RIGHTS.md@22298325a634f84e8efde03b022067d6d1bf48021d57bc03a5f907512c6df47e
 transformations_sha256: 6106490f814adc6ee0f7023d99a71781b89e8328bbc8f3d52102468c6509bb01
 output_license: provider-terms-output
