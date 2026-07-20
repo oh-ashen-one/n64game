@@ -1,0 +1,10 @@
+schema: n64game-rights-evidence-v1
+subject_id: echo.gyreclast
+rights_basis: generated-provider-terms
+rights_holder_id: oh-ashen-one.project
+output_license: provider-terms-output
+evidence_kind: GENERATIVE_TERMS
+input_records: assets-src/echo/echo.gyreclast/gyreclast_concept_g1_v1.png@64ee1a64ecb6fc8c537e07c4dcab23ce0fdcf909b45bce1b71e3d74b711431ac|2026-07-20T20:27:45Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.gyreclast/rights-support/OPENAI_PROVIDER_TERMS.md@d89d3da6a8290798d9a2e961603efd20c600206750a11e17b7ade6f9a3b7ce17|NONE|NONE
+third_party_notices: assets-src/echo/echo.gyreclast/rights-support/THIRD_PARTY_NOTICE.md@9a1066851f1059524de4f0d125bb5573ab226a53f2f5146b25196e8b2ad6d35f
+reviewer_id: openai.codex-rights-auditor
+verified_at: 2026-07-20T20:27:58Z
