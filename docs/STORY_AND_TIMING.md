@@ -1,33 +1,29 @@
 # Story, Script, and Timing Contract
 
-Status: Gate 2 preproduction lock
+Status: reduced-release active contract plus archival full-opening reference
 
 Authority: subordinate only to `docs/N64GAME_MASTER_SPEC.md` and later explicit user changes
 
 Timing basis: first-time play from cold boot through the closing hook's stable interactive end-card handoff, excluding idle time
 
-This document is the implementation-ready narrative contract for the complete opening chapter. It fixes the original story, scene order, encounter fiction, dialogue, objectives, progression flags, failure behavior, and pacing evidence. It does not authorize copying any protected reference expression. A scene may be restaged to solve a measured camera, memory, or navigation problem, but no required beat, destination, battle, or outcome may be removed without updating the master specification.
+This document was originally written for the larger Gate 2 opening. The active release is now the one-week reduced chapter in `docs/N64GAME_MASTER_SPEC.md`: one finished Meridian Research Annex destination, one complete Quarrune/Ayselor versus Gyreclast/Kivarrax 2v2 Resonance battle, the Solace beacon hook, and the `INSERT CUTSCENE HERE` future-cinematic slot. Older Estate, world-map, Rusk/Ivo, follower, second-battle, and 18-25 minute material below is archival future-reference only unless a later master-spec revision explicitly restores it.
+
+The active sections below fix the current release's story order, objective, pacing evidence, and acceptance criteria. They do not authorize copying any protected reference expression. A scene may be restaged to solve a measured camera, memory, or navigation problem, but no current required beat, battle, or outcome may be removed without updating the master specification.
 
 ## 1. Experience and pacing lock
 
-The median target is **22 minutes 30 seconds**. Run three qualifying first-playthrough-style certifications, excluding idle time from each. The median of their three total durations must be 18–25 minutes. Every one of the three qualifying runs must independently record at least 15 minutes of active-control time; active-control compliance is never evaluated by median. For this contract, the closing hook ends on the first frame that the authored end card has resolved its save outcome and its stable choices accept input; the post-`HOOK_014` fade, record feedback, and end-card reveal are therefore part of the measured hook handoff rather than unmeasured post-roll. Active control means movement, exploration, interaction choice, name entry, party/Field Relay use, world-map choice, battle command/target selection, or retry/end-card choice. Merely advancing mandatory dialogue does not count. The design must not stall the player or inflate text to hit time.
+The reduced-release target is a **6-8 minute median** first-time playthrough. Run two qualifying first-playthrough-style certifications, excluding intentional idle time from each. Each run must land between 6 and 10 minutes, and their median must land between 6 and 8 minutes. Each run must include at least four minutes of player control. The closing hook ends on the first frame that the authored end-card/post-chapter choices accept input after the final save outcome is resolved. Active control means movement, exploration, interaction choice, name entry, party/Field Relay use, battle command/target selection, retry/return selection, or end-card choice. Merely advancing mandatory dialogue does not count. The design must not stall the player or inflate text to hit time.
 
 | Clock target | Segment | Required content | Active-control budget |
 |---|---|---|---:|
-| 0:00–0:11 | Boot/title | Game mark, real initialization, first-run New Game selection | 0:05 |
-| 0:11–0:15 | Opening slot | 106-frame slate: 8-frame fade, 90-frame fully visible `INSERT CUTSCENE HERE` hold, 8-frame fade; or immediate skip | 0:00 |
-| 0:15–0:45 | Name entry | 1–8 uppercase characters, default `ARI`, protected confirm/cancel | 0:30 |
-| 0:45–4:40 | Simulation | Fly-in and complete interactive 2v2 tutorial | 3:10 |
-| 4:40–10:35 | Meridian Annex | Starter onboarding, assignment, two-level exploration, Field Relay, Tavi clue, exit | 4:20 |
-| 10:35–11:20 | World map/travel | Estate selection, travel animation, real loading | 0:35 |
-| 11:20–13:15 | Estate courtyard | Arrival exploration, Rusk confrontation | 1:20 |
-| 13:15–16:10 | Rusk battle | Complete real 2v2 battle, result/progression | 2:30 |
-| 16:10–19:35 | Estate interior | Apology, invention exploration, Ivo/Tavi reunion, follower return | 2:00 |
-| 19:35–22:15 | Annex return/hook | Map return, objective resolution, Solace beacon, Fracture response | 0:55 |
-| 22:15–22:30 | End state | Save confirmation, chapter card, stable choice | 0:10 |
-|  | **Target total** |  | **15:35** |
+| 0:00-0:25 | Boot/loading/opening slot | Original mark, honest loading, polished `INSERT CUTSCENE HERE` slate, watched or skipped to same flag | 0:00 |
+| 0:25-1:20 | Name entry and arrival | 1-8 uppercase characters, default `ARI`, protected confirm/cancel, Annex camera reveal and Sera/Tavi setup | 0:35 |
+| 1:20-3:00 | Focused Annex exploration | Atrium, simulation chamber, relay workshop, exterior overlook, required conversations, four examines, pause/party/help/save | 1:30 |
+| 3:00-6:20 | Resonance battle | Complete 2v2 command/target/queue battle, legal alternatives, support, Resonance, `Horizon Break`, victory/defeat/retry/return | 2:20 |
+| 6:20-8:00 | Beacon hook and end state | Relay receives Solace beacon, staged Sera/Tavi/player/team reaction, Fracture pulse, final save, stable end card | 0:25 |
+|  | **Target total** |  | **4:50** |
 
-The controlled-time budget includes interactive menu/UI reading and decision time, but it excludes advancing or merely reading mandatory dialogue and includes no optional detour longer than 45 seconds. Mandatory paths must remain direct. Optional interactions can add roughly 2–4 minutes for curious players without being required to reach the 18-minute floor. Certification runners receive no route instructions beyond the on-screen game.
+The controlled-time budget includes interactive menu/UI reading and decision time, but it excludes advancing or merely reading mandatory dialogue and includes no optional detour longer than 45 seconds. Mandatory paths must remain direct. Optional interactions can add roughly 1-2 minutes for curious players without being required to reach the six-minute floor. Certification runners receive no route instructions beyond the on-screen game.
 
 Clock entries are authored arrival targets with a ±15-second tolerance at each boundary, not timers. The game never waits for a boundary before allowing progress.
 
@@ -35,16 +31,16 @@ Clock entries are authored arrival targets with a ±15-second tolerance at each 
 
 The Meridian researchers study Resonance: the measurable cooperative pattern formed between people and Echoforms. Their carrier, **Solace**, vanished while transporting a remote-sensing array. The opening slot will eventually show **the Severance** intercepting Solace over the desert, using glider craft and a colossal Fractured Echoform to bend light and gravity. One emergency beacon falls free.
 
-The player is a young Meridian field trainee completing a supervised simulation at the **Meridian Research Annex**. A harmless calibration errand becomes personal when Tavi takes a locator tag beyond the Annex to the eccentric **Veyra Observatory Estate**. Retrieving the new **Field Relay** exposes Tavi's queued message and unlocks the estate. Rusk mistakes the player's Solace-band Relay signal for a Severance scout, forcing the first real battle. The player finds Tavi safe with Ivo, returns home, and closes the personal objective. Ivo's observatory packet then reveals that Solace's emergency beacon is moving—and that an enormous Fractured signature is answering it.
+The player is a young Meridian field trainee arriving at the **Meridian Research Annex**. A calibration errand introduces Dr. Sera Venn, Tavi, the persistent starter pair Quarrune and Ayselor, and the **Field Relay**. Retrieving and calibrating the Relay opens the simulation chamber for one real, complete 2v2 Resonance trial against Gyreclast and Kivarrax. Victory resolves the immediate objective. The Relay then receives Solace's emergency-beacon signature, and a brief Fracture pulse turns the Annex's safe training day into a larger future-story hook.
 
 This story uses only the high-level pacing grammar approved by the master. It may not reproduce Pokémon names, creature biology, character archetype expression, dialogue, gags, locations, shots, UI, terminology, music, moves, or map composition. It may not use Pandemonium code or content. All words below are original project writing.
 
 Core themes:
 
 - **Connection versus control:** Resonance is cooperation; Fracture is a forced severing and distortion of that relationship.
-- **Competence before destiny:** the player earns trust by training, navigating, and bringing Tavi home rather than being declared a chosen hero.
-- **Curiosity with consequences:** Tavi and Ivo are not foolish; their curiosity finds a real signal, but leaving without telling anyone creates risk.
-- **Warm home, strange horizon:** the Annex is busy and protective, the Estate is whimsical and independent, and the closing signal makes the desert suddenly feel vast.
+- **Competence before destiny:** the player earns trust by navigating, calibrating the Relay, and completing the Resonance trial rather than being declared a chosen hero.
+- **Curiosity with consequences:** Tavi notices the strange beacon response before the adults can fully explain it; the hook is dangerous because it is real, not because anyone acts foolishly.
+- **Warm home, strange horizon:** the Annex is busy and protective, and the closing signal makes the desert suddenly feel vast.
 
 ## 3. Canonical vocabulary, cast, and factions
 

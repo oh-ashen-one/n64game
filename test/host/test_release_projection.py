@@ -68,6 +68,28 @@ class ReleaseProjectionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("move VFX/SFX suffix mismatch", result.stdout)
 
+    def test_active_timing_documents_match_the_reduced_release_envelope(self) -> None:
+        story = (ROOT / "docs" / "STORY_AND_TIMING.md").read_text(encoding="utf-8")
+        traceability = (ROOT / "docs" / "PREPRODUCTION_TRACEABILITY.md").read_text(encoding="utf-8")
+        story_active = story.split("## 2. Original story premise", 1)[0]
+        traceability_active = traceability.split("## Gate 2 approval record", 1)[0]
+
+        self.assertIn("6-8 minute median", story_active)
+        self.assertIn("two qualifying first-playthrough-style certifications", story_active)
+        self.assertIn("one complete Quarrune/Ayselor versus Gyreclast/Kivarrax", story_active)
+        self.assertIn("6-8 minute median", traceability_active)
+        self.assertIn("no world map or Estate in this release", traceability_active)
+        self.assertIn("10 complete title/Annex/battle transition loops", traceability_active)
+        for stale_phrase in (
+            "The median target is **22 minutes 30 seconds**",
+            "18–25 minute median",
+            "At least 15 minutes",
+            "Meridian Research Annex and Veyra Observatory Estate",
+            "interactive world map",
+        ):
+            self.assertNotIn(stale_phrase, story_active)
+            self.assertNotIn(stale_phrase, traceability_active)
+
 
 if __name__ == "__main__":
     unittest.main()
