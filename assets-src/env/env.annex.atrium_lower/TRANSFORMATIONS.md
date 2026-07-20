@@ -1,7 +1,7 @@
 schema: n64game-transformations-v1
 subject_id: env.annex.atrium_lower
-input_sha256: b5ec2d8ffe93aad9d17ef8a1b287dea2957ceff24a0259297a5c058ac5aa9838
-operation_count: 4
-operations: 1:topology,2:uv,3:synthesis,4:palette-convert
+input_sha256: a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375
+operation_count: 3
+operations: 1:generate,2:select,3:resample
 editor_id: openai.codex-n64game
-recorded_at: 2026-07-20T03:49:52Z
+recorded_at: 2026-07-20T22:24:36Z

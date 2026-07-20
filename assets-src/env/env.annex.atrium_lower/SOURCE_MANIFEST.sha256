@@ -1,3 +1,7 @@
-assets-src/env/env.annex.atrium_lower/RIGHTS.md	589	0f897c3be650b004dbafe8e344da3a6a1db760f41034dbae533cbc634f02d8fb	build:-	capture:-	role:rights.record
-assets-src/env/env.annex.atrium_lower/TRANSFORMATIONS.md	292	badc46d7bd1fecc6a8ceb8a8ec4832fe9a53b6ae7a93704f191bf84c9ff0fa0d	build:-	capture:-	role:metadata.transformations
+assets-src/env/env.annex.atrium_lower/RIGHTS.md	1122	9c6d414e25b02ed2ecce57ec6b4c48eb7f949fbc70f1ba214499ef94bb0b5072	build:-	capture:-	role:rights.record
+assets-src/env/env.annex.atrium_lower/TRANSFORMATIONS.md	277	a35677bb1f74484d6384938c91503d96525a024cecce58e243e70ec96e7d84ac	build:-	capture:-	role:metadata.transformations
+assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_art_target_g1_v2.png	1992903	a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375	build:-	capture:-	role:source.generated
 assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend	1205517	b5ec2d8ffe93aad9d17ef8a1b287dea2957ceff24a0259297a5c058ac5aa9838	build:-	capture:-	role:source.authored
+assets-src/env/env.annex.atrium_lower/generation/e9f5a59512d0568e.md	3106	7263aef19f3c6f8f07b2972ffa183f3c9af102b14275eb7256cbc5b106b13a5d	build:-	capture:-	role:generation.record
+assets-src/env/env.annex.atrium_lower/rights-support/OPENAI_PROVIDER_TERMS.md	697	2128c1f7c7c198061841972534b90fe0394c72f96bd7dae1bfc28a4e663973c6	build:-	capture:-	role:rights.support
+assets-src/env/env.annex.atrium_lower/rights-support/THIRD_PARTY_NOTICE.md	582	2ff38de7369c28e55a118ad942786149fd52b8ab7e094bc6269d8555ac7c6414	build:-	capture:-	role:rights.support

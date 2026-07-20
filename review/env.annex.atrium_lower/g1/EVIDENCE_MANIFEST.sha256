@@ -1,1 +1,4 @@
+review/env.annex.atrium_lower/g1/ART_TARGET.png	1992903	a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375	build:-	capture:g1.env.annex.atrium_lower.art_target	role:concept.environment_target
 review/env.annex.atrium_lower/g1/CONCEPT_RENDER.png	1376671	7d42799a37cef7f6606603742dd7d88d5063e715fb410911b3780faa0c9ae230	build:-	capture:g1.env.annex.atrium_lower.sheet	role:concept.presentation
+review/env.annex.atrium_lower/g1/CONSTRUCTION_NOTES.md	3165	9cc37bede1f6217ec9cebbeac28744cd91f52e9d9e548cd559cea512c2981f2d	build:-	capture:-	role:concept.notes
+review/env.annex.atrium_lower/g1/PROVENANCE.md	699	390eeb758958b9b61b38b0ebb660aaf046b81259cfa01cab20db491291063b7d	build:-	capture:-	role:provenance.record
