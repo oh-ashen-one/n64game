@@ -99,6 +99,47 @@ class AssetLifecycleSemanticSnapshotTests(unittest.TestCase):
             hashlib.sha256((ROOT / MANIFEST_RELATIVE).read_bytes()).hexdigest(),
         )
 
+    def test_machine_locator_parser_accepts_canonical_numbered_hash_keys(self) -> None:
+        validator = (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8")
+        method = re.search(
+            r"^def exact_locator_tokens\(cell\)\n.*?^end$",
+            validator,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(method)
+        ruby = method.group(0) + """
+expected = {"transformations_sha256" => "a" * 64}
+abort "numbered locator key was rejected" unless exact_locator_tokens(
+  "transformations_sha256:" + "a" * 64
+) == expected
+"""
+        result = subprocess.run(
+            ["/usr/bin/ruby", "-e", ruby],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_concept_validation_materializes_source_graph_before_provenance(self) -> None:
+        validator = (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8")
+        method = re.search(
+            r"^def validate_concept_entries\(.*?^end$",
+            validator,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(method)
+        body = method.group(0)
+        source_load = body.index(
+            'source_path, source_digest, "#{production_id} concept source"'
+        )
+        provenance_load = body.index("validate_provenance_record(")
+        self.assertLess(source_load, provenance_load)
+        self.assertIn("payload_context: concept_context", body)
+        self.assertIn("concept_context[:closure] << provenance_path", body)
+
     def test_semantic_snapshot_cannot_substitute_for_pinned_production_harness(self) -> None:
         validator = (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8")
         production_pin = re.search(

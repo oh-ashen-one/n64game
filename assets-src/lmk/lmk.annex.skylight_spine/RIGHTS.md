@@ -1,0 +1,10 @@
+schema: n64game-rights-evidence-v1
+subject_id: lmk.annex.skylight_spine
+rights_basis: project-original
+rights_holder_id: oh-ashen-one.project
+output_license: project-all-rights-reserved
+evidence_kind: PROJECT_ORIGINAL
+input_records: assets-src/lmk/lmk.annex.skylight_spine/lmk_annex_skylight_spine_concept.blend@6688fb4f3b48930e656119114556e1b32bfcfd5da87818ded09599b071515cba|2026-07-20T00:05:34Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
+third_party_notices: NONE
+reviewer_id: openai.codex-rights-auditor
+verified_at: 2026-07-20T00:05:34Z

@@ -228,17 +228,28 @@ int main(void)
     );
     display_set_fps_limit(30.0f);
     rdpq_init();
-    joypad_init();
-    t3d_init((T3DInitParams){});
 
     N64GameRenderer renderer;
-    assertf(n64game_renderer_init(&renderer), "N64GAME renderer allocation failed");
+    assertf(
+        n64game_renderer_init_bootstrap(&renderer),
+        "N64GAME loading renderer allocation failed"
+    );
+    n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_RUNTIME);
+
+    joypad_init();
+    t3d_init((T3DInitParams){});
+    n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_ANNEX_ASSETS);
+    assertf(
+        n64game_renderer_finish_init(&renderer),
+        "N64GAME renderer allocation failed"
+    );
 
     N64GameCore game;
     N64GameCore continue_game;
     n64game_core_init(&game);
     n64game_core_init(&continue_game);
 
+    n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_SAVE_DATA);
     const eeprom_type_t save_type = eeprom_present();
     const bool save_available = save_type != EEPROM_NONE;
     uint32_t save_sequence = 0U;
@@ -251,6 +262,7 @@ int main(void)
             stored_slots, &continue_game, &save_sequence, &active_save_slot
         );
     }
+    n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_READY);
     SaveWriter save_writer = {0};
     bool controller_was_connected = false;
 
