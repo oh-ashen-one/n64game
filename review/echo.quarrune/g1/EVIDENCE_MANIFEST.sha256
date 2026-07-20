@@ -1,1 +1,5 @@
 review/echo.quarrune/g1/CONCEPT_RENDER.png	1651716	2a87c2732423b73e1a08c398c09c9181d8f95c6cf591cc9b75a146e2bbab8264	build:-	capture:g1.echo.quarrune.sheet	role:concept.presentation
+review/echo.quarrune/g1/CONSTRUCTION_NOTES.md	3709	ae40c7a0e4d2333bf012b4168432db2657fa7d7188da0aeec17a4512bea86a89	build:-	capture:-	role:concept.notes
+review/echo.quarrune/g1/SCALE_LINEUP.png	23094	5867517e92a9e1f96eb6aca3c60aaebdf435232f22910afc9171e7949f622629	build:-	capture:g1.echo.quarrune.scale	role:concept.scale_lineup
+review/echo.quarrune/g1/SILHOUETTE_64.png	419	c6d46c3cd81992c1003376c0c2864ca940e45ce2c4359313ccdfd47b41e0ffab	build:-	capture:g1.echo.quarrune.silhouette64	role:concept.silhouette_64
+review/echo.quarrune/g1/SILHOUETTE_COMPARISON.png	29159	c620c78187529b6c756d4b0d15061f8419544c433e2900e3efafc6156d97a67c	build:-	capture:g1.echo.quarrune.comparison	role:concept.silhouette_comparison

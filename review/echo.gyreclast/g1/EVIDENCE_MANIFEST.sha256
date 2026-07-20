@@ -1,1 +1,5 @@
 review/echo.gyreclast/g1/CONCEPT_RENDER.png	1367374	37af25cf1356d391f7df30e4b1940a241c1e5836e3ac3aa14bf4638f6d56f4e1	build:-	capture:g1.echo.gyreclast.sheet	role:concept.presentation
+review/echo.gyreclast/g1/CONSTRUCTION_NOTES.md	3542	c887439bf5935f02066d6c833fe02f51003636a37fc38559316a215d31868527	build:-	capture:-	role:concept.notes
+review/echo.gyreclast/g1/SCALE_LINEUP.png	23380	96bda5d5c4e6fcb4f4541e050cb3b21d52d3cb0d43a5c88f906a3d8e9342264d	build:-	capture:g1.echo.gyreclast.scale	role:concept.scale_lineup
+review/echo.gyreclast/g1/SILHOUETTE_64.png	469	db62a0ff1c483c1069d9081e32002bff9e87f1a74bedd58ea83b43e9409802be	build:-	capture:g1.echo.gyreclast.silhouette64	role:concept.silhouette_64
+review/echo.gyreclast/g1/SILHOUETTE_COMPARISON.png	29165	1e607226a575f93402ea52bdeec3fda3a7cece15d715bf09fbb77b6fcdf3bd3d	build:-	capture:g1.echo.gyreclast.comparison	role:concept.silhouette_comparison
