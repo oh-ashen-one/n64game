@@ -4,7 +4,7 @@ rights_basis: mixed-cleared-inputs
 rights_holder_id: oh-ashen-one.project
 output_license: mixed-cleared-output
 evidence_kind: MIXED
-input_records: assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_art_target_g1_v2.png@a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375|2026-07-20T22:24:36Z|concept-environment-target|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/env/env.annex.atrium_lower/rights-support/OPENAI_PROVIDER_TERMS.md@2128c1f7c7c198061841972534b90fe0394c72f96bd7dae1bfc28a4e663973c6|NONE|NONE;assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend@b5ec2d8ffe93aad9d17ef8a1b287dea2957ceff24a0259297a5c058ac5aa9838|2026-07-20T03:49:52Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
+input_records: assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_art_target_g1_v2.png@a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375|2026-07-20T22:24:36Z|concept-environment-target|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/env/env.annex.atrium_lower/rights-support/OPENAI_PROVIDER_TERMS.md@2128c1f7c7c198061841972534b90fe0394c72f96bd7dae1bfc28a4e663973c6|NONE|NONE;assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend@13fb53e15b9526989cb06f4a5c32e06ca3516f4f51baddad12cb12e5c4bfaaa2|2026-07-20T03:49:52Z|editable-source|project-original|project-proprietary|n64game-project-original-v1|NONE|NONE|NONE
 third_party_notices: assets-src/env/env.annex.atrium_lower/rights-support/THIRD_PARTY_NOTICE.md@2ff38de7369c28e55a118ad942786149fd52b8ab7e094bc6269d8555ac7c6414
 reviewer_id: openai.codex-rights-auditor
-verified_at: 2026-07-20T22:24:36Z
+verified_at: 2026-07-20T22:47:43Z
