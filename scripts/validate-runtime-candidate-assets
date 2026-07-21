@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "pathname"
+require "digest"
 
 ROOT = Pathname.new(__dir__).parent.realpath
 $LOAD_PATH.unshift(ROOT.join("lib").to_s)
@@ -13,6 +14,60 @@ SpriteContract = N64Game::LibdragonSpriteContract
 Tiny3DContract = N64Game::Tiny3DPackageContract
 
 CONFIGS = [
+  {
+    name: "quarrune",
+    model: "filesystem/echo/echo.quarrune/quarrune.t3dm",
+    body: "filesystem/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.sprite",
+    accent: "filesystem/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite",
+    body_references: [0x5155_4230, 0x5155_4231],
+    static_texture: "rom:/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite",
+    material_references: {
+      "mat_quarrune_ceramic" => 0x5155_4230,
+      "mat_quarrune_underbody" => 0x5155_4231
+    },
+    material_paths: {
+      "mat_quarrune_cobalt" =>
+        "rom:/echo/echo.quarrune/tex_quarrune_accent_ci4_32x32.sprite"
+    },
+    bone_count: 20,
+    body_color_count: 40,
+    body_sha256: "3a6771cdfbcfad12553a917190c3e5177b99ce7db0fa8af2edf3d551cb849fe2",
+    accent_sha256: "f82e40a4896253f37a136abc0b01765317942e9417d3a83dc950efb63f806c59",
+    durations: [2.0, 1.6, 1.2],
+    model_sha256: "276709f4224c88667734d1c4c796221c3aabd882f50313af0b437d413f46381b",
+    stream_sha256: [
+      "2ea2d8b50d525564e04a529834992595c65cbb2153753be50ba11fc672377f86",
+      "59a5ab9fcdce9b0b03daaa6e574df17e468375b2acf16a550c395a510d4e75b9",
+      "74780bcf51efd2744fab0645dba0fbe11a2582d947bf8862d9f9739f9648e694"
+    ]
+  },
+  {
+    name: "ayselor",
+    model: "filesystem/echo/echo.ayselor/ayselor.t3dm",
+    body: "filesystem/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.sprite",
+    accent: "filesystem/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite",
+    body_references: [0x4159_4230, 0x4159_4231],
+    static_texture: "rom:/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite",
+    material_references: {
+      "mat_ayselor_membrane_trim" => 0x4159_4230,
+      "mat_ayselor_structure_trim" => 0x4159_4231
+    },
+    material_paths: {
+      "mat_ayselor_lamp_accent" =>
+        "rom:/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite"
+    },
+    bone_count: 18,
+    body_color_count: 46,
+    body_sha256: "1bf7cac9629b4cbae355e1f40fe23c4e4b76f184ebdaab945f0aa748a817ec9c",
+    accent_sha256: "cedf306b65f3b42609c853ae65e8440a66386ff7be5407afbb75b195adc6e469",
+    durations: [2.0, 1.6, 1.2],
+    model_sha256: "7892a0635544e407ab8d5b5c5d3b1f3b26fd00a3d5f5056c798b27326512f20c",
+    stream_sha256: [
+      "184005a7176e15acfe9d4711df95d11019f2e55b0086260f05be96c3307802f2",
+      "9c5632335d7e54895fb925f88d841a880f6dd627a785bd4caae727d1641abab3",
+      "1b322a32a4bcde89e5543c5dd5eecfe9be993c777cee215efb619aa0aca1bfde"
+    ]
+  },
   {
     name: "gyreclast",
     model: "filesystem/echo/echo.gyreclast/gyreclast.t3dm",
@@ -50,7 +105,13 @@ def read(relative)
   path.binread
 end
 
+def validate_exact_hash(relative, expected)
+  actual = Digest::SHA256.hexdigest(read(relative))
+  fail!("#{relative} reviewed byte identity differs") unless actual == expected
+end
+
 def validate_body(config)
+  validate_exact_hash(config.fetch(:body), config.fetch(:body_sha256)) if config.key?(:body_sha256)
   decoded = SpriteContract.decode(read(config.fetch(:body)), config.fetch(:body))
   expected_count = config.fetch(:body_color_count)
   fail!("#{config.fetch(:name)} body is not exact CI8 64x64") unless
@@ -67,6 +128,7 @@ def validate_body(config)
 end
 
 def validate_accent(config)
+  validate_exact_hash(config.fetch(:accent), config.fetch(:accent_sha256)) if config.key?(:accent_sha256)
   decoded = SpriteContract.decode(read(config.fetch(:accent)), config.fetch(:accent))
   fail!("#{config.fetch(:name)} accent is not exact CI4 32x32 TMEM media") unless
     decoded.fetch(:format) == "CI4" && decoded.fetch(:width) == 32 &&
@@ -75,6 +137,7 @@ end
 
 def validate_model(config)
   model_path = config.fetch(:model)
+  validate_exact_hash(model_path, config.fetch(:model_sha256)) if config.key?(:model_sha256)
   file = Tiny3DContract::ParsedFile.new(read(model_path), model_path)
   skeletons = file.chunks_of("S")
   fail!("#{config.fetch(:name)} skeleton census differs") unless skeletons.length == 1
@@ -96,6 +159,23 @@ def validate_model(config)
   fail!("#{config.fetch(:name)} static texture binding differs") unless
     paths == [config.fetch(:static_texture)]
 
+  if config.key?(:material_references)
+    observed = materials.each_with_object({}) do |material, values|
+      reference = material.fetch(:textures).first.fetch(:reference)
+      values[material.fetch(:name)] = reference unless reference.zero?
+    end
+    fail!("#{config.fetch(:name)} material/reference mapping differs") unless
+      observed == config.fetch(:material_references)
+  end
+  if config.key?(:material_paths)
+    observed = materials.each_with_object({}) do |material, values|
+      path = material.fetch(:textures).first.fetch(:path)
+      values[material.fetch(:name)] = path unless path.nil?
+    end
+    fail!("#{config.fetch(:name)} material/path mapping differs") unless
+      observed == config.fetch(:material_paths)
+  end
+
   animations = file.chunks_of("A")
   fail!("#{config.fetch(:name)} animation census differs") unless animations.length == ANIMATION_NAMES.length
   animations.each_with_index do |chunk, index|
@@ -110,7 +190,11 @@ def validate_model(config)
         (duration - config.fetch(:durations).fetch(index)).abs <= 0.000_01 &&
         keyframes.positive? && stream == expected_stream
     disk_stream = "filesystem/echo/echo.#{config.fetch(:name)}/#{config.fetch(:name)}.#{index}.sdata"
-    read(disk_stream)
+    if config.key?(:stream_sha256)
+      validate_exact_hash(disk_stream, config.fetch(:stream_sha256).fetch(index))
+    else
+      read(disk_stream)
+    end
   end
 end
 

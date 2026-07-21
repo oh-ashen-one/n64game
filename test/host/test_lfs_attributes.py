@@ -39,6 +39,10 @@ class LfsAttributeTests(unittest.TestCase):
             "review/echo.quarrune/g5/quarrune_hero.t3dm",
             "review/anm.echo.quarrune/g5/anm_echo_quarrune.0.sdata",
             "review/echo.quarrune/g5/tex_quarrune_body_ci8_64x64.sprite",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.t3dm",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.0.sdata",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.t3dm",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.0.sdata",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -116,6 +120,23 @@ class LfsAttributeTests(unittest.TestCase):
             generated.stdout.splitlines(),
             ["scratch/generated.t3dm", "scratch/generated.sdata", "scratch/generated.sprite"],
         )
+
+    def test_reviewed_runtime_candidate_packages_are_not_ignored(self) -> None:
+        paths = (
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.t3dm",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.0.sdata",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.t3dm",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.0.sdata",
+        )
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--", *paths],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

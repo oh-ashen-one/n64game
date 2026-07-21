@@ -66,12 +66,17 @@ class BuildContractTests(unittest.TestCase):
 
     def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 17)
+        self.assertEqual(report["runtime_candidate_count"], 28)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
             [
-                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "package_t3dm",
+                "animation_sdata", "animation_sdata", "animation_sdata",
+                "texture_png", "texture_png", "texture_png",
+                "model_glb", "package_t3dm",
+                "animation_sdata", "animation_sdata", "animation_sdata",
+                "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png",
@@ -199,9 +204,8 @@ class BuildContractTests(unittest.TestCase):
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
 
-    def test_quarrune_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
+    def test_quarrune_candidate_uses_exact_reviewed_package_and_dfs_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
-        self.assertIn("--base-scale=64 --asset-path=runtime-candidates", makefile)
         self.assertIn("$(T3D_ROOT)/tools/gltf_importer", makefile)
         for format_name, tile_size in (("CI8", "64,64"), ("CI4", "32,32"), ("IA8", "32,32")):
             self.assertIn(
@@ -210,14 +214,25 @@ class BuildContractTests(unittest.TestCase):
             )
         self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs:", makefile)
         self.assertIn("$(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
+        self.assertIn("$(QUARRUNE_ANIMATION_STREAMS)", makefile)
+        self.assertIn("$(QUARRUNE_PACKAGE_DIR)/quarrune.t3dm", makefile)
+        self.assertIn("VERIFY_REVIEWED_CANDIDATE", makefile)
+        self.assertNotIn(
+            "$(QUARRUNE_MODEL): $(QUARRUNE_SOURCE_DIR)/quarrune_hero.glb",
+            makefile,
+        )
         self.assertIn("$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs", makefile)
         self.assertNotIn("mkasset", makefile)
 
         renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
-        self.assertIn('"rom:/echo/echo.quarrune/quarrune_hero.t3dm"', renderer)
+        self.assertIn('"rom:/echo/echo.quarrune/quarrune.t3dm"', renderer)
         self.assertIn("t3d_model_draw_custom", renderer)
-        self.assertIn("quarrune_render_assets_dynamic_texture_cb", renderer)
-        self.assertIn("rspq_block_run(renderer->quarrune_draw_block)", renderer)
+        self.assertIn(".body_top_reference = UINT32_C(0x51554231)", renderer)
+        self.assertIn(".body_bottom_reference = UINT32_C(0x51554230)", renderer)
+        self.assertIn(".minimum_body_palette_colors = 40U", renderer)
+        self.assertIn("update_battle_echo_idle_pose(&renderer->quarrune)", renderer)
+        self.assertIn("update_battle_echo_pose(&renderer->quarrune, game, 0U)", renderer)
+        self.assertIn("destroy_battle_echo(&renderer->quarrune)", renderer)
         self.assertIn("n64game_renderer_destroy", renderer)
 
     def test_annex_candidate_uses_exact_conversion_and_sector_aware_renderer(self) -> None:
@@ -269,7 +284,7 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("draw_ari(renderer, 0U, player_x", renderer)
         self.assertIn("t3d_anim_destroy(&renderer->ari_animations[index])", renderer)
 
-    def test_reviewed_enemy_candidates_replace_battle_tetrahedra_with_real_clips(self) -> None:
+    def test_reviewed_battle_candidates_replace_tetrahedra_with_real_clips(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for prefix in ("GYRECLAST", "KIVARRAX"):
             self.assertIn(
@@ -286,22 +301,37 @@ class BuildContractTests(unittest.TestCase):
         renderer = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
         self.assertIn('"rom:/echo/echo.gyreclast/gyreclast.t3dm"', renderer)
         self.assertIn('"rom:/echo/echo.kivarrax/kivarrax.t3dm"', renderer)
+        self.assertIn('"rom:/echo/echo.ayselor/ayselor.t3dm"', renderer)
         self.assertIn('{"idle_a", "reposition", "hit"}', renderer)
         self.assertIn("UINT32_C(0x47594230)", renderer)
         self.assertIn("UINT32_C(0x47594231)", renderer)
         self.assertIn("UINT32_C(0x4B564230)", renderer)
         self.assertIn("UINT32_C(0x4B564231)", renderer)
+        self.assertIn("UINT32_C(0x41594230)", renderer)
+        self.assertIn("UINT32_C(0x41594231)", renderer)
+        self.assertIn(".minimum_body_palette_colors = 46U", renderer)
         self.assertIn("setup_battle_echo(", renderer)
+        self.assertIn("update_battle_echo_pose(&renderer->ayselor, game, 1U)", renderer)
         self.assertIn("update_battle_echo_pose(&renderer->gyreclast, game, 2U)", renderer)
         self.assertIn("update_battle_echo_pose(&renderer->kivarrax, game, 3U)", renderer)
         self.assertIn("draw_battle_echo(", renderer)
+        self.assertIn("destroy_battle_echo(&renderer->ayselor)", renderer)
         self.assertIn("destroy_battle_echo(&renderer->kivarrax)", renderer)
+        self.assertNotIn("draw_actor(\n                    renderer, actor, actor,", renderer)
 
         build_script = (ROOT / "scripts" / "build-rom").read_text(encoding="utf-8")
+        self.assertLess(
+            build_script.index("python3 tools/n64game_build.py validate-assets"),
+            build_script.index("scripts/clean-build"),
+        )
         self.assertIn("scripts/validate-runtime-candidate-assets", build_script)
         validator = ROOT / "scripts" / "validate-runtime-candidate-assets"
         self.assertTrue(validator.is_file())
         validator_text = validator.read_text(encoding="utf-8")
+        self.assertIn('name: "quarrune"', validator_text)
+        self.assertIn('name: "ayselor"', validator_text)
+        self.assertIn("reviewed byte identity differs", validator_text)
+        self.assertIn("material/reference mapping differs", validator_text)
         self.assertIn("body indices are not dense", validator_text)
         self.assertIn("transparent or duplicate runtime colors", validator_text)
         self.assertIn("dynamic texture references differ", validator_text)

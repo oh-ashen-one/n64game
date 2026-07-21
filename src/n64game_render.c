@@ -28,8 +28,6 @@ static const char ARI_BODY_PATH[] =
     "rom:/chr/player_ari/tex_ari_body_ci8_64x64.sprite";
 static const char ARI_SHARED_SHADOW_PATH[] =
     "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite";
-static const char QUARRUNE_MODEL_PATH[] =
-    "rom:/echo/echo.quarrune/quarrune_hero.t3dm";
 
 typedef struct {
     const char *debug_name;
@@ -38,6 +36,8 @@ typedef struct {
     uint32_t body_top_reference;
     uint32_t body_bottom_reference;
     uint16_t minimum_body_palette_colors;
+    float reposition_speed;
+    float hit_speed;
 } N64GameBattleEchoAssetConfig;
 
 static const char *const ARI_ANIMATION_NAMES[
@@ -48,6 +48,30 @@ static const char *const BATTLE_ECHO_ANIMATION_NAMES[
     N64GAME_BATTLE_ECHO_ANIMATION_COUNT
 ] = {"idle_a", "reposition", "hit"};
 
+static const N64GameBattleEchoAssetConfig QUARRUNE_ASSET_CONFIG = {
+    .debug_name = "quarrune",
+    .model_path = "rom:/echo/echo.quarrune/quarrune.t3dm",
+    .body_path =
+        "rom:/echo/echo.quarrune/tex_quarrune_body_ci8_64x64.sprite",
+    .body_top_reference = UINT32_C(0x51554231),
+    .body_bottom_reference = UINT32_C(0x51554230),
+    .minimum_body_palette_colors = 40U,
+    .reposition_speed = 1.0f,
+    .hit_speed = 1.0f,
+};
+
+static const N64GameBattleEchoAssetConfig AYSELOR_ASSET_CONFIG = {
+    .debug_name = "ayselor",
+    .model_path = "rom:/echo/echo.ayselor/ayselor.t3dm",
+    .body_path =
+        "rom:/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.sprite",
+    .body_top_reference = UINT32_C(0x41594230),
+    .body_bottom_reference = UINT32_C(0x41594231),
+    .minimum_body_palette_colors = 46U,
+    .reposition_speed = 1.0f,
+    .hit_speed = 1.0f,
+};
+
 static const N64GameBattleEchoAssetConfig GYRECLAST_ASSET_CONFIG = {
     .debug_name = "gyreclast",
     .model_path = "rom:/echo/echo.gyreclast/gyreclast.t3dm",
@@ -56,6 +80,8 @@ static const N64GameBattleEchoAssetConfig GYRECLAST_ASSET_CONFIG = {
     .body_top_reference = UINT32_C(0x47594230),
     .body_bottom_reference = UINT32_C(0x47594231),
     .minimum_body_palette_colors = 11U,
+    .reposition_speed = 2.4f,
+    .hit_speed = 1.8f,
 };
 
 static const N64GameBattleEchoAssetConfig KIVARRAX_ASSET_CONFIG = {
@@ -66,6 +92,8 @@ static const N64GameBattleEchoAssetConfig KIVARRAX_ASSET_CONFIG = {
     .body_top_reference = UINT32_C(0x4B564230),
     .body_bottom_reference = UINT32_C(0x4B564231),
     .minimum_body_palette_colors = 53U,
+    .reposition_speed = 2.4f,
+    .hit_speed = 1.8f,
 };
 
 static const uint32_t ACTOR_COLORS[ACTOR_STYLE_COUNT] = {
@@ -303,62 +331,6 @@ static bool setup_ari(N64GameRenderer *renderer)
     return true;
 }
 
-static bool setup_quarrune(N64GameRenderer *renderer)
-{
-    if (!quarrune_render_assets_load(&renderer->quarrune_assets)) {
-        debugf("[quarrune] render-asset load failed\n");
-        return false;
-    }
-    renderer->quarrune_model = t3d_model_load(QUARRUNE_MODEL_PATH);
-    if (renderer->quarrune_model == NULL) {
-        debugf("[quarrune] model load failed: %s\n", QUARRUNE_MODEL_PATH);
-        return false;
-    }
-    if (t3d_model_get_skeleton(renderer->quarrune_model) == NULL) {
-        debugf("[quarrune] model has no skeleton\n");
-        return false;
-    }
-
-    renderer->quarrune_skeleton = t3d_skeleton_create_buffered(
-        renderer->quarrune_model, (int)renderer->buffer_count
-    );
-    if (renderer->quarrune_skeleton.bones == NULL ||
-        renderer->quarrune_skeleton.boneMatricesFP == NULL) {
-        debugf("[quarrune] skeleton allocation failed\n");
-        return false;
-    }
-    for (uint32_t index = 0U; index < renderer->buffer_count; ++index) {
-        t3d_skeleton_update(&renderer->quarrune_skeleton);
-    }
-
-    rspq_block_begin();
-    t3d_model_draw_custom(
-        renderer->quarrune_model,
-        (T3DModelDrawConf){
-            .userData = &renderer->quarrune_assets,
-            .dynTextureCb = quarrune_render_assets_dynamic_texture_cb,
-            .matrices = (const T3DMat4FP *)t3d_segment_placeholder(
-                T3D_SEGMENT_SKELETON
-            ),
-        }
-    );
-    renderer->quarrune_draw_block = rspq_block_end();
-    if (renderer->quarrune_draw_block == NULL) {
-        debugf("[quarrune] draw-block recording failed\n");
-        return false;
-    }
-    if (!quarrune_render_assets_callback_ok(&renderer->quarrune_assets)) {
-        debugf(
-            "[quarrune] dynamic-texture callback failed: callbacks=%u fault=%u\n",
-            (unsigned int)renderer->quarrune_assets.successful_body_callbacks,
-            renderer->quarrune_assets.callback_fault ? 1U : 0U
-        );
-        return false;
-    }
-    renderer->quarrune_ready = true;
-    return true;
-}
-
 static bool setup_battle_echo(
     N64GameRenderer *renderer,
     N64GameBattleEchoRenderer *echo,
@@ -420,10 +392,11 @@ static bool setup_battle_echo(
         );
     }
     t3d_anim_set_speed(
-        &echo->animations[BATTLE_ECHO_ANIMATION_REPOSITION], 2.4f
+        &echo->animations[BATTLE_ECHO_ANIMATION_REPOSITION],
+        config->reposition_speed
     );
     t3d_anim_set_speed(
-        &echo->animations[BATTLE_ECHO_ANIMATION_HIT], 1.8f
+        &echo->animations[BATTLE_ECHO_ANIMATION_HIT], config->hit_speed
     );
     t3d_skeleton_reset(&echo->skeleton);
     t3d_anim_set_time(
@@ -507,7 +480,8 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
 {
     if (renderer == NULL || !renderer->font_registered ||
         renderer->floor_vertices != NULL || renderer->annex_ready ||
-        renderer->ari_ready || renderer->quarrune_ready ||
+        renderer->ari_ready || renderer->quarrune.ready ||
+        renderer->ayselor.ready ||
         renderer->gyreclast.ready || renderer->kivarrax.ready) {
         return false;
     }
@@ -541,7 +515,13 @@ bool n64game_renderer_finish_init(N64GameRenderer *renderer)
     setup_actor_vertices(renderer);
     renderer->viewport = t3d_viewport_create_buffered((uint16_t)renderer->buffer_count);
     if (renderer->viewport._matFP == NULL || !setup_annex(renderer) ||
-        !setup_ari(renderer) || !setup_quarrune(renderer) ||
+        !setup_ari(renderer) ||
+        !setup_battle_echo(
+            renderer, &renderer->quarrune, &QUARRUNE_ASSET_CONFIG
+        ) ||
+        !setup_battle_echo(
+            renderer, &renderer->ayselor, &AYSELOR_ASSET_CONFIG
+        ) ||
         !setup_battle_echo(
             renderer, &renderer->gyreclast, &GYRECLAST_ASSET_CONFIG
         ) ||
@@ -591,10 +571,8 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     rspq_wait();
     destroy_battle_echo(&renderer->kivarrax);
     destroy_battle_echo(&renderer->gyreclast);
-    if (renderer->quarrune_draw_block != NULL) {
-        rspq_block_free(renderer->quarrune_draw_block);
-        renderer->quarrune_draw_block = NULL;
-    }
+    destroy_battle_echo(&renderer->ayselor);
+    destroy_battle_echo(&renderer->quarrune);
     if (renderer->annex_draw_block != NULL) {
         rspq_block_free(renderer->annex_draw_block);
         renderer->annex_draw_block = NULL;
@@ -614,10 +592,6 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     t3d_skeleton_destroy(&renderer->ari_walk_skeleton);
     t3d_skeleton_destroy(&renderer->ari_idle_skeleton);
     t3d_skeleton_destroy(&renderer->ari_skeleton);
-    t3d_skeleton_destroy(&renderer->quarrune_skeleton);
-    if (renderer->quarrune_model != NULL) {
-        t3d_model_free(renderer->quarrune_model);
-    }
     if (renderer->annex_model != NULL) {
         t3d_model_free(renderer->annex_model);
     }
@@ -626,9 +600,6 @@ void n64game_renderer_destroy(N64GameRenderer *renderer)
     }
     if (renderer->ari_assets.lifetime != NULL) {
         (void)n64game_indexed_render_assets_unload(&renderer->ari_assets);
-    }
-    if (renderer->quarrune_assets.lifetime != NULL) {
-        (void)quarrune_render_assets_unload(&renderer->quarrune_assets);
     }
     t3d_viewport_destroy(&renderer->viewport);
     if (renderer->actor_matrices != NULL) {
@@ -687,31 +658,6 @@ static void draw_actor(
     t3d_tri_draw(0, 2, 3);
     t3d_tri_draw(1, 3, 2);
     t3d_tri_sync();
-}
-
-static void draw_quarrune(
-    N64GameRenderer *renderer,
-    size_t matrix_index,
-    float x,
-    float y,
-    float z,
-    float scale,
-    float angle
-)
-{
-    assertf(renderer->quarrune_ready, "Quarrune renderer is not ready");
-    const float scales[3] = {scale, scale, scale};
-    const float rotations[3] = {0.0f, angle, 0.0f};
-    const float translation[3] = {x, y, z};
-    const size_t matrix_slot = matrix_index * (size_t)renderer->buffer_count +
-        (size_t)renderer->frame_index;
-    t3d_mat4fp_from_srt_euler(
-        &renderer->actor_matrices[matrix_slot], scales, rotations, translation
-    );
-    t3d_skeleton_use(&renderer->quarrune_skeleton);
-    t3d_matrix_push(&renderer->actor_matrices[matrix_slot]);
-    rspq_block_run(renderer->quarrune_draw_block);
-    t3d_matrix_pop(1);
 }
 
 static uint32_t battle_event_key(const N64GameBattle *battle)
@@ -796,6 +742,19 @@ static void set_battle_echo_animation(
     t3d_anim_set_playing(selected, true);
     t3d_anim_update(selected, 0.0f);
     echo->active_animation = animation;
+}
+
+static void update_battle_echo_idle_pose(N64GameBattleEchoRenderer *echo)
+{
+    assertf(echo->ready, "Battle Echoform renderer is not ready");
+    if (echo->active_animation != BATTLE_ECHO_ANIMATION_IDLE) {
+        set_battle_echo_animation(echo, BATTLE_ECHO_ANIMATION_IDLE);
+    }
+    t3d_anim_update(
+        &echo->animations[BATTLE_ECHO_ANIMATION_IDLE], 1.0f / 30.0f
+    );
+    t3d_skeleton_update(&echo->skeleton);
+    echo->last_event_key = UINT32_MAX;
 }
 
 static void update_battle_echo_pose(
@@ -1316,9 +1275,10 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
     draw_ari(renderer, 0U, player_x, -18.0f, player_z, 0.27f);
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
     draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
-    draw_quarrune(
-        renderer, 3U, 52.0f, -18.0f, 18.0f, 0.40f,
-        0.12f + fm_sinf(angle * 1.4f) * 0.035f
+    update_battle_echo_idle_pose(&renderer->quarrune);
+    draw_battle_echo(
+        renderer, &renderer->quarrune, 3U,
+        52.0f, -15.75f, 18.0f, 0.50f, 0.12f
     );
     draw_actor(renderer, 4U, 6U, 74.0f, -6.0f, 40.0f, 0.72f, -angle);
 
@@ -1434,26 +1394,26 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
         {-31.0f, -2.0f, -34.0f}, {26.0f, 0.0f, -30.0f},
         {-28.0f, -2.0f, -76.0f}, {31.0f, -1.0f, -70.0f},
     };
-    const float angle = (float)game->scene_ticks * 0.012f;
-    for (uint8_t actor = 0U; actor < 2U; ++actor) {
-        if (game->battle.actors[actor].hp > 0) {
-            if (actor == 0U) {
-                draw_quarrune(
-                    renderer, actor,
-                    POSITIONS[actor][0], -18.0f, POSITIONS[actor][2],
-                    0.42f, 0.10f + fm_sinf(angle * 2.0f) * 0.035f
-                );
-            } else {
-                draw_actor(
-                    renderer, actor, actor,
-                    POSITIONS[actor][0], POSITIONS[actor][1],
-                    POSITIONS[actor][2], 0.82f, angle
-                );
-            }
-        }
-    }
+    update_battle_echo_pose(&renderer->quarrune, game, 0U);
+    update_battle_echo_pose(&renderer->ayselor, game, 1U);
     update_battle_echo_pose(&renderer->gyreclast, game, 2U);
     update_battle_echo_pose(&renderer->kivarrax, game, 3U);
+    if (game->battle.actors[0].hp > 0 ||
+        renderer->quarrune.active_animation == BATTLE_ECHO_ANIMATION_HIT) {
+        draw_battle_echo(
+            renderer, &renderer->quarrune, 0U,
+            POSITIONS[0][0], -15.50f, POSITIONS[0][2],
+            0.50f, 0.10f
+        );
+    }
+    if (game->battle.actors[1].hp > 0 ||
+        renderer->ayselor.active_animation == BATTLE_ECHO_ANIMATION_HIT) {
+        draw_battle_echo(
+            renderer, &renderer->ayselor, 1U,
+            POSITIONS[1][0], -18.0f, POSITIONS[1][2],
+            0.42f, T3D_DEG_TO_RAD(-18.0f)
+        );
+    }
     if (game->battle.actors[2].hp > 0 ||
         renderer->gyreclast.active_animation == BATTLE_ECHO_ANIMATION_HIT) {
         draw_battle_echo(

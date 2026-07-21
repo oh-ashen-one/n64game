@@ -14,7 +14,6 @@
 
 #include "indexed_render_assets.h"
 #include "n64game_core.h"
-#include "quarrune_render_assets.h"
 
 #define N64GAME_ARI_RUNTIME_ANIMATION_COUNT 3
 #define N64GAME_BATTLE_ECHO_ANIMATION_COUNT 3
@@ -48,10 +47,8 @@ typedef struct {
     T3DAnim ari_animations[N64GAME_ARI_RUNTIME_ANIMATION_COUNT];
     N64GameIndexedRenderAssets ari_assets;
     rspq_block_t *ari_draw_block;
-    T3DModel *quarrune_model;
-    T3DSkeleton quarrune_skeleton;
-    QuarruneRenderAssets quarrune_assets;
-    rspq_block_t *quarrune_draw_block;
+    N64GameBattleEchoRenderer quarrune;
+    N64GameBattleEchoRenderer ayselor;
     N64GameBattleEchoRenderer gyreclast;
     N64GameBattleEchoRenderer kivarrax;
     uint32_t buffer_count;
@@ -61,7 +58,6 @@ typedef struct {
     bool font_registered;
     bool annex_ready;
     bool ari_ready;
-    bool quarrune_ready;
 } N64GameRenderer;
 
 typedef enum {

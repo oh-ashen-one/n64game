@@ -247,7 +247,31 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "candidate.echo.quarrune.hero",
             "model_glb",
             "runtime-candidates/echo/echo.quarrune/quarrune_hero.glb",
-            "rom:/echo/echo.quarrune/quarrune_hero.t3dm",
+            "review:/echo/echo.quarrune/quarrune_bound.glb",
+        ),
+        (
+            "candidate.echo.quarrune.package",
+            "package_t3dm",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.t3dm",
+            "rom:/echo/echo.quarrune/quarrune.t3dm",
+        ),
+        (
+            "candidate.echo.quarrune.animation.0",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.0.sdata",
+            "rom:/echo/echo.quarrune/quarrune.0.sdata",
+        ),
+        (
+            "candidate.echo.quarrune.animation.1",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.1.sdata",
+            "rom:/echo/echo.quarrune/quarrune.1.sdata",
+        ),
+        (
+            "candidate.echo.quarrune.animation.2",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.quarrune/runtime/quarrune.2.sdata",
+            "rom:/echo/echo.quarrune/quarrune.2.sdata",
         ),
         (
             "candidate.echo.quarrune.body",
@@ -266,6 +290,48 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "texture_png",
             "runtime-candidates/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.png",
             "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.hero",
+            "model_glb",
+            "runtime-candidates/echo/echo.ayselor/intermediate/ayselor_bound.glb",
+            "review:/echo/echo.ayselor/ayselor_bound.glb",
+        ),
+        (
+            "candidate.echo.ayselor.package",
+            "package_t3dm",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.t3dm",
+            "rom:/echo/echo.ayselor/ayselor.t3dm",
+        ),
+        (
+            "candidate.echo.ayselor.animation.0",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.0.sdata",
+            "rom:/echo/echo.ayselor/ayselor.0.sdata",
+        ),
+        (
+            "candidate.echo.ayselor.animation.1",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.1.sdata",
+            "rom:/echo/echo.ayselor/ayselor.1.sdata",
+        ),
+        (
+            "candidate.echo.ayselor.animation.2",
+            "animation_sdata",
+            "runtime-candidates/echo/echo.ayselor/runtime/ayselor.2.sdata",
+            "rom:/echo/echo.ayselor/ayselor.2.sdata",
+        ),
+        (
+            "candidate.echo.ayselor.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/filesystem/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/filesystem/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite",
         ),
         (
             "candidate.env.annex.threshold",
@@ -391,7 +457,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
-        "scope": "Annex, Ari, Quarrune, Gyreclast, and Kivarrax in-engine candidates only; not Gate evidence or production approval",
+        "scope": "Annex, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates only; not Gate evidence or production approval",
         "entries": rows,
     }
 
@@ -502,7 +568,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Annex, Ari, Quarrune, Gyreclast, and Kivarrax in-engine candidates; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Annex, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates; not Gate evidence)\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

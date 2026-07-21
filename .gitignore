@@ -36,6 +36,8 @@ build/
 !review/**/*.t3dm
 !review/**/*.sdata
 !review/**/*.sprite
+!runtime-candidates/**/*.t3dm
+!runtime-candidates/**/*.sdata
 *.wav64
 *.xm64
 *.z64

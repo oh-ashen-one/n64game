@@ -10,6 +10,7 @@ fi
 export DOCKER_DEFAULT_PLATFORM="linux/amd64"
 
 scripts/bootstrap-check --build
+python3 tools/n64game_build.py validate-assets
 scripts/clean-build
 scripts/prepare-dependencies
 

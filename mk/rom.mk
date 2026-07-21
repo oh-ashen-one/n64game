@@ -5,16 +5,39 @@ T3D_ROOT := $(CURDIR)/build/deps/tiny3d
 ROM_NAME := n64game-gate3
 ROM_OUTPUT := $(BUILD_DIR)/$(ROM_NAME).z64
 QUARRUNE_SOURCE_DIR := runtime-candidates/echo/echo.quarrune
+QUARRUNE_PACKAGE_DIR := $(QUARRUNE_SOURCE_DIR)/runtime
 QUARRUNE_FILESYSTEM_DIR := filesystem/echo/echo.quarrune
-QUARRUNE_MODEL := $(QUARRUNE_FILESYSTEM_DIR)/quarrune_hero.t3dm
+QUARRUNE_MODEL := $(QUARRUNE_FILESYSTEM_DIR)/quarrune.t3dm
 QUARRUNE_BODY := $(QUARRUNE_FILESYSTEM_DIR)/tex_quarrune_body_ci8_64x64.sprite
 QUARRUNE_ACCENT := $(QUARRUNE_FILESYSTEM_DIR)/tex_quarrune_accent_ci4_32x32.sprite
 QUARRUNE_SHADOW := $(QUARRUNE_FILESYSTEM_DIR)/tex_quarrune_blob_shadow_ia8_32x32.sprite
+QUARRUNE_ANIMATION_STREAMS := $(foreach index,0 1 2,$(QUARRUNE_FILESYSTEM_DIR)/quarrune.$(index).sdata)
+QUARRUNE_MODEL_SHA256 := 276709f4224c88667734d1c4c796221c3aabd882f50313af0b437d413f46381b
+QUARRUNE_STREAM_0_SHA256 := 2ea2d8b50d525564e04a529834992595c65cbb2153753be50ba11fc672377f86
+QUARRUNE_STREAM_1_SHA256 := 59a5ab9fcdce9b0b03daaa6e574df17e468375b2acf16a550c395a510d4e75b9
+QUARRUNE_STREAM_2_SHA256 := 74780bcf51efd2744fab0645dba0fbe11a2582d947bf8862d9f9739f9648e694
 QUARRUNE_RUNTIME_CANDIDATES := \
 	$(QUARRUNE_MODEL) \
+	$(QUARRUNE_ANIMATION_STREAMS) \
 	$(QUARRUNE_BODY) \
 	$(QUARRUNE_ACCENT) \
 	$(QUARRUNE_SHADOW)
+AYSELOR_SOURCE_DIR := runtime-candidates/echo/echo.ayselor
+AYSELOR_PACKAGE_DIR := $(AYSELOR_SOURCE_DIR)/runtime
+AYSELOR_FILESYSTEM_DIR := filesystem/echo/echo.ayselor
+AYSELOR_MODEL := $(AYSELOR_FILESYSTEM_DIR)/ayselor.t3dm
+AYSELOR_BODY := $(AYSELOR_FILESYSTEM_DIR)/tex_ayselor_body_ci8_64x64.sprite
+AYSELOR_ACCENT := $(AYSELOR_FILESYSTEM_DIR)/tex_ayselor_accent_ci4_32x32.sprite
+AYSELOR_ANIMATION_STREAMS := $(foreach index,0 1 2,$(AYSELOR_FILESYSTEM_DIR)/ayselor.$(index).sdata)
+AYSELOR_MODEL_SHA256 := 7892a0635544e407ab8d5b5c5d3b1f3b26fd00a3d5f5056c798b27326512f20c
+AYSELOR_STREAM_0_SHA256 := 184005a7176e15acfe9d4711df95d11019f2e55b0086260f05be96c3307802f2
+AYSELOR_STREAM_1_SHA256 := 9c5632335d7e54895fb925f88d841a880f6dd627a785bd4caae727d1641abab3
+AYSELOR_STREAM_2_SHA256 := 1b322a32a4bcde89e5543c5dd5eecfe9be993c777cee215efb619aa0aca1bfde
+AYSELOR_RUNTIME_CANDIDATES := \
+	$(AYSELOR_MODEL) \
+	$(AYSELOR_ANIMATION_STREAMS) \
+	$(AYSELOR_BODY) \
+	$(AYSELOR_ACCENT)
 ANNEX_SOURCE_DIR := runtime-candidates/annex
 ANNEX_FILESYSTEM_DIR := filesystem/env/annex
 ANNEX_MODEL := $(ANNEX_FILESYSTEM_DIR)/annex_threshold.t3dm
@@ -63,6 +86,10 @@ KIVARRAX_RUNTIME_CANDIDATES := \
 include $(N64_INST)/include/n64.mk
 include $(T3D_ROOT)/t3d.mk
 
+define VERIFY_REVIEWED_CANDIDATE
+@PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); e=sys.argv[2]; (not p.is_file() or p.is_symlink()) and sys.exit(f"{p}: expected one regular reviewed candidate"); a=hashlib.sha256(p.read_bytes()).hexdigest(); a != e and sys.exit(f"{p}: SHA-256 {a} != {e}")' "$(1)" "$(2)"
+endef
+
 N64_CFLAGS += -std=gnu2x -Os -Wall -Wextra -Werror -Wshadow -Wconversion
 
 OBJS := \
@@ -85,24 +112,91 @@ $(BUILD_DIR)/$(ROM_NAME).elf: $(OBJS) | $(T3D_ROOT)/build/libt3d.a
 $(T3D_GLTF_TO_3D):
 	$(MAKE) -C $(T3D_ROOT)/tools/gltf_importer -j$${N64GAME_JOBS:-4}
 
-$(QUARRUNE_MODEL): $(QUARRUNE_SOURCE_DIR)/quarrune_hero.glb | $(T3D_GLTF_TO_3D)
+$(QUARRUNE_MODEL): $(QUARRUNE_PACKAGE_DIR)/quarrune.t3dm
 	@mkdir -p $(dir $@)
-	@echo "    [T3D-CANDIDATE] $@"
-	$(T3D_GLTF_TO_3D) "$<" "$@" --base-scale=64 --asset-path=runtime-candidates
+	@echo "    [T3D-REVIEWED-CANDIDATE] $@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(QUARRUNE_MODEL_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(QUARRUNE_MODEL_SHA256))
 
-$(QUARRUNE_BODY): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_body_ci8_64x64.png
+$(QUARRUNE_FILESYSTEM_DIR)/quarrune.0.sdata: $(QUARRUNE_PACKAGE_DIR)/quarrune.0.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(QUARRUNE_STREAM_0_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(QUARRUNE_STREAM_0_SHA256))
+
+$(QUARRUNE_FILESYSTEM_DIR)/quarrune.1.sdata: $(QUARRUNE_PACKAGE_DIR)/quarrune.1.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(QUARRUNE_STREAM_1_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(QUARRUNE_STREAM_1_SHA256))
+
+$(QUARRUNE_FILESYSTEM_DIR)/quarrune.2.sdata: $(QUARRUNE_PACKAGE_DIR)/quarrune.2.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(QUARRUNE_STREAM_2_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(QUARRUNE_STREAM_2_SHA256))
+
+$(QUARRUNE_BODY): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_body_ci8_64x64.png tools/n64game_gate5_export.py
 	@mkdir -p $(dir $@)
 	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
 	@test -f "$@"
 
-$(QUARRUNE_ACCENT): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_accent_ci4_32x32.png
+$(QUARRUNE_ACCENT): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_accent_ci4_32x32.png tools/n64game_gate5_export.py
 	@mkdir -p $(dir $@)
 	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
 	@test -f "$@"
 
 $(QUARRUNE_SHADOW): $(QUARRUNE_SOURCE_DIR)/tex_quarrune_blob_shadow_ia8_32x32.png
 	@mkdir -p $(dir $@)
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	@test -f "$@"
+
+$(AYSELOR_MODEL): $(AYSELOR_PACKAGE_DIR)/ayselor.t3dm
+	@mkdir -p $(dir $@)
+	@echo "    [T3D-REVIEWED-CANDIDATE] $@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(AYSELOR_MODEL_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(AYSELOR_MODEL_SHA256))
+
+$(AYSELOR_FILESYSTEM_DIR)/ayselor.0.sdata: $(AYSELOR_PACKAGE_DIR)/ayselor.0.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(AYSELOR_STREAM_0_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(AYSELOR_STREAM_0_SHA256))
+
+$(AYSELOR_FILESYSTEM_DIR)/ayselor.1.sdata: $(AYSELOR_PACKAGE_DIR)/ayselor.1.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(AYSELOR_STREAM_1_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(AYSELOR_STREAM_1_SHA256))
+
+$(AYSELOR_FILESYSTEM_DIR)/ayselor.2.sdata: $(AYSELOR_PACKAGE_DIR)/ayselor.2.sdata
+	@mkdir -p $(dir $@)
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(AYSELOR_STREAM_2_SHA256))
+	cp "$<" "$@"
+	cmp "$<" "$@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$@,$(AYSELOR_STREAM_2_SHA256))
+
+$(AYSELOR_BODY): $(AYSELOR_SOURCE_DIR)/filesystem/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.png tools/n64game_gate5_export.py
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
+	@test -f "$@"
+
+$(AYSELOR_ACCENT): $(AYSELOR_SOURCE_DIR)/filesystem/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.png tools/n64game_gate5_export.py
+	@mkdir -p $(dir $@)
+	$(N64_MKSPRITE) --format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import pathlib,runpy,sys; runpy.run_path("tools/n64game_gate5_export.py", run_name="n64game_sprite_contract")["canonicalize_sprite"](pathlib.Path(sys.argv[1]))' "$@"
 	@test -f "$@"
 
 $(ANNEX_MODEL): $(ANNEX_SOURCE_DIR)/intermediate/annex_threshold.glb | $(T3D_GLTF_TO_3D)
@@ -190,6 +284,7 @@ $(KIVARRAX_DIAPHRAGM): $(KIVARRAX_SOURCE_DIR)/filesystem/echo/echo.kivarrax/tex_
 
 $(BUILD_DIR)/$(ROM_NAME).dfs: \
 	$(QUARRUNE_RUNTIME_CANDIDATES) \
+	$(AYSELOR_RUNTIME_CANDIDATES) \
 	$(ANNEX_RUNTIME_CANDIDATES) \
 	$(ARI_RUNTIME_CANDIDATES) \
 	$(GYRECLAST_RUNTIME_CANDIDATES) \
