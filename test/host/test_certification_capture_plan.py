@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_certification_evidence import sha256  # noqa: E402
 from tools import n64game_certification as certification  # noqa: E402
 from tools import n64game_certification_plan as plan_tool  # noqa: E402
+from tools import n64game_certification_saves as save_fixtures  # noqa: E402
 
 
 class CertificationCapturePlanTests(unittest.TestCase):
@@ -38,9 +39,13 @@ class CertificationCapturePlanTests(unittest.TestCase):
             "timing-1", "timing-2", "soak", "input-smoke",
             "valid_resume", "latest_corrupt_fallback", "all_corrupt_new_game",
         })
-        command_text = json.dumps(plan["commands"] + plan["post_capture_commands"])
+        command_text = json.dumps(plan["pre_capture_commands"] + plan["commands"] + plan["post_capture_commands"])
         self.assertIn("--expected-rom-sha256=" + sha256(self.rom), command_text)
+        for scenario in save_fixtures.SCENARIOS:
+            fixture_hash = plan_tool._sha256_bytes(save_fixtures.eeprom_image(scenario))
+            self.assertIn(f"--expected-eeprom-sha256={fixture_hash}", command_text)
         self.assertIn("scripts/assemble-certification-evidence", command_text)
+        self.assertIn("scripts/prepare-certification-save-fixtures", command_text)
         self.assertIn("scripts/validate-input-log", command_text)
         self.assertNotIn("CERTIFIED", json.dumps(plan))
 
@@ -68,6 +73,7 @@ class CertificationCapturePlanTests(unittest.TestCase):
         self.assertEqual(json.loads(plan_json.read_text(encoding="utf-8"))["rom_sha256"], sha256(self.rom))
         markdown = plan_md.read_text(encoding="utf-8")
         self.assertIn("# N64GAME Ares Certification Capture Plan", markdown)
+        self.assertIn("## Pre-capture commands", markdown)
         self.assertIn("not evidence and not release certification", markdown)
 
     def test_rejects_bad_rom_and_symlink_output(self) -> None:

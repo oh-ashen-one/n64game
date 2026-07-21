@@ -8,6 +8,7 @@ creates raw evidence, EEPROM snapshots, or certification claims.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -19,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools import n64game_certification as certification  # noqa: E402
+from tools import n64game_certification_saves as save_fixtures  # noqa: E402
 
 
 SCHEMA = "n64game-certification-capture-plan-v1"
@@ -74,6 +76,10 @@ def _shell_join(items: list[str]) -> str:
     return " ".join(shlex.quote(item) for item in items)
 
 
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def _run_ares_command(rom: str, rom_sha: str, log: str, *, eeprom_sha_placeholder: str | None = None) -> str:
     command = [
         "scripts/run-ares",
@@ -126,6 +132,10 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
         "log_path": "logs/input-smoke.log",
         "operator_route": "Press arrows/WASD, Z, X, C, Space, and Return in visible in-game contexts to prove keyboard mappings reach the ROM.",
     }
+    fixture_hashes = {
+        scenario: _sha256_bytes(save_fixtures.eeprom_image(scenario))
+        for scenario in save_fixtures.SCENARIOS
+    }
     save_runs = [
         {
             "id": "valid_resume",
@@ -133,7 +143,7 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
             "scenario": "valid_resume",
             "log_path": "logs/valid_resume.log",
             "eeprom_path": "saves/valid_resume.eep",
-            "eeprom_sha_placeholder": "<valid_resume_eeprom_sha256>",
+            "eeprom_sha256": fixture_hashes["valid_resume"],
             "operator_route": "Boot from a preserved 512-byte valid prelaunch EEPROM snapshot and choose Continue once.",
         },
         {
@@ -142,7 +152,7 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
             "scenario": "latest_corrupt_fallback",
             "log_path": "logs/latest_corrupt_fallback.log",
             "eeprom_path": "saves/latest_corrupt_fallback.eep",
-            "eeprom_sha_placeholder": "<latest_corrupt_fallback_eeprom_sha256>",
+            "eeprom_sha256": fixture_hashes["latest_corrupt_fallback"],
             "operator_route": "Boot from a preserved 512-byte snapshot where the newest recognizable slot is corrupt and the older valid slot should resume.",
         },
         {
@@ -151,7 +161,7 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
             "scenario": "all_corrupt_new_game",
             "log_path": "logs/all_corrupt_new_game.log",
             "eeprom_path": "saves/all_corrupt_new_game.eep",
-            "eeprom_sha_placeholder": "<all_corrupt_new_game_eeprom_sha256>",
+            "eeprom_sha256": fixture_hashes["all_corrupt_new_game"],
             "operator_route": "Boot from a preserved 512-byte snapshot with recognizable corrupt N64GAME slots only and confirm it falls back to New Game.",
         },
     ]
@@ -177,9 +187,13 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
                 rom_relative,
                 rom_sha,
                 f"{out_relative}/{run['log_path']}",
-                eeprom_sha_placeholder=run["eeprom_sha_placeholder"],
+                eeprom_sha_placeholder=run["eeprom_sha256"],
             ),
         })
+    fixture_command = (
+        "scripts/prepare-certification-save-fixtures "
+        f"--out-dir {out_relative}/saves"
+    )
     assemble_command = (
         "scripts/assemble-certification-evidence "
         f"--rom {rom_relative} "
@@ -201,6 +215,12 @@ def build_plan(rom_path: Path, out_dir: Path) -> dict[str, Any]:
         "capture_root": out_relative,
         "runs": [*timing_runs, soak_run, input_run, *save_runs],
         "commands": run_commands,
+        "pre_capture_commands": [
+            {
+                "id": "prepare-save-fixtures",
+                "command": fixture_command,
+            },
+        ],
         "post_capture_commands": [
             {
                 "id": "assemble",
@@ -258,6 +278,17 @@ def markdown_plan(plan: dict[str, Any]) -> str:
         lines.append(f"| `{run['id']}` | `{run['kind']}` | `{output}` | {run['operator_route']} |")
     lines.extend([
         "",
+        "## Pre-capture commands",
+        "",
+    ])
+    for command in plan["pre_capture_commands"]:
+        lines.append(f"### `{command['id']}`")
+        lines.append("")
+        lines.append("```sh")
+        lines.append(command["command"])
+        lines.append("```")
+        lines.append("")
+    lines.extend([
         "## Capture commands",
         "",
     ])
@@ -269,7 +300,7 @@ def markdown_plan(plan: dict[str, Any]) -> str:
             lines.append(command["prepare_snapshot"])
             lines.append("```")
             lines.append("")
-            lines.append("Replace the placeholder EEPROM SHA in the launch command with the SHA-256 of the preserved snapshot.")
+            lines.append("This copies the deterministic prelaunch fixture into the isolated Ares save slot.")
             lines.append("")
         lines.append("```sh")
         lines.append(command["command"])

@@ -62,6 +62,15 @@ scripts/plan-certification-captures \
 
 This writes `build/certification/capture-plan.json` and `build/certification/CAPTURE_PLAN.md` with the exact run matrix, expected ROM hash, Ares launch commands, input-smoke validation, manifest-assembly command, and validator/summary command. It creates only an ignored plan and empty evidence directories. It is not evidence and always reports `certification=NOT_CLAIMED`.
 
+For the save-recovery runs, prepare the canonical 512-byte EEPROM input fixtures before launching Ares:
+
+```sh
+scripts/prepare-certification-save-fixtures \
+  --out-dir build/certification/saves
+```
+
+This writes `valid_resume.eep`, `latest_corrupt_fallback.eep`, `all_corrupt_new_game.eep`, and `SAVE_FIXTURES.json` under the ignored save-fixture directory. The fixture manifest lists the exact SHA-256 values used by the capture plan's `--expected-eeprom-sha256` arguments. These files are prelaunch inputs only; a passing save-recovery claim still requires Ares logs that bind the same EEPROM hashes and pass the strict evidence validator.
+
 ```sh
 mkdir -p build/certification/logs build/certification/saves
 
