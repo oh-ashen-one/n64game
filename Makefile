@@ -39,3 +39,4 @@ validate:
 
 report:
 	scripts/make-checksums
+	scripts/audit-final-acceptance

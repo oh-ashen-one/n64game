@@ -79,3 +79,5 @@ jobs:
             build/reports/validation-summary.md
             build/reports/host-tests.txt
             build/reports/certification-tests.txt
+            build/reports/final-acceptance-audit.json
+            build/reports/final-acceptance-audit.md
