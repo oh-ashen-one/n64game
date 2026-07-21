@@ -413,14 +413,14 @@ class BuildContractTests(unittest.TestCase):
     def test_ares_keyboard_wrapper_maps_arrows_and_wasd_to_dpad_and_stick(self) -> None:
         wrapper = (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8")
         expected_bindings = {
-            "Up": "0x1/0/126;0x1/0/13;",
-            "Down": "0x1/0/125;0x1/0/1;",
-            "Left": "0x1/0/123;0x1/0/0;",
-            "Right": "0x1/0/124;0x1/0/2;",
-            "X-Axis/Lo": "0x1/0/123;0x1/0/0;",
-            "X-Axis/Hi": "0x1/0/124;0x1/0/2;",
-            "Y-Axis/Lo": "0x1/0/125;0x1/0/1;",
-            "Y-Axis/Hi": "0x1/0/126;0x1/0/13;",
+            "Up": "0x1/0/92;0x1/0/62;",
+            "Down": "0x1/0/93;0x1/0/58;",
+            "Left": "0x1/0/94;0x1/0/40;",
+            "Right": "0x1/0/95;0x1/0/43;",
+            "X-Axis/Lo": "0x1/0/94;0x1/0/40;",
+            "X-Axis/Hi": "0x1/0/95;0x1/0/43;",
+            "Y-Axis/Lo": "0x1/0/93;0x1/0/58;",
+            "Y-Axis/Hi": "0x1/0/92;0x1/0/62;",
         }
         for control, binding in expected_bindings.items():
             self.assertIn(

@@ -102,7 +102,7 @@ until every horizontal pair is byte-identical or a true native capture path is
 found.
 
 The isolated wrapper also binds Ares `Capture Screenshot` to `P`
-(`Hotkey/CaptureScreenshot=0x1/0/35;;`) and sends screenshots to:
+(`Hotkey/CaptureScreenshot=0x1/0/55;;`) and sends screenshots to:
 
 ```text
 ~/Library/Application Support/ares-v148-n64game/Screenshots/
@@ -135,9 +135,10 @@ Keyboard mapping supplied by `scripts/run-ares`:
 - `Return`: N64 `Start`
 - `P`: Ares native screenshot hotkey, when the Ares process/window receives it
 
-The wrapper forces Ares' native Quartz input driver and uses Ares keyboard
-scancodes, not macOS virtual key codes: Up/Down/Left/Right are `82/81/80/79`,
-and W/A/S/D are `26/4/22/7`.
+The wrapper forces Ares' native Quartz input driver and uses Ares v148's
+keyboard-list indices, not macOS virtual keycodes or SDL scancodes:
+Up/Down/Left/Right are `92/93/94/95`, W/A/S/D are `62/40/58/43`, X is `63`,
+Z is `65`, and Return is `97`.
 
 ## Required route for each timed playthrough
 

@@ -2,7 +2,7 @@
 """Audit Ares v148 keyboard input bindings for certification readiness.
 
 This is not controller certification. It verifies that the repository wrapper
-uses the SDL scancode bindings needed for manual Ares certification, inspects
+uses Ares v148 Quartz keyboard-list indices for manual certification, inspects
 the isolated Ares settings file when present, and warns when a currently running
 Ares process still appears to have legacy keyboard mappings from before the
 wrapper fix.
@@ -26,23 +26,23 @@ RUN_ARES = ROOT / "scripts" / "run-ares"
 DEFAULT_STATE = Path.home() / "Library" / "Application Support" / "ares-v148-n64game"
 
 EXPECTED_BINDINGS = {
-    "Up": "0x1/0/126;0x1/0/13;",
-    "Down": "0x1/0/125;0x1/0/1;",
-    "Left": "0x1/0/123;0x1/0/0;",
-    "Right": "0x1/0/124;0x1/0/2;",
-    "X-Axis/Lo": "0x1/0/123;0x1/0/0;",
-    "X-Axis/Hi": "0x1/0/124;0x1/0/2;",
-    "Y-Axis/Lo": "0x1/0/125;0x1/0/1;",
-    "Y-Axis/Hi": "0x1/0/126;0x1/0/13;",
-    "B": "0x1/0/6;;",
-    "A": "0x1/0/7;;",
-    "C-Down": "0x1/0/49;;",
-    "Z": "0x1/0/56;;",
-    "Start": "0x1/0/36;;",
+    "Up": "0x1/0/92;0x1/0/62;",
+    "Down": "0x1/0/93;0x1/0/58;",
+    "Left": "0x1/0/94;0x1/0/40;",
+    "Right": "0x1/0/95;0x1/0/43;",
+    "X-Axis/Lo": "0x1/0/94;0x1/0/40;",
+    "X-Axis/Hi": "0x1/0/95;0x1/0/43;",
+    "Y-Axis/Lo": "0x1/0/93;0x1/0/58;",
+    "Y-Axis/Hi": "0x1/0/92;0x1/0/62;",
+    "B": "0x1/0/65;;",
+    "A": "0x1/0/63;;",
+    "C-Down": "0x1/0/98;;",
+    "Z": "0x1/0/99;;",
+    "Start": "0x1/0/97;;",
 }
 
 EXPECTED_HOTKEY_BINDINGS = {
-    "CaptureScreenshot": "0x1/0/35;;",
+    "CaptureScreenshot": "0x1/0/55;;",
 }
 
 EXPECTED_INPUT_DRIVER = "Quartz"
@@ -63,17 +63,17 @@ LEGACY_BINDING_FRAGMENTS = (
     "0x1/0/27;;",
     "0x1/0/44;;",
     "0x1/0/225;;",
-    "0x1/0/40;;",
     "0x1/0/19;;",
-    "0x1/0/92;0x1/0/62",
-    "0x1/0/93;0x1/0/58",
-    "0x1/0/94;0x1/0/40",
-    "0x1/0/95;0x1/0/43",
-    "0x1/0/63;;",
-    "0x1/0/65;;",
-    "0x1/0/42;;",
-    "0x1/0/98;;",
-    "0x1/0/97;;",
+    "0x1/0/126;0x1/0/13",
+    "0x1/0/125;0x1/0/1",
+    "0x1/0/123;0x1/0/0",
+    "0x1/0/124;0x1/0/2",
+    "0x1/0/6;;",
+    "0x1/0/7;;",
+    "0x1/0/49;;",
+    "0x1/0/56;;",
+    "0x1/0/36;;",
+    "0x1/0/35;;",
 )
 
 

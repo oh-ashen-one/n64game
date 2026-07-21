@@ -65,7 +65,7 @@ Nintendo64
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
         self.assertEqual(payload["result"], "WARN_STALE_ARES_PROCESS")
         self.assertEqual(payload["settings"]["result"], "STALE")
-        self.assertIn("0x1/0/92;0x1/0/62", payload["settings"]["legacy_fragments"])
+        self.assertIn("0x1/0/125;0x1/0/1", payload["settings"]["legacy_fragments"])
 
     def test_settings_with_stale_l_axis_arrow_bindings_are_reported_stale(self) -> None:
         self.write_settings(
@@ -78,21 +78,21 @@ Nintendo64
         L-Down: 0x1/0/126;0x1/0/13;
         L-Left: 0x1/0/123;0x1/0/0;
         L-Right: 0x1/0/124;0x1/0/2;
-        Up: 0x1/0/126;0x1/0/13;;
-        Down: 0x1/0/125;0x1/0/1;;
-        Left: 0x1/0/123;0x1/0/0;;
-        Right: 0x1/0/124;0x1/0/2;;
-        B: 0x1/0/6;;
-        A: 0x1/0/7;;
-        C-Down: 0x1/0/49;;
-        Z: 0x1/0/56;;
-        Start: 0x1/0/36;;
+        Up: 0x1/0/92;0x1/0/62;;
+        Down: 0x1/0/93;0x1/0/58;;
+        Left: 0x1/0/94;0x1/0/40;;
+        Right: 0x1/0/95;0x1/0/43;;
+        B: 0x1/0/65;;
+        A: 0x1/0/63;;
+        C-Down: 0x1/0/98;;
+        Z: 0x1/0/99;;
+        Start: 0x1/0/97;;
         X-Axis
-          Lo: 0x1/0/123;0x1/0/0;;
-          Hi: 0x1/0/124;0x1/0/2;;
+          Lo: 0x1/0/94;0x1/0/40;;
+          Hi: 0x1/0/95;0x1/0/43;;
         Y-Axis
-          Lo: 0x1/0/125;0x1/0/1;;
-          Hi: 0x1/0/126;0x1/0/13;;
+          Lo: 0x1/0/93;0x1/0/58;;
+          Hi: 0x1/0/92;0x1/0/62;;
       Mouse
         X: ;;
 """
@@ -117,25 +117,25 @@ Nintendo64
         L-Down: ;;
         L-Left: ;;
         L-Right: ;;
-        Up: 0x1/0/126;0x1/0/13;;
-        Down: 0x1/0/125;0x1/0/1;;
-        Left: 0x1/0/123;0x1/0/0;;
-        Right: 0x1/0/124;0x1/0/2;;
-        B: 0x1/0/6;;
-        A: 0x1/0/7;;
-        C-Down: 0x1/0/49;;
-        Z: 0x1/0/56;;
-        Start: 0x1/0/36;;
+        Up: 0x1/0/92;0x1/0/62;;
+        Down: 0x1/0/93;0x1/0/58;;
+        Left: 0x1/0/94;0x1/0/40;;
+        Right: 0x1/0/95;0x1/0/43;;
+        B: 0x1/0/65;;
+        A: 0x1/0/63;;
+        C-Down: 0x1/0/98;;
+        Z: 0x1/0/99;;
+        Start: 0x1/0/97;;
         X-Axis
-          Lo: 0x1/0/123;0x1/0/0;;
-          Hi: 0x1/0/124;0x1/0/2;;
+          Lo: 0x1/0/94;0x1/0/40;;
+          Hi: 0x1/0/95;0x1/0/43;;
         Y-Axis
-          Lo: 0x1/0/125;0x1/0/1;;
-          Hi: 0x1/0/126;0x1/0/13;;
+          Lo: 0x1/0/93;0x1/0/58;;
+          Hi: 0x1/0/92;0x1/0/62;;
       Mouse
         X: ;;
 Hotkey
-  CaptureScreenshot: 0x1/0/35;;
+  CaptureScreenshot: 0x1/0/55;;
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
@@ -157,25 +157,25 @@ Nintendo64
         L-Down: ;;
         L-Left: ;;
         L-Right: ;;
-        Up: 0x1/0/126;0x1/0/13;;
-        Down: 0x1/0/125;0x1/0/1;;
-        Left: 0x1/0/123;0x1/0/0;;
-        Right: 0x1/0/124;0x1/0/2;;
-        B: 0x1/0/6;;
-        A: 0x1/0/7;;
-        C-Down: 0x1/0/49;;
-        Z: 0x1/0/56;;
-        Start: 0x1/0/36;;
+        Up: 0x1/0/92;0x1/0/62;;
+        Down: 0x1/0/93;0x1/0/58;;
+        Left: 0x1/0/94;0x1/0/40;;
+        Right: 0x1/0/95;0x1/0/43;;
+        B: 0x1/0/65;;
+        A: 0x1/0/63;;
+        C-Down: 0x1/0/98;;
+        Z: 0x1/0/99;;
+        Start: 0x1/0/97;;
         X-Axis
-          Lo: 0x1/0/123;0x1/0/0;;
-          Hi: 0x1/0/124;0x1/0/2;;
+          Lo: 0x1/0/94;0x1/0/40;;
+          Hi: 0x1/0/95;0x1/0/43;;
         Y-Axis
-          Lo: 0x1/0/125;0x1/0/1;;
-          Hi: 0x1/0/126;0x1/0/13;;
+          Lo: 0x1/0/93;0x1/0/58;;
+          Hi: 0x1/0/92;0x1/0/62;;
       Mouse
         X: ;;
 Hotkey
-  CaptureScreenshot: 0x1/0/35;;
+  CaptureScreenshot: 0x1/0/55;;
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
@@ -188,8 +188,8 @@ Hotkey
         snapshot = self.root / "ps.txt"
         snapshot.write_text(
             "123 /Applications/ares --setting "
-            "Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62; "
-            "--setting Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/65;;\n",
+            "Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/126;0x1/0/13; "
+            "--setting Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/7;;\n",
             encoding="utf-8",
         )
         payload = audit.audit(self.root, self.state, snapshot)
@@ -209,7 +209,7 @@ Hotkey
     def test_terminate_stale_is_disabled_for_fixture_snapshots(self) -> None:
         snapshot = self.root / "ps.txt"
         snapshot.write_text(
-            "123 ares --setting Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;\n",
+            "123 ares --setting Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/126;0x1/0/13;\n",
             encoding="utf-8",
         )
         payload = audit.terminate_stale_processes(self.root, self.state, snapshot)
@@ -220,7 +220,7 @@ Hotkey
     def test_cli_writes_json_and_strict_returns_nonzero_for_stale_process(self) -> None:
         snapshot = self.root / "ps.txt"
         snapshot.write_text(
-            "123 ares --setting Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;\n",
+            "123 ares --setting Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/126;0x1/0/13;\n",
             encoding="utf-8",
         )
         json_out = self.root / "out.json"

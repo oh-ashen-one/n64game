@@ -47,6 +47,8 @@ SETTINGS_FILE="$STATE_ROOT/settings.bml"
 if [[ ! -f "$SETTINGS_FILE" ]]; then
     "$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null
 fi
+# The final component is Ares v148's Quartz keyboard-list index from
+# ruby/input/keyboard/quartz.cpp, not a macOS virtual keycode or SDL scancode.
 repair_ares_settings() {
     perl -0pi -e '
     s/(\nInput\n  Driver: )[^\n]*/${1}Quartz/;
@@ -56,20 +58,20 @@ repair_ares_settings() {
     s/(\n        L-Down: )[^\n]*/${1};;/;
     s/(\n        L-Left: )[^\n]*/${1};;/;
     s/(\n        L-Right: )[^\n]*/${1};;/;
-    s/(\n        Up: )[^\n]*/${1}0x1\/0\/126;0x1\/0\/13;;/;
-    s/(\n        Down: )[^\n]*/${1}0x1\/0\/125;0x1\/0\/1;;/;
-    s/(\n        Left: )[^\n]*/${1}0x1\/0\/123;0x1\/0\/0;;/;
-    s/(\n        Right: )[^\n]*/${1}0x1\/0\/124;0x1\/0\/2;;/;
-    s/(\n        B: )[^\n]*/${1}0x1\/0\/6;;/;
-    s/(\n        A: )[^\n]*/${1}0x1\/0\/7;;/;
-    s/(\n        C-Down: )[^\n]*/${1}0x1\/0\/49;;/;
-    s/(\n        Z: )[^\n]*/${1}0x1\/0\/56;;/;
-    s/(\n        Start: )[^\n]*/${1}0x1\/0\/36;;/;
-    s/(\n  CaptureScreenshot: )[^\n]*/${1}0x1\/0\/35;;/;
-    s/(\n        X-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/123;0x1\/0\/0;;/;
-    s/(\n        X-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/124;0x1\/0\/2;;/;
-    s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/125;0x1\/0\/1;;/;
-    s/(\n        Y-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/126;0x1\/0\/13;;/;
+    s/(\n        Up: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
+    s/(\n        Down: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Left: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        Right: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        B: )[^\n]*/${1}0x1\/0\/65;;/;
+    s/(\n        A: )[^\n]*/${1}0x1\/0\/63;;/;
+    s/(\n        C-Down: )[^\n]*/${1}0x1\/0\/98;;/;
+    s/(\n        Z: )[^\n]*/${1}0x1\/0\/99;;/;
+    s/(\n        Start: )[^\n]*/${1}0x1\/0\/97;;/;
+    s/(\n  CaptureScreenshot: )[^\n]*/${1}0x1\/0\/55;;/;
+    s/(\n        X-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        X-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Y-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
 ' "$SETTINGS_FILE"
 }
 repair_ares_settings
@@ -107,24 +109,24 @@ ARES_ARGS=(
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;'
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=;;'
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=;;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/126;0x1/0/13;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/125;0x1/0/1;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/123;0x1/0/0;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Right=0x1/0/124;0x1/0/2;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Lo=0x1/0/123;0x1/0/0;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Hi=0x1/0/124;0x1/0/2;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Lo=0x1/0/125;0x1/0/1;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Hi=0x1/0/126;0x1/0/13;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/B=0x1/0/6;;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/7;;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/C-Down=0x1/0/49;;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Z=0x1/0/56;;'
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Start=0x1/0/36;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/93;0x1/0/58;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/94;0x1/0/40;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Right=0x1/0/95;0x1/0/43;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Lo=0x1/0/94;0x1/0/40;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Hi=0x1/0/95;0x1/0/43;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Lo=0x1/0/93;0x1/0/58;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Hi=0x1/0/92;0x1/0/62;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/B=0x1/0/65;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/63;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/C-Down=0x1/0/98;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Z=0x1/0/99;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Start=0x1/0/97;;'
     --setting "Paths/Home=$STATE_ROOT/Systems/"
     --setting "Paths/Saves=$STATE_ROOT/Saves/"
     --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/"
     --setting "Paths/Debugging=$STATE_ROOT/Debugging/"
-    --setting 'Hotkey/CaptureScreenshot=0x1/0/35;;'
+    --setting 'Hotkey/CaptureScreenshot=0x1/0/55;;'
     --system "Nintendo 64"
 )
 if [[ "$CAPTURE_SESSION" -eq 1 ]]; then
