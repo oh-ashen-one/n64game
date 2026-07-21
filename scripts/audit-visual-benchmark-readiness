@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec /usr/bin/python3 -I -B "$ROOT/tools/n64game_visual_benchmark_readiness.py" \
+    --json-out "$ROOT/build/reports/visual-benchmark-readiness.json" \
+    --md-out "$ROOT/build/reports/visual-benchmark-readiness.md" \
+    "$@"
