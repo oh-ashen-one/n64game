@@ -47,6 +47,19 @@ the strict audit. `scripts/run-ares` also performs this strict audit immediately
 before launching a playable session, so stale input state blocks launch instead
 of silently producing another broken certification attempt.
 
+Before investing time in a visual/certification capture, run the capture
+preflight:
+
+```sh
+scripts/audit-ares-capture-preflight --probe-launch
+```
+
+This verifies ROM identity, the guarded Ares wrapper, strict input bindings, and
+whether a short Ares launch stays alive long enough for manual/native capture.
+If it reports `ARES_EXITED_DURING_PROBE` or produces no screenshot/capture files,
+do not fill visual benchmark packet rows from desktop screenshots or prose.
+Resolve the interactive emulator visibility/capture problem first.
+
 ## Launch command
 
 ```sh
