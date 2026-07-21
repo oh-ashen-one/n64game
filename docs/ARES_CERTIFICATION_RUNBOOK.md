@@ -83,11 +83,23 @@ scripts/audit-ares-capture-preflight \
 
 This launches through `scripts/run-ares --capture-session`, which omits `--kiosk`
 only for capture diagnostics so Ares' **Tools → Capture Screenshot** menu exists.
-On this Mac/Ares v148 setup, that path produced a screenshot file under
-`Screenshots/Nintendo 64/`, but the observed image was `640×240`, not native
-`320×240`; treat it as diagnostic proof of Ares capture reachability, not as a
-visual benchmark packet member unless a validator-approved native/representative
-conversion path is added.
+It also forces a deterministic pixel-capture profile: fixed `320×240` window,
+`FixedScale=1`, no shader, no color emulation, no interframe blending, no
+overscan, no supersampling, `PixelAccuracy=true`, and
+`DisableVideoInterfaceProcessing=true`. The preflight JSON records this profile
+under `launch_probe.capture_pixel_profile`.
+
+Older pre-profile captures on this Mac/Ares v148 setup produced screenshot
+files under `Screenshots/Nintendo 64/`, but the observed image was `640×240`,
+not native `320×240`. Treat those older files as diagnostic proof of Ares
+capture reachability, not as visual benchmark packet members.
+
+The current profile improved the failure mode: Ares logs a `320×240` output
+buffer and the automatic preflight analyzer reports the new `640×240`
+screenshot as border-only mismatch (`240` mismatching pairs, `0` interior
+mismatches). That is still diagnostic-only; exact import remains disallowed
+until every horizontal pair is byte-identical or a true native capture path is
+found.
 
 The isolated wrapper also binds Ares `Capture Screenshot` to `P`
 (`Hotkey/CaptureScreenshot=0x1/0/19;;`) and sends screenshots to:

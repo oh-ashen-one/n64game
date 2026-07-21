@@ -16,10 +16,20 @@ import os
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+try:
+    from . import n64game_visual_capture_packet as visual_capture
+except ImportError:  # pragma: no cover - used when executed as a script from tools/
+    import n64game_visual_capture_packet as visual_capture  # type: ignore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +38,22 @@ RUN_ARES = ROOT / "scripts" / "run-ares"
 SCREENSHOTS = Path.home() / "Library" / "Application Support" / "ares-v148-n64game" / "Screenshots"
 N64_MAGIC = bytes.fromhex("80371240")
 NATIVE_CAPTURE_SIZE = (320, 240)
+CAPTURE_PIXEL_PROFILE = {
+    "Video/Shader": "None",
+    "Video/WindowWidth": "320",
+    "Video/WindowHeight": "240",
+    "Video/Output": "Scale",
+    "Video/FixedScale": "1",
+    "Video/AdaptiveSizing": "false",
+    "Video/AutoCentering": "true",
+    "Video/ColorBleed": "false",
+    "Video/ColorEmulation": "false",
+    "Video/InterframeBlending": "false",
+    "Video/Overscan": "false",
+    "Video/PixelAccuracy": "true",
+    "Video/Supersampling": "false",
+    "Video/DisableVideoInterfaceProcessing": "true",
+}
 
 
 class PreflightError(RuntimeError):
@@ -329,6 +355,7 @@ def launch_probe(
     before_paths = {row["path"] for row in before}
     new_screenshots = [row for row in after if row["path"] not in before_paths]
     native_screenshots = [row for row in new_screenshots if row.get("native_320x240")]
+    ares_640x240_analysis = analyze_ares_640x240_screenshots(new_screenshots)
     if still_running and keep_running:
         result = "RUNNING_NEEDS_MANUAL_CAPTURE"
     elif still_running:
@@ -338,6 +365,15 @@ def launch_probe(
     return {
         "result": result,
         "pid": process.pid,
+        "capture_session": attempt_menu,
+        "capture_pixel_profile": CAPTURE_PIXEL_PROFILE if attempt_menu else {},
+        "launch_command": [str(root / "scripts" / "run-ares")] + (
+            ["--capture-session"] if attempt_menu else []
+        ) + [
+            "--homebrew-mode",
+            f"--expected-rom-sha256={identity_for_command(rom)}",
+            str(rom),
+        ],
         "wait_seconds": wait_seconds,
         "kept_running": still_running and keep_running,
         "returncode": process.poll(),
@@ -350,7 +386,38 @@ def launch_probe(
         "new_screenshot_count": len(new_screenshots),
         "native_320x240_screenshot_count": len(native_screenshots),
         "new_screenshots": new_screenshots,
+        "ares_640x240_analysis": ares_640x240_analysis,
     }
+
+
+def analyze_ares_640x240_screenshots(screenshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    analyses: list[dict[str, Any]] = []
+    for row in screenshots:
+        if tuple(row.get("dimensions", ())) != visual_capture.ARES_HORIZONTAL_DUPLICATE_SIZE:
+            continue
+        path = Path(str(row["path"]))
+        try:
+            payload = visual_capture.analyze_ares_horizontal_duplicate(path, path.parent)
+        except (OSError, visual_capture.CapturePacketError) as exc:
+            analyses.append({
+                "path": str(path),
+                "result": "ANALYSIS_ERROR",
+                "error": str(exc),
+            })
+            continue
+        analyses.append({
+            "path": str(path),
+            "result": payload["result"],
+            "exact_import_allowed": payload["exact_import_allowed"],
+            "mismatching_pairs": payload["pair_analysis"]["mismatching_pairs"],
+            "border_mismatches": payload["pair_analysis"]["border_mismatches"],
+            "interior_mismatches": payload["pair_analysis"]["interior_mismatches"],
+            "mismatches_are_border_only": payload["pair_analysis"]["mismatches_are_border_only"],
+            "max_channel_delta": payload["pair_analysis"]["max_channel_delta"],
+            "first_mismatch": payload["first_mismatches"][0] if payload["first_mismatches"] else None,
+            "approval_effect": payload["approval_effect"],
+        })
+    return analyses
 
 
 def audit(
@@ -399,6 +466,19 @@ def audit(
             "Ares produced screenshot files, but none are native 320x240"
             + (f" (observed dimensions: {dimensions})" if dimensions else "")
         )
+    for analysis in launch.get("ares_640x240_analysis", []):
+        if analysis.get("result") == "PASS_EXACT_DUPLICATE":
+            warnings.append(
+                "Ares produced a 640x240 screenshot that is exact horizontal 2x duplication; derive native through the guarded importer before using it"
+            )
+        elif analysis.get("mismatches_are_border_only"):
+            warnings.append(
+                "Ares 640x240 screenshot mismatch is border-only, but exact import remains disallowed until every pair is byte-identical"
+            )
+        elif analysis.get("result") == "FAIL_NOT_EXACT_DUPLICATE":
+            warnings.append(
+                "Ares 640x240 screenshot has interior mismatches and is not visual benchmark evidence"
+            )
     result = "FAIL" if failures else ("WARN_CAPTURE_NOT_READY" if warnings else "PASS")
     return {
         "schema": "n64game-ares-capture-preflight-v1",
@@ -419,6 +499,13 @@ def audit(
     }
 
 
+def identity_for_command(rom: Path) -> str:
+    try:
+        return sha256_file(rom)
+    except OSError:
+        return "UNAVAILABLE"
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join([
         "# N64GAME Ares Capture Preflight",
@@ -431,6 +518,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Ares window: `{payload['launch_probe'].get('window_probe', {}).get('result', 'NOT_RUN')}`",
         f"- Screenshot hotkey: `{payload['launch_probe'].get('hotkey_attempt', {}).get('result', 'NOT_RUN')}`",
         f"- Screenshot menu: `{payload['launch_probe'].get('menu_attempt', {}).get('result', 'NOT_RUN')}`",
+        f"- Capture pixel profile: `{ 'ON' if payload['launch_probe'].get('capture_pixel_profile') else 'OFF' }`",
         f"- New screenshots: `{payload['launch_probe'].get('new_screenshot_count', 0)}`",
         f"- Native 320x240 screenshots: `{payload['launch_probe'].get('native_320x240_screenshot_count', 0)}`",
         "",

@@ -55,9 +55,16 @@ scripts/audit-ares-capture-preflight \
 ```
 
 The menu path is currently the verified way to make Ares write screenshot files
-from the local wrapper, but the observed Ares output is `640×240`. That proves
-capture reachability only. Do not use those raw files directly as `native`
-packet members.
+from the local wrapper. It launches through `scripts/run-ares --capture-session`,
+which now forces a deterministic pixel-capture profile: fixed `320×240`
+window, `FixedScale=1`, no shader, no color emulation, no interframe blending,
+no overscan, no supersampling, `PixelAccuracy=true`, and
+`DisableVideoInterfaceProcessing=true`. The preflight JSON records this profile
+under `launch_probe.capture_pixel_profile`.
+
+Older captures made before this profile produced `640×240` screenshots. That
+proved capture reachability only. Do not use any raw `640×240` files directly
+as `native` packet members.
 
 Before attempting import, analyze each `640×240` screenshot:
 
@@ -99,6 +106,13 @@ horizontal pixel pairs were not exact duplicates. The diagnostic reports showed
 4,826–5,051 total mismatching pairs depending on the file. That is not a
 border-only or overscan-only mismatch; those files remain diagnostic
 capture-reachability artifacts only, not visual benchmark input.
+
+After adding the deterministic capture-session pixel profile, the 2026-07-21
+preflight showed Ares resizing output buffers to `320×240` and writing a
+`640×240` screenshot with `240` border-only mismatching pairs, `0` interior
+mismatches, and `exact_import_allowed=false`. This is materially closer than
+the old filtered captures, but still not acceptable native evidence because
+the importer requires every horizontal pair to be byte-identical.
 
 After the native files and non-placeholder packet metadata are filled in, the
 assembler can create the review enlargements deterministically:

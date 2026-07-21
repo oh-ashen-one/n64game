@@ -127,6 +127,24 @@ ARES_ARGS=(
     --setting 'Hotkey/CaptureScreenshot=0x1/0/19;;'
     --system "Nintendo 64"
 )
+if [[ "$CAPTURE_SESSION" -eq 1 ]]; then
+    ARES_ARGS+=(
+        --setting Video/Shader=None
+        --setting Video/WindowWidth=320
+        --setting Video/WindowHeight=240
+        --setting Video/Output=Scale
+        --setting Video/FixedScale=1
+        --setting Video/AdaptiveSizing=false
+        --setting Video/AutoCentering=true
+        --setting Video/ColorBleed=false
+        --setting Video/ColorEmulation=false
+        --setting Video/InterframeBlending=false
+        --setting Video/Overscan=false
+        --setting Video/PixelAccuracy=true
+        --setting Video/Supersampling=false
+        --setting Video/DisableVideoInterfaceProcessing=true
+    )
+fi
 if [[ "$CAPTURE_SESSION" -eq 0 ]]; then
     ARES_ARGS+=(--kiosk)
 fi

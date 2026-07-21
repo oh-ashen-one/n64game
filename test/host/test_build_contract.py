@@ -388,6 +388,28 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 
+    def test_ares_capture_session_uses_deterministic_pixel_profile(self) -> None:
+        wrapper = (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8")
+        self.assertIn('if [[ "$CAPTURE_SESSION" -eq 1 ]]; then', wrapper)
+        expected_settings = {
+            "Video/Shader": "None",
+            "Video/WindowWidth": "320",
+            "Video/WindowHeight": "240",
+            "Video/Output": "Scale",
+            "Video/FixedScale": "1",
+            "Video/AdaptiveSizing": "false",
+            "Video/AutoCentering": "true",
+            "Video/ColorBleed": "false",
+            "Video/ColorEmulation": "false",
+            "Video/InterframeBlending": "false",
+            "Video/Overscan": "false",
+            "Video/PixelAccuracy": "true",
+            "Video/Supersampling": "false",
+            "Video/DisableVideoInterfaceProcessing": "true",
+        }
+        for name, value in expected_settings.items():
+            self.assertIn(f"--setting {name}={value}", wrapper)
+
     def test_ares_keyboard_wrapper_maps_arrows_and_wasd_to_dpad_and_stick(self) -> None:
         wrapper = (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8")
         expected_bindings = {
