@@ -347,10 +347,68 @@ def visual_capture_evidence(root: Path) -> dict[str, Any]:
     }
 
 
+def visual_capture_packet(root: Path) -> dict[str, Any]:
+    path = root / "build" / "visual-benchmark" / "capture-packet.json"
+    if not path.is_file() or path.is_symlink():
+        return {
+            "path": "build/visual-benchmark/capture-packet.json",
+            "present": False,
+            "result": "MISSING",
+            "errors": ["visual capture packet is missing"],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "path": "build/visual-benchmark/capture-packet.json",
+            "present": True,
+            "sha256": sha256(path),
+            "result": "INVALID",
+            "errors": [f"visual capture packet cannot be decoded: {exc}"],
+        }
+
+    errors = []
+    if payload.get("schema") != "n64game-visual-capture-packet-v1":
+        errors.append("schema is not n64game-visual-capture-packet-v1")
+    if payload.get("capture_request") != "COMPLETE":
+        errors.append("capture_request is not COMPLETE")
+    captures = payload.get("captures")
+    if not isinstance(captures, dict):
+        errors.append("captures is not an object")
+        captures = {}
+    names = list(captures)
+    missing = [name for name in CAPTURE_NAMES if name not in captures]
+    extra = sorted(set(captures) - set(CAPTURE_NAMES))
+    if missing:
+        errors.append("captures missing rows: " + ", ".join(missing))
+    if extra:
+        errors.append("captures contains unexpected rows: " + ", ".join(extra))
+    placeholder_rows = []
+    for name, row in captures.items():
+        if not isinstance(row, dict):
+            placeholder_rows.append(str(name))
+            continue
+        text = json.dumps(row, sort_keys=True).upper()
+        if any(token in text for token in ("TODO", "PENDING", "REPLACE", "NOT_CAPTURED", "TBD")):
+            placeholder_rows.append(str(name))
+
+    result = "READY_TO_FILL" if not errors and placeholder_rows else ("FILLED" if not errors else "INVALID")
+    return {
+        "path": "build/visual-benchmark/capture-packet.json",
+        "present": True,
+        "sha256": sha256(path),
+        "result": result,
+        "errors": errors,
+        "capture_count": len(captures),
+        "placeholder_rows": placeholder_rows,
+    }
+
+
 def summarize(
     control: dict[str, Any],
     packets: list[dict[str, Any]],
     candidates: dict[str, Any],
+    capture_packet: dict[str, Any],
     capture_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     auth_rows = control["authorization_rows"]
@@ -385,6 +443,8 @@ def summarize(
         blockers.append(f"{len(pending_reviewers)} independent reviewer rows are not PASS")
     if candidates.get("missing_files"):
         blockers.append(f"{len(candidates['missing_files'])} runtime candidate files are missing")
+    if capture_packet.get("result") == "INVALID":
+        blockers.append("visual capture packet is invalid")
     if capture_evidence.get("result") == "INVALID":
         blockers.append("visual capture evidence report is invalid")
 
@@ -392,6 +452,13 @@ def summarize(
     if capture_report_pass:
         first_next_actions = [
             "promote validated native/enlarged capture packet bytes into the canonical benchmark evidence registry",
+            "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
+            "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
+        ]
+    elif capture_packet.get("result") in ("READY_TO_FILL", "FILLED"):
+        first_next_actions = [
+            f"fill {capture_packet['path']} with real native 320x240 Ares captures and non-placeholder frame/locator notes",
+            "generate or provide exact 4x nearest-neighbor enlargements from those native frames and validate the packet with scripts/assemble-visual-benchmark-captures",
             "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
             "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
         ]
@@ -427,6 +494,7 @@ def summarize(
             "complete_concept_packets": len(complete_concepts),
             "runtime_candidate_rows": candidates.get("row_count", 0),
             "runtime_candidate_missing_files": len(candidates.get("missing_files", [])),
+            "visual_capture_packet_present": 1 if capture_packet.get("present") else 0,
             "visual_capture_report_pass": capture_report_pass,
         },
         "first_next_actions": first_next_actions,
@@ -438,8 +506,9 @@ def audit(root: Path) -> dict[str, Any]:
     control = parse_control(root)
     packets = concept_packets(root)
     candidates = runtime_candidates(root)
+    capture_packet = visual_capture_packet(root)
     capture_evidence = visual_capture_evidence(root)
-    summary = summarize(control, packets, candidates, capture_evidence)
+    summary = summarize(control, packets, candidates, capture_packet, capture_evidence)
     return {
         "schema": "n64game-visual-benchmark-readiness-v1",
         "result": "BLOCKED_BY_MISSING_EVIDENCE" if not summary["ready_for_visual_approval"] else "READY_FOR_APPROVAL",
@@ -484,6 +553,7 @@ def audit(root: Path) -> dict[str, Any]:
             "statuses": candidates.get("statuses", []),
             "missing_files": candidates.get("missing_files", []),
         },
+        "visual_capture_packet": capture_packet,
         "visual_capture_evidence": capture_evidence,
     }
 
@@ -500,6 +570,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Passing evidence rows: `{counts['evidence_pass']} / {counts['evidence_rows']}`",
         f"- Complete concept packets: `{counts['complete_concept_packets']} / {counts['concept_packets']}`",
         f"- Runtime candidate rows: `{counts['runtime_candidate_rows']}`",
+        f"- Visual capture packet present: `{counts['visual_capture_packet_present']} / 1`",
         f"- Valid visual capture report: `{counts['visual_capture_report_pass']} / 1`",
         "",
         "## Blocking facts",

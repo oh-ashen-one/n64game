@@ -63,7 +63,9 @@ class VisualBenchmarkReadinessTests(unittest.TestCase):
         self.assertEqual(counts["complete_concept_packets"], 1)
         self.assertEqual(counts["runtime_candidate_rows"], 28)
         self.assertEqual(counts["runtime_candidate_missing_files"], 0)
+        self.assertEqual(counts["visual_capture_packet_present"], 0)
         self.assertEqual(counts["visual_capture_report_pass"], 0)
+        self.assertEqual(payload["visual_capture_packet"]["result"], "MISSING")
         self.assertEqual(payload["visual_capture_evidence"]["result"], "MISSING")
         self.assertIn("visual benchmark decision is not APPROVED", payload["summary"]["blockers"])
         self.assertEqual(payload["evidence_pending"][0]["evidence_id"], "ev.benchmark.native")
@@ -80,6 +82,43 @@ class VisualBenchmarkReadinessTests(unittest.TestCase):
             payload["runtime_candidates"]["missing_files"],
         )
         self.assertEqual(payload["summary"]["counts"]["runtime_candidate_missing_files"], 1)
+
+    def test_existing_placeholder_capture_packet_changes_first_next_action(self) -> None:
+        packet = self.root / "build/visual-benchmark/capture-packet.json"
+        captures = {}
+        for name in (
+            "exploration",
+            "dialogue",
+            "target_selection",
+            "attack_anticipation",
+            "impact",
+            "support",
+        ):
+            captures[name] = {
+                "native_path": f"review/benchmark/evidence/native/{name}.png",
+                "enlarged_path": f"review/benchmark/evidence/enlarged/{name}.png",
+                "frame_index": "TODO",
+                "notes": "TODO replace with real Ares capture",
+            }
+        packet.parent.mkdir(parents=True, exist_ok=True)
+        packet.write_text(
+            json.dumps(
+                {
+                    "schema": "n64game-visual-capture-packet-v1",
+                    "capture_request": "COMPLETE",
+                    "captures": captures,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        payload = readiness.audit(self.root)
+        self.assertEqual(payload["summary"]["counts"]["visual_capture_packet_present"], 1)
+        self.assertEqual(payload["visual_capture_packet"]["result"], "READY_TO_FILL")
+        self.assertIn(
+            "fill build/visual-benchmark/capture-packet.json",
+            payload["summary"]["first_next_actions"][0],
+        )
 
     def test_cli_writes_json_and_markdown_reports(self) -> None:
         json_out = self.root / "build/reports/visual-benchmark-readiness.json"
