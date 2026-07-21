@@ -31,11 +31,14 @@ scripts/run-ares --homebrew-mode \
 Keyboard mapping supplied by `scripts/run-ares`:
 
 - Arrows or WASD: N64 D-pad and stick directions
-- `Z`: N64 `A`
-- `X`: N64 `B`
-- `C`: N64 `C-down` / Field Relay
+- `X`: N64 `A`
+- `Z`: N64 `B`
+- `Space`: N64 `C-down` / Field Relay
+- `Left Shift`: N64 `Z`
 - `Return`: N64 `Start`
-- `Space`: N64 `Z`
+
+The wrapper uses SDL scancodes, not macOS virtual key codes: Up/Down/Left/Right
+are `82/81/80/79`, and W/A/S/D are `26/4/22/7`.
 
 ## Required route for each timed playthrough
 
@@ -51,7 +54,7 @@ Record wall-clock start at cold boot and stop at the stable post-chapter menu af
 8. Retrieve the Field Relay in the workshop.
 9. Examine the workshop log.
 10. Examine the overlook scope.
-11. Open Field Relay with `C` and inspect Party, Messages, Resonance, and Save.
+11. Open Field Relay with `Space` and inspect Party, Messages, Resonance, and Save.
 12. Capture the Relay Save page. It prints the current route evidence line:
     `TIME mm:ss / CTRL mm:ss`, `STATE <scene> / <quest>`, and
     `EXAM n/4 RELAY n/4 <OPEN|HOOK>`. These values are derived from live ROM
