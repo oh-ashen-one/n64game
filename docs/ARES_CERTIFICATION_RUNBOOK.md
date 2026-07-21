@@ -102,7 +102,7 @@ until every horizontal pair is byte-identical or a true native capture path is
 found.
 
 The isolated wrapper also binds Ares `Capture Screenshot` to `P`
-(`Hotkey/CaptureScreenshot=0x1/0/19;;`) and sends screenshots to:
+(`Hotkey/CaptureScreenshot=0x1/0/35;;`) and sends screenshots to:
 
 ```text
 ~/Library/Application Support/ares-v148-n64game/Screenshots/

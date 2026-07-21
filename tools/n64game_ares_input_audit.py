@@ -26,23 +26,23 @@ RUN_ARES = ROOT / "scripts" / "run-ares"
 DEFAULT_STATE = Path.home() / "Library" / "Application Support" / "ares-v148-n64game"
 
 EXPECTED_BINDINGS = {
-    "Up": "0x1/0/82;0x1/0/26;",
-    "Down": "0x1/0/81;0x1/0/22;",
-    "Left": "0x1/0/80;0x1/0/4;",
-    "Right": "0x1/0/79;0x1/0/7;",
-    "X-Axis/Lo": "0x1/0/80;0x1/0/4;",
-    "X-Axis/Hi": "0x1/0/79;0x1/0/7;",
-    "Y-Axis/Lo": "0x1/0/81;0x1/0/22;",
-    "Y-Axis/Hi": "0x1/0/82;0x1/0/26;",
-    "B": "0x1/0/29;;",
-    "A": "0x1/0/27;;",
-    "C-Down": "0x1/0/44;;",
-    "Z": "0x1/0/225;;",
-    "Start": "0x1/0/40;;",
+    "Up": "0x1/0/126;0x1/0/13;",
+    "Down": "0x1/0/125;0x1/0/1;",
+    "Left": "0x1/0/123;0x1/0/0;",
+    "Right": "0x1/0/124;0x1/0/2;",
+    "X-Axis/Lo": "0x1/0/123;0x1/0/0;",
+    "X-Axis/Hi": "0x1/0/124;0x1/0/2;",
+    "Y-Axis/Lo": "0x1/0/125;0x1/0/1;",
+    "Y-Axis/Hi": "0x1/0/126;0x1/0/13;",
+    "B": "0x1/0/6;;",
+    "A": "0x1/0/7;;",
+    "C-Down": "0x1/0/49;;",
+    "Z": "0x1/0/56;;",
+    "Start": "0x1/0/36;;",
 }
 
 EXPECTED_HOTKEY_BINDINGS = {
-    "CaptureScreenshot": "0x1/0/19;;",
+    "CaptureScreenshot": "0x1/0/35;;",
 }
 
 EXPECTED_INPUT_DRIVER = "Quartz"
@@ -55,6 +55,16 @@ EXPECTED_EMPTY_GAMEPAD_BINDINGS = {
 }
 
 LEGACY_BINDING_FRAGMENTS = (
+    "0x1/0/82;0x1/0/26",
+    "0x1/0/81;0x1/0/22",
+    "0x1/0/80;0x1/0/4",
+    "0x1/0/79;0x1/0/7",
+    "0x1/0/29;;",
+    "0x1/0/27;;",
+    "0x1/0/44;;",
+    "0x1/0/225;;",
+    "0x1/0/40;;",
+    "0x1/0/19;;",
     "0x1/0/92;0x1/0/62",
     "0x1/0/93;0x1/0/58",
     "0x1/0/94;0x1/0/40",

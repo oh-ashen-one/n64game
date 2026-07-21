@@ -46,20 +46,20 @@ Nintendo64
     Controller
       Port
         Up: 0x1/0/92;0x1/0/62;;
-        Down: 0x1/0/81;0x1/0/22;;
-        Left: 0x1/0/80;0x1/0/4;;
-        Right: 0x1/0/79;0x1/0/7;;
-        B: 0x1/0/29;;
-        A: 0x1/0/27;;
-        C-Down: 0x1/0/44;;
-        Z: 0x1/0/225;;
-        Start: 0x1/0/40;;
+        Down: 0x1/0/125;0x1/0/1;;
+        Left: 0x1/0/123;0x1/0/0;;
+        Right: 0x1/0/124;0x1/0/2;;
+        B: 0x1/0/6;;
+        A: 0x1/0/7;;
+        C-Down: 0x1/0/49;;
+        Z: 0x1/0/56;;
+        Start: 0x1/0/36;;
         X-Axis
-          Lo: 0x1/0/80;0x1/0/4;;
-          Hi: 0x1/0/79;0x1/0/7;;
+          Lo: 0x1/0/123;0x1/0/0;;
+          Hi: 0x1/0/124;0x1/0/2;;
         Y-Axis
-          Lo: 0x1/0/81;0x1/0/22;;
-          Hi: 0x1/0/82;0x1/0/26;;
+          Lo: 0x1/0/125;0x1/0/1;;
+          Hi: 0x1/0/126;0x1/0/13;;
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
@@ -74,25 +74,25 @@ Nintendo64
   Input
     Controller.Port.1
       Gamepad
-        L-Up: 0x1/0/81;0x1/0/22;
-        L-Down: 0x1/0/82;0x1/0/26;
-        L-Left: 0x1/0/80;0x1/0/4;
-        L-Right: 0x1/0/79;0x1/0/7;
-        Up: 0x1/0/82;0x1/0/26;;
-        Down: 0x1/0/81;0x1/0/22;;
-        Left: 0x1/0/80;0x1/0/4;;
-        Right: 0x1/0/79;0x1/0/7;;
-        B: 0x1/0/29;;
-        A: 0x1/0/27;;
-        C-Down: 0x1/0/44;;
-        Z: 0x1/0/225;;
-        Start: 0x1/0/40;;
+        L-Up: 0x1/0/125;0x1/0/1;
+        L-Down: 0x1/0/126;0x1/0/13;
+        L-Left: 0x1/0/123;0x1/0/0;
+        L-Right: 0x1/0/124;0x1/0/2;
+        Up: 0x1/0/126;0x1/0/13;;
+        Down: 0x1/0/125;0x1/0/1;;
+        Left: 0x1/0/123;0x1/0/0;;
+        Right: 0x1/0/124;0x1/0/2;;
+        B: 0x1/0/6;;
+        A: 0x1/0/7;;
+        C-Down: 0x1/0/49;;
+        Z: 0x1/0/56;;
+        Start: 0x1/0/36;;
         X-Axis
-          Lo: 0x1/0/80;0x1/0/4;;
-          Hi: 0x1/0/79;0x1/0/7;;
+          Lo: 0x1/0/123;0x1/0/0;;
+          Hi: 0x1/0/124;0x1/0/2;;
         Y-Axis
-          Lo: 0x1/0/81;0x1/0/22;;
-          Hi: 0x1/0/82;0x1/0/26;;
+          Lo: 0x1/0/125;0x1/0/1;;
+          Hi: 0x1/0/126;0x1/0/13;;
       Mouse
         X: ;;
 """
@@ -103,7 +103,7 @@ Nintendo64
         self.assertIn("L-Up", payload["settings"]["missing_controls"])
         self.assertEqual(
             payload["settings"]["port1_gamepad_bindings"]["L-Up"],
-            "0x1/0/81;0x1/0/22;",
+            "0x1/0/125;0x1/0/1;",
         )
 
     def test_repaired_settings_pass_with_empty_l_axis_and_keyboard_arrows(self) -> None:
@@ -117,25 +117,25 @@ Nintendo64
         L-Down: ;;
         L-Left: ;;
         L-Right: ;;
-        Up: 0x1/0/82;0x1/0/26;;
-        Down: 0x1/0/81;0x1/0/22;;
-        Left: 0x1/0/80;0x1/0/4;;
-        Right: 0x1/0/79;0x1/0/7;;
-        B: 0x1/0/29;;
-        A: 0x1/0/27;;
-        C-Down: 0x1/0/44;;
-        Z: 0x1/0/225;;
-        Start: 0x1/0/40;;
+        Up: 0x1/0/126;0x1/0/13;;
+        Down: 0x1/0/125;0x1/0/1;;
+        Left: 0x1/0/123;0x1/0/0;;
+        Right: 0x1/0/124;0x1/0/2;;
+        B: 0x1/0/6;;
+        A: 0x1/0/7;;
+        C-Down: 0x1/0/49;;
+        Z: 0x1/0/56;;
+        Start: 0x1/0/36;;
         X-Axis
-          Lo: 0x1/0/80;0x1/0/4;;
-          Hi: 0x1/0/79;0x1/0/7;;
+          Lo: 0x1/0/123;0x1/0/0;;
+          Hi: 0x1/0/124;0x1/0/2;;
         Y-Axis
-          Lo: 0x1/0/81;0x1/0/22;;
-          Hi: 0x1/0/82;0x1/0/26;;
+          Lo: 0x1/0/125;0x1/0/1;;
+          Hi: 0x1/0/126;0x1/0/13;;
       Mouse
         X: ;;
 Hotkey
-  CaptureScreenshot: 0x1/0/19;;
+  CaptureScreenshot: 0x1/0/35;;
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
@@ -157,25 +157,25 @@ Nintendo64
         L-Down: ;;
         L-Left: ;;
         L-Right: ;;
-        Up: 0x1/0/82;0x1/0/26;;
-        Down: 0x1/0/81;0x1/0/22;;
-        Left: 0x1/0/80;0x1/0/4;;
-        Right: 0x1/0/79;0x1/0/7;;
-        B: 0x1/0/29;;
-        A: 0x1/0/27;;
-        C-Down: 0x1/0/44;;
-        Z: 0x1/0/225;;
-        Start: 0x1/0/40;;
+        Up: 0x1/0/126;0x1/0/13;;
+        Down: 0x1/0/125;0x1/0/1;;
+        Left: 0x1/0/123;0x1/0/0;;
+        Right: 0x1/0/124;0x1/0/2;;
+        B: 0x1/0/6;;
+        A: 0x1/0/7;;
+        C-Down: 0x1/0/49;;
+        Z: 0x1/0/56;;
+        Start: 0x1/0/36;;
         X-Axis
-          Lo: 0x1/0/80;0x1/0/4;;
-          Hi: 0x1/0/79;0x1/0/7;;
+          Lo: 0x1/0/123;0x1/0/0;;
+          Hi: 0x1/0/124;0x1/0/2;;
         Y-Axis
-          Lo: 0x1/0/81;0x1/0/22;;
-          Hi: 0x1/0/82;0x1/0/26;;
+          Lo: 0x1/0/125;0x1/0/1;;
+          Hi: 0x1/0/126;0x1/0/13;;
       Mouse
         X: ;;
 Hotkey
-  CaptureScreenshot: 0x1/0/19;;
+  CaptureScreenshot: 0x1/0/35;;
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
