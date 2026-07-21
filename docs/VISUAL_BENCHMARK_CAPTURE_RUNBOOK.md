@@ -35,6 +35,20 @@ Each row needs:
   representative capture plan;
 - notes that describe what the frame proves.
 
+After the native files and non-placeholder packet metadata are filled in, the
+assembler can create the review enlargements deterministically:
+
+```sh
+scripts/assemble-visual-benchmark-captures \
+  --packet build/visual-benchmark/capture-packet.json \
+  --report build/reports/visual-capture-evidence.json \
+  --generate-enlarged
+```
+
+This refuses to replace existing enlarged files unless
+`--overwrite-generated` is passed. Use overwrite only when intentionally
+regenerating review images from the same current native captures.
+
 ## Validation command
 
 ```sh

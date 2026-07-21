@@ -107,7 +107,7 @@ class VisualCapturePacketTests(unittest.TestCase):
         }
         self.packet.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
-    def run_script(self) -> subprocess.CompletedProcess[str]:
+    def run_script(self, *extra_args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 str(SCRIPT),
@@ -117,6 +117,7 @@ class VisualCapturePacketTests(unittest.TestCase):
                 str(self.report),
                 "--artifact-root",
                 str(self.root),
+                *extra_args,
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -136,6 +137,25 @@ class VisualCapturePacketTests(unittest.TestCase):
         self.assertEqual(payload["enlarged"]["resampler"], "nearest-neighbor")
         self.assertEqual(payload["captures"][0]["name"], "exploration")
         self.assertEqual(payload["captures"][0]["enlarged"]["derived_from_native"], "captures/exploration.png")
+
+    def test_generate_enlarged_writes_exact_review_images_before_validation(self) -> None:
+        for name in CAPTURE_NAMES:
+            (self.root / "captures" / f"{name}_4x.png").unlink()
+        result = self.run_script("--generate-enlarged")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"generated_enlarged_count": 6', result.stdout)
+        payload = json.loads(self.report.read_text(encoding="utf-8"))
+        self.assertEqual(payload["result"], "PASS")
+        for name in CAPTURE_NAMES:
+            self.assertTrue((self.root / "captures" / f"{name}_4x.png").is_file())
+
+    def test_generate_enlarged_refuses_existing_outputs_without_overwrite_flag(self) -> None:
+        result = self.run_script("--generate-enlarged")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already exists", result.stdout)
+        overwrite = self.run_script("--generate-enlarged", "--overwrite-generated")
+        self.assertEqual(overwrite.returncode, 0, overwrite.stdout)
+        self.assertIn('"generated_enlarged_count": 6', overwrite.stdout)
 
     def test_rejects_non_nearest_neighbor_enlargement(self) -> None:
         bad = bytearray(self.enlarge_4x(self.make_native_rgba(4)))

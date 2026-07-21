@@ -323,7 +323,7 @@ def summarize(control: dict[str, Any], packets: list[dict[str, Any]], candidates
         "first_next_actions": [
             "create a capture packet with scripts/assemble-visual-benchmark-captures --init-template",
             "capture native 320x240 benchmark frames for exploration, dialogue, target selection, attack anticipation, impact, and support",
-            "produce exact 4x nearest-neighbor enlargements from those native frames and validate the packet with scripts/assemble-visual-benchmark-captures",
+            "generate or provide exact 4x nearest-neighbor enlargements from those native frames and validate the packet with scripts/assemble-visual-benchmark-captures",
             "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
             "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
         ],

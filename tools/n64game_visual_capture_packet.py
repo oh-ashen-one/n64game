@@ -5,6 +5,9 @@ This is an evidence-preparation tool, not a visual approval tool. It accepts a
 filled packet of six native 320x240 PNG captures and their six 1280x960 review
 enlargements only when every enlargement is the exact decoded-pixel 4x nearest
 neighbor expansion of its matching native image.
+
+It can also generate the six 4x review enlargements from filled packet rows so
+the reviewer packet does not depend on lossy desktop tools or manual scaling.
 """
 
 from __future__ import annotations
@@ -94,6 +97,25 @@ def resolve_artifact(path_value: Any, label: str, artifact_root: Path) -> Path:
         raise CapturePacketError(f"{label} must end in .png: {path_value}")
     if path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
         raise CapturePacketError(f"{label} is not a PNG file: {path_value}")
+    return path
+
+
+def resolve_output_artifact(path_value: Any, label: str, artifact_root: Path, overwrite: bool) -> Path:
+    if not isinstance(path_value, str) or not path_value:
+        raise CapturePacketError(f"{label} must be a repository-relative PNG path")
+    path_fragment = Path(path_value)
+    if path_value.startswith("/") or ".." in path_fragment.parts:
+        raise CapturePacketError(f"{label} must be a safe repository-relative path")
+    if path_fragment.suffix.lower() != ".png":
+        raise CapturePacketError(f"{label} must end in .png: {path_value}")
+    path = artifact_root / path_fragment
+    if path.is_symlink():
+        raise CapturePacketError(f"{label} is a symlink and will not be overwritten: {path_value}")
+    if path.exists():
+        if not overwrite:
+            raise CapturePacketError(f"{label} already exists; pass --overwrite-generated to replace it: {path_value}")
+        if not path.is_file():
+            raise CapturePacketError(f"{label} exists but is not a regular file: {path_value}")
     return path
 
 
@@ -191,6 +213,49 @@ def rgba_sha256(rgba: bytes) -> str:
     return hashlib.sha256(rgba).hexdigest()
 
 
+def png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", binascii.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def encode_png_rgba(width: int, height: int, rgba: bytes) -> bytes:
+    expected_len = width * height * 4
+    if len(rgba) != expected_len:
+        raise CapturePacketError(f"RGBA buffer length {len(rgba)} != {expected_len}")
+    row_bytes = width * 4
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        raw.extend(rgba[y * row_bytes:(y + 1) * row_bytes])
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + png_chunk(b"IDAT", zlib.compress(bytes(raw), level=9))
+        + png_chunk(b"IEND", b"")
+    )
+
+
+def enlarge_rgba_4x(native_rgba: bytes) -> bytes:
+    expected_len = NATIVE_SIZE[0] * NATIVE_SIZE[1] * 4
+    if len(native_rgba) != expected_len:
+        raise CapturePacketError(f"native RGBA buffer length {len(native_rgba)} != {expected_len}")
+    enlarged = bytearray(ENLARGED_SIZE[0] * ENLARGED_SIZE[1] * 4)
+    for y in range(NATIVE_SIZE[1]):
+        for x in range(NATIVE_SIZE[0]):
+            source = ((y * NATIVE_SIZE[0]) + x) * 4
+            pixel = native_rgba[source:source + 4]
+            for yy in range(y * 4, y * 4 + 4):
+                row_offset = yy * ENLARGED_SIZE[0] * 4
+                for xx in range(x * 4, x * 4 + 4):
+                    target = row_offset + xx * 4
+                    enlarged[target:target + 4] = pixel
+    return bytes(enlarged)
+
+
 def assert_exact_nearest_neighbor(native_rgba: bytes, enlarged_rgba: bytes, label: str) -> None:
     for y in range(NATIVE_SIZE[1]):
         for x in range(NATIVE_SIZE[0]):
@@ -205,6 +270,22 @@ def assert_exact_nearest_neighbor(native_rgba: bytes, enlarged_rgba: bytes, labe
                         raise CapturePacketError(
                             f"{label} is not exact 4x nearest-neighbor at native({x},{y}) enlarged({xx},{yy})"
                         )
+
+
+def require_capture_rows(packet: dict[str, Any]) -> dict[str, Any]:
+    if packet.get("schema") != PACKET_SCHEMA:
+        raise CapturePacketError(f"packet.schema must be {PACKET_SCHEMA}")
+    if packet.get("capture_request") != "COMPLETE":
+        raise CapturePacketError("packet.capture_request must be COMPLETE")
+
+    captures = require_mapping(packet.get("captures"), "captures")
+    missing = [name for name in CAPTURE_NAMES if name not in captures]
+    extra = sorted(set(captures) - set(CAPTURE_NAMES))
+    if missing:
+        raise CapturePacketError("captures missing rows: " + ", ".join(missing))
+    if extra:
+        raise CapturePacketError("captures contains unexpected rows: " + ", ".join(extra))
+    return captures
 
 
 def template() -> dict[str, Any]:
@@ -230,21 +311,45 @@ def template() -> dict[str, Any]:
     }
 
 
-def validate_packet(packet: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
-    if packet.get("schema") != PACKET_SCHEMA:
-        raise CapturePacketError(f"packet.schema must be {PACKET_SCHEMA}")
-    if packet.get("capture_request") != "COMPLETE":
-        raise CapturePacketError("packet.capture_request must be COMPLETE")
+def generate_enlarged_images(packet: dict[str, Any], artifact_root: Path, overwrite: bool) -> list[dict[str, str]]:
+    require_capture_rows(packet)
     reject_placeholders(packet)
 
     captures = require_mapping(packet.get("captures"), "captures")
-    missing = [name for name in CAPTURE_NAMES if name not in captures]
-    extra = sorted(set(captures) - set(CAPTURE_NAMES))
-    if missing:
-        raise CapturePacketError("captures missing rows: " + ", ".join(missing))
-    if extra:
-        raise CapturePacketError("captures contains unexpected rows: " + ", ".join(extra))
+    written: list[dict[str, str]] = []
+    seen_outputs: set[str] = set()
+    for name in CAPTURE_NAMES:
+        row = require_mapping(captures[name], f"captures.{name}")
+        native_path = resolve_artifact(row.get("native_path"), f"captures.{name}.native_path", artifact_root)
+        output_path = resolve_output_artifact(
+            row.get("enlarged_path"),
+            f"captures.{name}.enlarged_path",
+            artifact_root,
+            overwrite,
+        )
+        output_rel = display_path(output_path, artifact_root)
+        if output_rel in seen_outputs:
+            raise CapturePacketError(f"generated enlarged path is reused: {output_rel}")
+        seen_outputs.add(output_rel)
+        _width, _height, native_rgba = decode_png_rgba(native_path, NATIVE_SIZE, f"captures.{name}.native")
+        enlarged_rgba = enlarge_rgba_4x(native_rgba)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(encode_png_rgba(ENLARGED_SIZE[0], ENLARGED_SIZE[1], enlarged_rgba))
+        written.append(
+            {
+                "name": name,
+                "native": display_path(native_path, artifact_root),
+                "enlarged": output_rel,
+            }
+        )
+    return written
 
+
+def validate_packet(packet: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
+    require_capture_rows(packet)
+    reject_placeholders(packet)
+
+    captures = require_mapping(packet.get("captures"), "captures")
     rows: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
     for name in CAPTURE_NAMES:
@@ -318,6 +423,8 @@ def main() -> int:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--artifact-root", type=Path, default=ROOT)
     parser.add_argument("--init-template", action="store_true", help="write a placeholder capture packet and exit")
+    parser.add_argument("--generate-enlarged", action="store_true", help="generate exact 4x nearest-neighbor enlarged PNGs from packet native_path rows before validation")
+    parser.add_argument("--overwrite-generated", action="store_true", help="allow --generate-enlarged to replace existing enlarged_path PNGs")
     args = parser.parse_args()
 
     artifact_root = args.artifact_root if args.artifact_root.is_absolute() else ROOT / args.artifact_root
@@ -332,6 +439,9 @@ def main() -> int:
 
     try:
         payload = json.loads(packet.read_text(encoding="utf-8"))
+        generated: list[dict[str, str]] = []
+        if args.generate_enlarged:
+            generated = generate_enlarged_images(payload, artifact_root, args.overwrite_generated)
         report_payload = validate_packet(payload, artifact_root)
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(report_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -339,7 +449,15 @@ def main() -> int:
         print(f"VISUAL_CAPTURE_PACKET_ERROR: {exc}")
         return 1
 
-    print(json.dumps({"result": "PASS", "report": display_path(report, ROOT), "capture_count": len(report_payload["captures"])}, sort_keys=True))
+    print(json.dumps(
+        {
+            "result": "PASS",
+            "report": display_path(report, ROOT),
+            "capture_count": len(report_payload["captures"]),
+            "generated_enlarged_count": len(generated),
+        },
+        sort_keys=True,
+    ))
     return 0
 
 
