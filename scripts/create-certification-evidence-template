@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Create an honest NOT_CLAIMED Ares certification evidence manifest.
+
+The final acceptance audit intentionally requires real captured Ares timing,
+soak, performance, and QA evidence before it will pass certification rows. This
+helper records the current ROM/Ares identity and the remaining blockers without
+pretending that certification has been completed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ROM = ROOT / "build" / "game" / "n64game-gate3.z64"
+DEFAULT_MANIFEST = ROOT / "build" / "certification" / "evidence.json"
+SCHEMA = "n64game-certification-evidence-v1"
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def run_check_only(rom: Path) -> dict[str, str]:
+    result = subprocess.run(
+        [
+            str(ROOT / "scripts" / "run-ares"),
+            "--check-only",
+            f"--expected-rom-sha256={sha256(rom)}",
+            str(rom),
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout.strip() or "scripts/run-ares --check-only failed")
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    args = parser.parse_args()
+
+    rom = args.rom if args.rom.is_absolute() else ROOT / args.rom
+    if not rom.is_file() or rom.is_symlink():
+        raise SystemExit(f"ROM must be a regular file: {rom}")
+    ares = run_check_only(rom)
+    manifest = {
+        "schema": SCHEMA,
+        "certification": "NOT_CLAIMED",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "rom": {
+            "path": str(rom.relative_to(ROOT)),
+            "sha256": sha256(rom),
+            "size": rom.stat().st_size,
+        },
+        "ares": {
+            "version": ares.get("ares_version", "").strip() or "v148",
+            "executable_sha256": ares.get("ares_sha256", ""),
+            "homebrew_mode": ares.get("homebrew_mode") == "true",
+            "expansion_pak": ares.get("expansion_pak") == "true",
+        },
+        "observed_current_state": {
+            "check_only": "PASS",
+            "keyboard_wrapper": "arrows/WASD map to D-pad and stick; Z=A, X=B, C=C-down, Return=Start",
+            "codex_computer_use_input": "NOT_ACCEPTED_BY_ARES_ON_NAME_ENTRY",
+        },
+        "blockers": [
+            "No two human-observed first-playthrough-style Ares timing captures have been recorded.",
+            "No captured Ares transition soak proves ten complete title/Annex/battle/end-card loops.",
+            "No captured Ares FPS and free-heap report proves 30 FPS and the 512 KiB heap floor.",
+            "No completed visual/audio/controller QA matrix has been captured from the emulator.",
+            "Codex Computer Use key injection did not move the Ares name-entry cursor; run the certification route manually with Ares Input Monitoring enabled or with a physical/gamepad input source.",
+        ],
+        "next_required_artifacts": [
+            "build/certification/timed-run-01.md",
+            "build/certification/timed-run-02.md",
+            "build/certification/transition-soak.md",
+            "build/certification/performance.md",
+            "build/certification/qa-matrix.md",
+            "build/certification/screenshots/",
+        ],
+        "runbook": "docs/ARES_CERTIFICATION_RUNBOOK.md",
+    }
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    args.manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    validation = subprocess.run(
+        [
+            str(ROOT / "scripts" / "validate-certification-evidence"),
+            "--manifest",
+            str(args.manifest),
+            "--rom",
+            str(rom),
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if validation.returncode != 0:
+        raise SystemExit(validation.stdout)
+    print(validation.stdout.strip())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
