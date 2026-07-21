@@ -50,6 +50,24 @@ The manifest root uses exactly these keys:
 
 Every evidence path is relative to the manifest directory. `timing_runs` contains exactly two objects with `id`, `log_path`, `log_sha256`, `slate_path`, `name_path`, `cold_boot`, `continue_used`, and `idle_declared_ms`. `soak_run` has `id`, `log_path`, `log_sha256`, and `warmup_loop_count` (zero or one). `save_runs` contains exactly one object per required save scenario with `id`, `scenario`, `log_path`, `log_sha256`, `eeprom_path`, and `eeprom_sha256`. No raw log, EEPROM image, or filled evidence manifest belongs in the repository.
 
+Use the manifest assembler instead of hand-editing hash fields once the raw logs and preserved EEPROM snapshots exist under the ignored evidence directory. It computes every hash from disk, rejects absolute paths, `..` traversal, symlink traversal, duplicate run IDs, duplicate raw logs, duplicate EEPROM snapshots, wrong timing-path order, unsupported save scenarios, and non-512-byte EEPROM snapshots before a package can be passed to the validator.
+
+```sh
+mkdir -p build/certification/logs build/certification/saves
+
+scripts/assemble-certification-evidence \
+  --rom build/game/n64game-gate3.z64 \
+  --out build/certification/evidence.json \
+  --timing timing-1:watched:default:logs/timing-1.log \
+  --timing timing-2:skipped:custom:logs/timing-2.log \
+  --soak soak:1:logs/soak.log \
+  --save valid_resume:valid_resume:logs/valid_resume.log:saves/valid_resume.eep \
+  --save latest_corrupt_fallback:latest_corrupt_fallback:logs/latest_corrupt_fallback.log:saves/latest_corrupt_fallback.eep \
+  --save all_corrupt_new_game:all_corrupt_new_game:logs/all_corrupt_new_game.log:saves/all_corrupt_new_game.eep
+```
+
+The assembler output is `CERTIFICATION_MANIFEST_ASSEMBLED` with `certification=NOT_CLAIMED`. Add `--validate --summary-md build/certification/evidence-summary.md` only after all captures are expected to pass the strict contract. A successful assembly without `--validate` is just a hash-bound manifest, not a release certification.
+
 ## Two-run timing evidence schema
 
 One evidence JSON object owns exactly two new-game runs of the same ROM/Ares tuple. Run 1 declares the watched slate and default-name path; run 2 declares the skipped slate and a custom name, covering both paths without widening scope. The immutable raw log, rather than copied derived values in the manifest, is authoritative for duration, save outcome, frame totals, per-scene counters, and heap low-water. The declared input path and no-idle condition still require capture review; telemetry does not infer player intent.
