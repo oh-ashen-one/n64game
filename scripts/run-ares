@@ -149,4 +149,9 @@ if [[ "$CAPTURE_SESSION" -eq 0 ]]; then
     ARES_ARGS+=(--kiosk)
 fi
 ARES_ARGS+=("$ROM")
+if [[ "$(uname -s)" == "Darwin" && "$ARES" == */Contents/MacOS/ares ]]; then
+    ARES_APP="${ARES%/Contents/MacOS/ares}"
+    test -d "$ARES_APP"
+    exec open -n -a "$ARES_APP" --args "${ARES_ARGS[@]}"
+fi
 exec "$ARES" "${ARES_ARGS[@]}"

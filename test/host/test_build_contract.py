@@ -431,6 +431,7 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("s/(\\n        L-Down: )[^\\n]*/${1};;/", wrapper)
         self.assertIn("s/(\\n        L-Left: )[^\\n]*/${1};;/", wrapper)
         self.assertIn("s/(\\n        L-Right: )[^\\n]*/${1};;/", wrapper)
+        self.assertIn('exec open -n -a "$ARES_APP" --args "${ARES_ARGS[@]}"', wrapper)
 
     def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:
         capture_root = ROOT / "captures" / "gate3"
