@@ -816,15 +816,120 @@ def validate(manifest_path: Path | str, rom_path: Path | str) -> dict[str, Any]:
     }
 
 
+def _seconds(ticks: int, ticks_per_second: int) -> str:
+    whole = ticks // ticks_per_second
+    fraction = ticks % ticks_per_second
+    if fraction == 0:
+        return f"{whole}.000"
+    milliseconds = (fraction * 1000 + ticks_per_second // 2) // ticks_per_second
+    if milliseconds == 1000:
+        return f"{whole + 1}.000"
+    return f"{whole}.{milliseconds:03d}"
+
+
+def markdown_summary(result: dict[str, Any]) -> str:
+    timing_runs = result["timing_runs"]
+    durations = [
+        (run["duration_ticks"], run["ticks_per_second"])
+        for run in timing_runs
+    ]
+    if len({clock for _, clock in durations}) != 1:
+        raise EvidenceError("validated timing runs use inconsistent clocks")
+    clock = durations[0][1]
+    mean_ticks = sum(duration for duration, _ in durations) // len(durations)
+    lines = [
+        "# N64GAME Certification Evidence Summary",
+        "",
+        f"- Result: `{result['result']}`",
+        f"- Certification: `{result['certification']}`",
+        f"- Status: `{result['status']}`",
+        f"- ROM SHA-256: `{result['rom_sha256']}`",
+        f"- Ares SHA-256: `{result['ares_sha256']}`",
+        f"- Timing mean: `{_seconds(mean_ticks, clock)}s`",
+        "",
+        "## Timing runs",
+        "",
+        "| Run | Duration | Active-control ticks | Heap low-water |",
+        "|---|---:|---:|---:|",
+    ]
+    for run in timing_runs:
+        lines.append(
+            "| `{id}` | `{duration}s` | `{active}` | `{heap}` |".format(
+                id=run["id"],
+                duration=_seconds(run["duration_ticks"], run["ticks_per_second"]),
+                active=run["active_control_ticks"],
+                heap=run["heap_low_water_bytes"],
+            )
+        )
+    soak = result["soak_run"]
+    lines.extend([
+        "",
+        "## Soak run",
+        "",
+        f"- Run: `{soak['id']}`",
+        f"- Warm-up loops: `{soak['warmup_loop_count']}`",
+        f"- Measured loops: `{soak['measured_loop_count']}`",
+        f"- Warmed heap baseline: `{soak['warmed_heap_baseline_bytes']}`",
+        f"- Heap low-water: `{soak['heap_low_water_bytes']}`",
+        "",
+        "## Save recovery runs",
+        "",
+        "| Run | Scenario | Outcome | Valid slot mask | Selected slot |",
+        "|---|---|---|---:|---:|",
+    ])
+    for run in result["save_runs"]:
+        selected = "NONE" if run["selected_slot"] is None else str(run["selected_slot"])
+        lines.append(
+            "| `{id}` | `{scenario}` | `{outcome}` | `{mask}` | `{selected}` |".format(
+                id=run["id"],
+                scenario=run["scenario"],
+                outcome=run["outcome"],
+                mask=run["valid_slot_mask"],
+                selected=selected,
+            )
+        )
+    lines.extend([
+        "",
+        "## Limitations",
+        "",
+    ])
+    for limitation in result["limitations"]:
+        lines.append(f"- {limitation}")
+    lines.extend([
+        "",
+        "This summary is derived only from a validator-passing evidence package. It is not a release certification, performance approval, visual approval, audio approval, controller approval, or hardware claim.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _write_summary(path: Path, result: dict[str, Any]) -> None:
+    if path.exists():
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise EvidenceError("summary path must be a non-symlink regular file")
+    parent = path.parent
+    if not parent.exists() or parent.is_symlink() or not parent.is_dir():
+        raise EvidenceError("summary parent must be an existing non-symlink directory")
+    path.write_text(markdown_summary(result), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--rom", required=True, type=Path)
+    parser.add_argument(
+        "--summary-md",
+        type=Path,
+        help="write a human-readable Markdown summary after strict validation",
+    )
     arguments = parser.parse_args(argv)
     try:
         result = validate(arguments.manifest, arguments.rom)
+        if arguments.summary_md is not None:
+            _write_summary(arguments.summary_md, result)
     except (OSError, ValueError) as exc:
         print(f"EVIDENCE_CONTRACT_FAIL: {exc}", file=os.sys.stderr)
         return 1

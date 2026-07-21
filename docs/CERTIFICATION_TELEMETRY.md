@@ -110,6 +110,17 @@ make certification-check \
 
 A successful result is `EVIDENCE_CONTRACT_PASS` with `certification=NOT_CLAIMED`. It means the package is internally consistent with this bounded contract. It does not grant performance, visual, audio, controller, hardware, or overall game certification. CI runs `make test-certification` against synthetic death fixtures only; it never manufactures or substitutes release evidence.
 
+To create a human-readable release-evidence attachment from the same strict pass, ask the validator to write a Markdown summary:
+
+```sh
+scripts/validate-certification-evidence \
+  --manifest build/certification/evidence.json \
+  --rom build/game/n64game-gate3.z64 \
+  --summary-md build/certification/evidence-summary.md
+```
+
+The summary is derived after validation, includes the ROM/Ares hashes, two timing durations, arithmetic mean, soak-loop count, heap low-water, save-recovery outcomes, and the validator limitations. It is still `certification=NOT_CLAIMED`; it exists so release notes do not depend on hand-copied telemetry numbers.
+
 The older broad architecture document still contains superseded three-run/twenty-loop language. For this one-week release, the authoritative master specification requires two timing runs and ten loops.
 
 ## Manual input-edge evidence

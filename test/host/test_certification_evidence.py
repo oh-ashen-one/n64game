@@ -402,18 +402,40 @@ class CertificationEvidenceTests(unittest.TestCase):
             "valid_resume", "latest_corrupt_fallback", "all_corrupt_new_game",
         })
         self.assertNotIn("CERTIFIED", json.dumps(result))
+        summary = certification.markdown_summary(result)
+        self.assertIn("# N64GAME Certification Evidence Summary", summary)
+        self.assertIn(f"- ROM SHA-256: `{self.package.rom_hash}`", summary)
+        self.assertIn("- Certification: `NOT_CLAIMED`", summary)
+        self.assertIn("- Timing mean: `400.000s`", summary)
+        self.assertIn("| `timing-1` | `400.000s` | `8000` | `600000` |", summary)
+        self.assertIn("- Measured loops: `10`", summary)
+        self.assertIn("| `all_corrupt_new_game` | `all_corrupt_new_game` | `none` | `0` | `NONE` |", summary)
+        self.assertIn("It is not a release certification", summary)
+        self.assertNotIn("CERTIFIED", summary)
 
     def test_cli_is_fail_closed_and_machine_readable(self) -> None:
-        command = [
+        summary_path = self.package.root / "summary.md"
+        base_command = [
             str(ROOT / "scripts" / "validate-certification-evidence"),
             "--manifest", str(self.package.manifest),
             "--rom", str(self.package.rom),
         ]
+        command = [
+            *base_command,
+            "--summary-md", str(summary_path),
+        ]
         passed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
         self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
         self.assertEqual(json.loads(passed.stdout)["certification"], "NOT_CLAIMED")
+        summary = summary_path.read_text(encoding="utf-8")
+        self.assertIn("# N64GAME Certification Evidence Summary", summary)
+        self.assertIn("- Result: `EVIDENCE_CONTRACT_PASS`", summary)
         malformed = subprocess.run(
-            [*command[:-1], str(self.package.root)],
+            [
+                str(ROOT / "scripts" / "validate-certification-evidence"),
+                "--manifest", str(self.package.manifest),
+                "--rom", str(self.package.root),
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,
