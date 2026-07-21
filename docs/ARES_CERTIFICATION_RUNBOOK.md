@@ -20,6 +20,20 @@ On 2026-07-21, that check passed with Ares v148 and SHA-256 `7a49f00f96a69145846
 
 Before a manual run, add `dev.ares.ares` to macOS **System Settings → Privacy & Security → Input Monitoring**, restart Ares, click the game viewport, and confirm that the selector moves with arrows or WASD.
 
+If keyboard input does not move the selector, audit the wrapper, isolated
+settings file, and any already-running Ares process before recording evidence:
+
+```sh
+scripts/audit-ares-input
+```
+
+`PASS` means the launch path is using the expected SDL scancodes. A
+`WARN_STALE_ARES_PROCESS` result means the repository wrapper is fixed but an
+already-running emulator was launched with old bindings; quit Ares and relaunch
+through `scripts/run-ares` before attempting a timed route. Use
+`scripts/audit-ares-input --strict` when preparing certification so stale input
+state fails the preflight instead of becoming a soft warning.
+
 ## Launch command
 
 ```sh

@@ -56,6 +56,35 @@ def run_check_only(rom: Path) -> dict[str, str]:
     return fields
 
 
+def run_input_audit() -> dict[str, object]:
+    result = subprocess.run(
+        [str(ROOT / "scripts" / "audit-ares-input")],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {
+            "result": "UNAVAILABLE",
+            "error": result.stdout.strip() or f"audit-ares-input exited {result.returncode}",
+        }
+    return {
+        "result": payload.get("result", "UNKNOWN"),
+        "wrapper": payload.get("wrapper", {}),
+        "settings": payload.get("settings", {}),
+        "processes": {
+            "result": payload.get("processes", {}).get("result"),
+            "process_count": payload.get("processes", {}).get("process_count", 0),
+            "stale_process_count": len(payload.get("processes", {}).get("stale_processes", [])),
+        },
+        "warnings": payload.get("warnings", []),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
@@ -66,6 +95,7 @@ def main() -> int:
     if not rom.is_file() or rom.is_symlink():
         raise SystemExit(f"ROM must be a regular file: {rom}")
     ares = run_check_only(rom)
+    input_audit = run_input_audit()
     manifest = {
         "schema": SCHEMA,
         "certification": "NOT_CLAIMED",
@@ -84,6 +114,7 @@ def main() -> int:
         "observed_current_state": {
             "check_only": "PASS",
             "keyboard_wrapper": "arrows/WASD map to D-pad and stick; Z=A, X=B, C=C-down, Return=Start",
+            "ares_input_audit": input_audit,
             "codex_computer_use_input": "NOT_ACCEPTED_BY_ARES_ON_NAME_ENTRY",
         },
         "blockers": [
