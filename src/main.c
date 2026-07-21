@@ -23,6 +23,7 @@ typedef enum {
 
 enum {
     SAVE_SETTLE_FRAMES = 2,
+    DIGITAL_STICK_THRESHOLD = 48,
 };
 
 typedef struct {
@@ -278,6 +279,7 @@ static void telemetry_emit_chapter_stable(
 
 static N64GameInput read_game_input(void)
 {
+    static uint16_t previous_direction_held = 0U;
     const joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
     const joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
     uint16_t pressed = 0U;
@@ -324,6 +326,18 @@ static N64GameInput read_game_input(void)
     if (inputs.btn.c_down) {
         held |= N64GAME_INPUT_RELAY;
     }
+    if (inputs.btn.d_up) {
+        held |= N64GAME_INPUT_UP;
+    }
+    if (inputs.btn.d_down) {
+        held |= N64GAME_INPUT_DOWN;
+    }
+    if (inputs.btn.d_left) {
+        held |= N64GAME_INPUT_LEFT;
+    }
+    if (inputs.btn.d_right) {
+        held |= N64GAME_INPUT_RIGHT;
+    }
     int8_t stick_x = inputs.stick_x;
     int8_t stick_y = inputs.stick_y;
     if (inputs.btn.d_left) {
@@ -336,6 +350,26 @@ static N64GameInput read_game_input(void)
     } else if (inputs.btn.d_down) {
         stick_y = -INT8_MAX;
     }
+    if (stick_x <= -DIGITAL_STICK_THRESHOLD) {
+        held |= N64GAME_INPUT_LEFT;
+    } else if (stick_x >= DIGITAL_STICK_THRESHOLD) {
+        held |= N64GAME_INPUT_RIGHT;
+    }
+    if (stick_y <= -DIGITAL_STICK_THRESHOLD) {
+        held |= N64GAME_INPUT_DOWN;
+    } else if (stick_y >= DIGITAL_STICK_THRESHOLD) {
+        held |= N64GAME_INPUT_UP;
+    }
+    const uint16_t direction_held = (uint16_t)(
+        held & (
+            (uint16_t)N64GAME_INPUT_UP |
+            (uint16_t)N64GAME_INPUT_DOWN |
+            (uint16_t)N64GAME_INPUT_LEFT |
+            (uint16_t)N64GAME_INPUT_RIGHT
+        )
+    );
+    pressed |= (uint16_t)(direction_held & (uint16_t)~previous_direction_held);
+    previous_direction_held = direction_held;
     return (N64GameInput){
         .pressed = pressed,
         .held = held,

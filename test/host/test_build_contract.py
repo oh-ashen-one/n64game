@@ -398,6 +398,10 @@ class BuildContractTests(unittest.TestCase):
             "Down": "0x1/0/93;0x1/0/58;",
             "Left": "0x1/0/94;0x1/0/40;",
             "Right": "0x1/0/95;0x1/0/43;",
+            "X-Axis/Lo": "0x1/0/94;0x1/0/40;",
+            "X-Axis/Hi": "0x1/0/95;0x1/0/43;",
+            "Y-Axis/Lo": "0x1/0/93;0x1/0/58;",
+            "Y-Axis/Hi": "0x1/0/92;0x1/0/62;",
             "B": "0x1/0/63;;",
             "A": "0x1/0/65;;",
             "C-Down": "0x1/0/42;;",
@@ -410,6 +414,10 @@ class BuildContractTests(unittest.TestCase):
                 f"{control}={assignments}"
             )
             self.assertIn(setting, wrapper)
+        main_source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        self.assertIn("DIGITAL_STICK_THRESHOLD = 48", main_source)
+        self.assertIn("previous_direction_held", main_source)
+        self.assertIn("pressed |= (uint16_t)(direction_held & (uint16_t)~previous_direction_held);", main_source)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 
     def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:
