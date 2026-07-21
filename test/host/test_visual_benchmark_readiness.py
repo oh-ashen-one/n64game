@@ -63,6 +63,8 @@ class VisualBenchmarkReadinessTests(unittest.TestCase):
         self.assertEqual(counts["complete_concept_packets"], 1)
         self.assertEqual(counts["runtime_candidate_rows"], 28)
         self.assertEqual(counts["runtime_candidate_missing_files"], 0)
+        self.assertEqual(counts["visual_capture_report_pass"], 0)
+        self.assertEqual(payload["visual_capture_evidence"]["result"], "MISSING")
         self.assertIn("visual benchmark decision is not APPROVED", payload["summary"]["blockers"])
         self.assertEqual(payload["evidence_pending"][0]["evidence_id"], "ev.benchmark.native")
         self.assertEqual(payload["objective_pending"][0]["objective"], "Output")
@@ -104,6 +106,102 @@ class VisualBenchmarkReadinessTests(unittest.TestCase):
         payload = json.loads(json_out.read_text(encoding="utf-8"))
         self.assertEqual(payload["result"], "BLOCKED_BY_MISSING_EVIDENCE")
         self.assertIn("Visual Benchmark Readiness", md_out.read_text(encoding="utf-8"))
+        self.assertIn("Valid visual capture report", md_out.read_text(encoding="utf-8"))
+
+    def test_valid_capture_report_is_reported_without_approving_visual_benchmark(self) -> None:
+        report = self.root / "build/reports/visual-capture-evidence.json"
+        captures = []
+        for name in (
+            "exploration",
+            "dialogue",
+            "target_selection",
+            "attack_anticipation",
+            "impact",
+            "support",
+        ):
+            captures.append(
+                {
+                    "name": name,
+                    "frame_index": 12,
+                    "native": {
+                        "path": f"review/benchmark/evidence/native/{name}.png",
+                        "sha256": "a" * 64,
+                        "rgba_sha256": "b" * 64,
+                        "width": 320,
+                        "height": 240,
+                        "media_type": "image/png",
+                        "color_decode": "RGBA",
+                    },
+                    "enlarged": {
+                        "path": f"review/benchmark/evidence/enlarged/{name}.png",
+                        "sha256": "c" * 64,
+                        "rgba_sha256": "d" * 64,
+                        "width": 1280,
+                        "height": 960,
+                        "media_type": "image/png",
+                        "scale_factor": 4,
+                        "resampler": "nearest-neighbor",
+                        "derived_from_native": f"review/benchmark/evidence/native/{name}.png",
+                    },
+                }
+            )
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(
+            json.dumps(
+                {
+                    "schema": "n64game-visual-capture-evidence-v1",
+                    "result": "PASS",
+                    "capture_count": 6,
+                    "native": {
+                        "width": 320,
+                        "height": 240,
+                        "media_type": "image/png",
+                        "color_decode": "RGBA",
+                    },
+                    "enlarged": {
+                        "width": 1280,
+                        "height": 960,
+                        "media_type": "image/png",
+                        "scale_factor": 4,
+                        "resampler": "nearest-neighbor",
+                    },
+                    "captures": captures,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        payload = readiness.audit(self.root)
+        self.assertEqual(payload["result"], "BLOCKED_BY_MISSING_EVIDENCE")
+        self.assertEqual(payload["summary"]["counts"]["visual_capture_report_pass"], 1)
+        self.assertEqual(payload["visual_capture_evidence"]["result"], "PASS")
+        self.assertIn(
+            "promote validated native/enlarged capture packet bytes",
+            payload["summary"]["first_next_actions"][0],
+        )
+        self.assertEqual(payload["evidence_pending"][0]["evidence_id"], "ev.benchmark.native")
+
+    def test_invalid_capture_report_is_blocking_not_approval(self) -> None:
+        report = self.root / "build/reports/visual-capture-evidence.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(
+            json.dumps(
+                {
+                    "schema": "n64game-visual-capture-evidence-v1",
+                    "result": "PASS",
+                    "capture_count": 1,
+                    "native": {"width": 320, "height": 240, "color_decode": "RGBA"},
+                    "enlarged": {"width": 1280, "height": 960, "scale_factor": 4, "resampler": "bilinear"},
+                    "captures": [],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        payload = readiness.audit(self.root)
+        self.assertEqual(payload["summary"]["counts"]["visual_capture_report_pass"], 0)
+        self.assertEqual(payload["visual_capture_evidence"]["result"], "INVALID")
+        self.assertIn("visual capture evidence report is invalid", payload["summary"]["blockers"])
 
 
 if __name__ == "__main__":

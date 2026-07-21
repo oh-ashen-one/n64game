@@ -25,6 +25,14 @@ MASTER = ROOT / "docs" / "N64GAME_MASTER_SPEC.md"
 RUNTIME_CANDIDATES = ROOT / "config" / "runtime-candidates.tsv"
 DECISION_LINE = re.compile(r"^Decision:\s+([A-Z_]+)\s*$", re.MULTILINE)
 LOCK_LINE = re.compile(r"^Production-Lock:\s+([A-Z_]+)\s*$", re.MULTILINE)
+CAPTURE_NAMES = (
+    "exploration",
+    "dialogue",
+    "target_selection",
+    "attack_anticipation",
+    "impact",
+    "support",
+)
 
 
 class VisualBenchmarkReadinessError(RuntimeError):
@@ -261,7 +269,90 @@ def runtime_candidates(root: Path) -> dict[str, Any]:
     }
 
 
-def summarize(control: dict[str, Any], packets: list[dict[str, Any]], candidates: dict[str, Any]) -> dict[str, Any]:
+def visual_capture_evidence(root: Path) -> dict[str, Any]:
+    path = root / "build" / "reports" / "visual-capture-evidence.json"
+    if not path.is_file() or path.is_symlink():
+        return {
+            "path": "build/reports/visual-capture-evidence.json",
+            "present": False,
+            "result": "MISSING",
+            "errors": ["visual capture evidence report is missing"],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "path": "build/reports/visual-capture-evidence.json",
+            "present": True,
+            "sha256": sha256(path),
+            "result": "INVALID",
+            "errors": [f"visual capture evidence report cannot be decoded: {exc}"],
+        }
+
+    errors = []
+    if payload.get("schema") != "n64game-visual-capture-evidence-v1":
+        errors.append("schema is not n64game-visual-capture-evidence-v1")
+    if payload.get("result") != "PASS":
+        errors.append("result is not PASS")
+    captures = payload.get("captures")
+    if not isinstance(captures, list):
+        errors.append("captures is not a list")
+        captures = []
+    names = [row.get("name") for row in captures if isinstance(row, dict)]
+    if names != list(CAPTURE_NAMES):
+        errors.append("captures are not the exact required six rows in order")
+    if payload.get("capture_count") != len(CAPTURE_NAMES):
+        errors.append("capture_count is not 6")
+    native = payload.get("native") if isinstance(payload.get("native"), dict) else {}
+    enlarged = payload.get("enlarged") if isinstance(payload.get("enlarged"), dict) else {}
+    if native.get("width") != 320 or native.get("height") != 240 or native.get("color_decode") != "RGBA":
+        errors.append("native capture summary is not 320x240 RGBA")
+    if enlarged.get("width") != 1280 or enlarged.get("height") != 960:
+        errors.append("enlarged capture summary is not 1280x960")
+    if enlarged.get("scale_factor") != 4 or enlarged.get("resampler") != "nearest-neighbor":
+        errors.append("enlarged capture summary is not exact 4x nearest-neighbor")
+    for index, row in enumerate(captures):
+        if not isinstance(row, dict):
+            errors.append(f"capture row {index} is not an object")
+            continue
+        name = row.get("name", f"row{index}")
+        native_row = row.get("native") if isinstance(row.get("native"), dict) else {}
+        enlarged_row = row.get("enlarged") if isinstance(row.get("enlarged"), dict) else {}
+        if native_row.get("width") != 320 or native_row.get("height") != 240:
+            errors.append(f"{name} native row is not 320x240")
+        if enlarged_row.get("width") != 1280 or enlarged_row.get("height") != 960:
+            errors.append(f"{name} enlarged row is not 1280x960")
+        if enlarged_row.get("derived_from_native") != native_row.get("path"):
+            errors.append(f"{name} enlarged row is not bound to its native path")
+
+    return {
+        "path": "build/reports/visual-capture-evidence.json",
+        "present": True,
+        "sha256": sha256(path),
+        "result": "PASS" if not errors else "INVALID",
+        "errors": errors,
+        "capture_count": payload.get("capture_count", 0),
+        "native": {
+            "width": native.get("width"),
+            "height": native.get("height"),
+            "color_decode": native.get("color_decode"),
+        },
+        "enlarged": {
+            "width": enlarged.get("width"),
+            "height": enlarged.get("height"),
+            "scale_factor": enlarged.get("scale_factor"),
+            "resampler": enlarged.get("resampler"),
+        },
+        "captures": names,
+    }
+
+
+def summarize(
+    control: dict[str, Any],
+    packets: list[dict[str, Any]],
+    candidates: dict[str, Any],
+    capture_evidence: dict[str, Any],
+) -> dict[str, Any]:
     auth_rows = control["authorization_rows"]
     evidence_rows = control["evidence_rows"]
     objective_rows = control["objective_rows"]
@@ -294,7 +385,24 @@ def summarize(control: dict[str, Any], packets: list[dict[str, Any]], candidates
         blockers.append(f"{len(pending_reviewers)} independent reviewer rows are not PASS")
     if candidates.get("missing_files"):
         blockers.append(f"{len(candidates['missing_files'])} runtime candidate files are missing")
+    if capture_evidence.get("result") == "INVALID":
+        blockers.append("visual capture evidence report is invalid")
 
+    capture_report_pass = 1 if capture_evidence.get("result") == "PASS" else 0
+    if capture_report_pass:
+        first_next_actions = [
+            "promote validated native/enlarged capture packet bytes into the canonical benchmark evidence registry",
+            "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
+            "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
+        ]
+    else:
+        first_next_actions = [
+            "create a capture packet with scripts/assemble-visual-benchmark-captures --init-template",
+            "capture native 320x240 benchmark frames for exploration, dialogue, target selection, attack anticipation, impact, and support",
+            "generate or provide exact 4x nearest-neighbor enlargements from those native frames and validate the packet with scripts/assemble-visual-benchmark-captures",
+            "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
+            "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
+        ]
     return {
         "ready_for_visual_approval": not blockers,
         "blockers": blockers,
@@ -319,14 +427,9 @@ def summarize(control: dict[str, Any], packets: list[dict[str, Any]], candidates
             "complete_concept_packets": len(complete_concepts),
             "runtime_candidate_rows": candidates.get("row_count", 0),
             "runtime_candidate_missing_files": len(candidates.get("missing_files", [])),
+            "visual_capture_report_pass": capture_report_pass,
         },
-        "first_next_actions": [
-            "create a capture packet with scripts/assemble-visual-benchmark-captures --init-template",
-            "capture native 320x240 benchmark frames for exploration, dialogue, target selection, attack anticipation, impact, and support",
-            "generate or provide exact 4x nearest-neighbor enlargements from those native frames and validate the packet with scripts/assemble-visual-benchmark-captures",
-            "promote whitelist rows through real authorization, Gate records, source manifests, output manifests, and seven evidence-backed gate decisions",
-            "populate objective/rubric/reviewer rows only after recomputable media, performance, provenance, and non-owner review exist",
-        ],
+        "first_next_actions": first_next_actions,
     }
 
 
@@ -335,7 +438,8 @@ def audit(root: Path) -> dict[str, Any]:
     control = parse_control(root)
     packets = concept_packets(root)
     candidates = runtime_candidates(root)
-    summary = summarize(control, packets, candidates)
+    capture_evidence = visual_capture_evidence(root)
+    summary = summarize(control, packets, candidates, capture_evidence)
     return {
         "schema": "n64game-visual-benchmark-readiness-v1",
         "result": "BLOCKED_BY_MISSING_EVIDENCE" if not summary["ready_for_visual_approval"] else "READY_FOR_APPROVAL",
@@ -380,6 +484,7 @@ def audit(root: Path) -> dict[str, Any]:
             "statuses": candidates.get("statuses", []),
             "missing_files": candidates.get("missing_files", []),
         },
+        "visual_capture_evidence": capture_evidence,
     }
 
 
@@ -395,6 +500,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Passing evidence rows: `{counts['evidence_pass']} / {counts['evidence_rows']}`",
         f"- Complete concept packets: `{counts['complete_concept_packets']} / {counts['concept_packets']}`",
         f"- Runtime candidate rows: `{counts['runtime_candidate_rows']}`",
+        f"- Valid visual capture report: `{counts['visual_capture_report_pass']} / 1`",
         "",
         "## Blocking facts",
         "",
