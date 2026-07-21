@@ -209,7 +209,7 @@ def build_fresh_public_clone(root: Path, repo: str, head: str, keep_clone: Path 
         require_success(run(["make", "validate"], cwd=clone, timeout=900), "make validate in fresh clone")
         require_success(run(["make", "rom"], cwd=clone, timeout=1800), "make rom in fresh clone")
         require_success(run(["make", "test"], cwd=clone, timeout=900), "make test in fresh clone")
-        require_success(run(["make", "test-certification"], cwd=clone, timeout=900), "make test-certification in fresh clone")
+        require_success(run(["make", "test-authoring"], cwd=clone, timeout=900), "make test-authoring in fresh clone")
         require_success(run(["make", "report"], cwd=clone, timeout=1800), "make report in fresh clone")
         identity = rom_identity(clone, ROM_REL)
         files = {

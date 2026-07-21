@@ -238,11 +238,10 @@ def ci_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         "build/reports/rom-size.md",
         "build/reports/validation-summary.md",
         "build/reports/host-tests.txt",
-        "build/reports/certification-tests.txt",
     )
-    if rom_ok and len(reports) == 6 and repro_status == "PASS":
+    if rom_ok and len(reports) == 5 and repro_status == "PASS":
         return "PASS", (*rom_evidence, *reports, *repro_evidence), ()
-    if rom_ok and len(reports) == 6:
+    if rom_ok and len(reports) == 5:
         return "PARTIAL", (*rom_evidence, *reports), ("fresh public clone build and downloaded public CI artifact equality must be verified for final release",)
     missing = []
     if not rom_ok:
@@ -253,7 +252,6 @@ def ci_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         "build/reports/rom-size.md",
         "build/reports/validation-summary.md",
         "build/reports/host-tests.txt",
-        "build/reports/certification-tests.txt",
     ):
         if path not in reports:
             missing.append(path)

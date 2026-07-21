@@ -60,7 +60,6 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
             "build/game/n64game-gate3.map",
             "build/reports/rom-size.md",
             "build/reports/validation-summary.md",
-            "build/reports/certification-tests.txt",
         ):
             self.write(relative, "fixture\n")
         self.write("build/reports/host-tests.txt", "suite=n64game_host_contracts\nresult=PASS\n")
