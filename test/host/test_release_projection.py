@@ -67,6 +67,10 @@ class ReleaseProjectionTests(unittest.TestCase):
     def test_master_prompt_is_the_reduced_release_authority(self) -> None:
         master = (ROOT / "docs" / "N64GAME_MASTER_SPEC.md").read_text(encoding="utf-8")
         goal = (ROOT / "docs" / "N64GAME_GOAL_PROMPT.md").read_text(encoding="utf-8")
+        story = (ROOT / "docs" / "STORY_AND_TIMING.md").read_text(encoding="utf-8")
+        traceability = (ROOT / "docs" / "PREPRODUCTION_TRACEABILITY.md").read_text(encoding="utf-8")
+        active_story = story.split("## 2. Original story premise", 1)[0]
+        active_traceability = traceability.split("## Gate 2 exit audit", 1)[0]
 
         self.assertIn("Create a polished, original-IP Nintendo 64 game with a genuine 6–8 minute", master)
         self.assertIn("Where older preproduction documents describe that larger plan, this document wins", master)
@@ -74,15 +78,29 @@ class ReleaseProjectionTests(unittest.TestCase):
         self.assertIn("Do not re-expand toward the superseded 20-minute plan", master)
         self.assertIn("replaced the former 18–25 minute/two-location plan", goal)
         self.assertIn("Deliver a genuine polished 6–8 minute chapter", goal)
+        self.assertIn("polished **6–8 minute** first-playthrough-style opening chapter", active_story)
+        self.assertIn("This replaces the former 18–25 minute, two-location plan", active_story)
+        self.assertIn("no world map, no Estate destination, no Rusk battle", active_story)
+        self.assertIn("Quarrune and Ayselor against Gyreclast and Kivarrax", active_story)
+        self.assertIn("10 complete title/Annex/battle/end-card loops", active_story)
+        self.assertIn("6–8 minutes, excluding idle time", active_traceability)
+        self.assertIn("One complete Meridian Research Annex destination; no world map", active_traceability)
+        self.assertIn("Four distinct polished battle-capable Echoforms", active_traceability)
+        self.assertIn("10 complete title/Annex/battle/end-card transition loops", active_traceability)
         for stale_phrase in (
             "The median target is **22 minutes 30 seconds**",
             "18–25 minute median",
             "At least 15 minutes",
-            "Meridian Research Annex and Veyra Observatory Estate",
             "interactive world map",
+            "World map/travel",
+            "Estate courtyard",
+            "Complete real 2v2 battle, result/progression",
+            "Estate interior",
         ):
             self.assertNotIn(stale_phrase, master)
             self.assertNotIn(stale_phrase, goal)
+            self.assertNotIn(stale_phrase, active_story)
+            self.assertNotIn(stale_phrase, active_traceability)
 
 
 if __name__ == "__main__":

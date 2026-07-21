@@ -5,9 +5,10 @@ This document is the exit audit for production Gate 2. It does not replace the m
 ## Authority and change control
 
 - The authority order is: explicit user change, `docs/N64GAME_MASTER_SPEC.md`, then the supporting documents named below.
-- Supporting documents may add detail but may not reduce runtime, content, art quality, hardware targets, review depth, or certification requirements.
+- Supporting documents may add detail but may not reduce the reduced one-week release scope, art quality, hardware targets, review depth, or certification requirements.
 - A locked name, ID, count, timing range, palette value, asset budget, serialized field, or state transition must have one canonical definition. Other documents reference it rather than silently introducing a competing value.
 - A later measured hardware failure may revise a suggested budget only through an evidence-backed decision log. It may not remove the associated player-facing content or lower the accepted visual bar without user approval.
+- The current master specification supersedes the older Gate 2 two-location chapter. Any Estate/world-map/Rusk/Ivo/second-battle material in this document is historical expansion context unless it is explicitly restated in the reduced release envelope below.
 - Gate 3 may not begin until every Gate 2 exit item is checked and the complete document set has passed a consistency review.
 
 ## Required document set
@@ -24,25 +25,25 @@ This document is the exit audit for production Gate 2. It does not replace the m
 | Naming collision screen and roster lock | `docs/NAMING_AND_ORIGINALITY_AUDIT.md` | Rejected working names are purged; eight canonical display/symbolic IDs agree everywhere; limitations of the screen are stated honestly |
 | Reference and clean-room constraints | `docs/reference-study.md`, `THIRD_PARTY_NOTICES.md`, `ASSET_LICENSE.md` | Supporting documents contain no copied reference expression and preserve the separate code/asset license boundary |
 
-## Locked chapter envelope
+## Locked reduced release envelope
 
 These values come directly from the master specification and must agree across every supporting document:
 
 | Item | Locked value |
 |---|---|
 | Measured chapter | Cold boot through stable closing Fracture hook |
-| Normal first-time runtime | 18–25 minutes, excluding idle time |
-| Minimum player-controlled time | At least 15 minutes in every qualifying first-playthrough certification run; never a median-only test |
-| Temporary cinematic | Final-styled, skippable `INSERT CUTSCENE HERE` slate; three-second hold and no more than five seconds total |
-| Destinations | Meridian Research Annex and Veyra Observatory Estate, plus an interactive world map |
-| Battles | One complete interactive simulation 2v2 and one complete real 2v2 against Rusk |
-| Battle roster | Eight distinct polished battle-capable Echoforms: two real starters, two simulation loaners, two simulation opponents, two estate opponents |
-| Annex spaces | Simulation room, central atrium, director's lab, player room, clinic/creature bay, workshop, elevator, and exterior threshold |
-| Estate spaces | Courtyard/exterior, foyer/gallery, invention hall, and observatory study |
-| Companion flow | Tavi discovered, joins visibly, follows safely through the return transition, and resolves the objective at the Annex |
+| Normal first-time runtime | 6–8 minutes, excluding idle time |
+| Minimum player-controlled time | Enough movement, exploration, menu, and battle input to prove a real playable chapter; never a passive dialogue reel |
+| Temporary cinematic | Final-styled, skippable `INSERT CUTSCENE HERE` slate with storyboard package ready for later AI-video animation |
+| Destinations | One complete Meridian Research Annex destination; no world map or Veyra Observatory Estate in this release |
+| Battles | One complete interactive 2v2 Resonance battle |
+| Battle roster | Four distinct polished battle-capable Echoforms: allied Quarrune and Ayselor versus opposing Gyreclast and Kivarrax |
+| Annex spaces | Compact but finished route through the Annex with title/loading, arrival, exploration, battle staging, save/retry, and closing hook support |
+| Estate spaces | Not included in the one-week public release; retained only as future expansion context |
+| Companion flow | Tavi/Rusk/Ivo offsite recovery flow is not included in the reduced release |
 | Closing hook | Field Relay receives the Solace beacon signature; a Resonance monitor reacts to an unknown Fractured Echoform; progress saves into a stable post-chapter state |
 | Hardware | Standard 4 MB N64, no Expansion Pak, 320×240, 16-bit, triple-buffered, target 30 FPS |
-| Resource targets | ROM under 16 MiB target, peak free heap at least 512 KiB, no persistent loss over 20 complete transition loops |
+| Resource targets | ROM under 16 MiB target, peak free heap at least 512 KiB, no persistent loss over 10 complete title/Annex/battle/end-card transition loops |
 | Save medium | EEPROM4K with explicit versioning, checksums, safe writes, fallback, and migration policy |
 | Intentionally temporary final content | The cinematic slate only |
 

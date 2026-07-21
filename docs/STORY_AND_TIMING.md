@@ -6,30 +6,26 @@ Authority: subordinate only to `docs/N64GAME_MASTER_SPEC.md` and later explicit 
 
 Timing basis: first-time play from cold boot through the closing hook's stable interactive end-card handoff, excluding idle time
 
-This document is the implementation-ready narrative contract for the complete opening chapter. It fixes the original story, scene order, encounter fiction, dialogue, objectives, progression flags, failure behavior, and pacing evidence. It does not authorize copying any protected reference expression. A scene may be restaged to solve a measured camera, memory, or navigation problem, but no required beat, destination, battle, or outcome may be removed without updating the master specification.
+This document is the implementation-ready narrative contract for the reduced one-week opening chapter. It fixes the original story, scene order, encounter fiction, dialogue, objectives, progression flags, failure behavior, and pacing evidence for the playable public release. It does not authorize copying any protected reference expression. A scene may be restaged to solve a measured camera, memory, or navigation problem, but no required beat, destination, battle, or outcome may be removed without updating the master specification.
 
-## 1. Experience and pacing lock
+## 1. Reduced release experience and pacing lock
 
-The median target is **22 minutes 30 seconds**. Run three qualifying first-playthrough-style certifications, excluding idle time from each. The median of their three total durations must be 18–25 minutes. Every one of the three qualifying runs must independently record at least 15 minutes of active-control time; active-control compliance is never evaluated by median. For this contract, the closing hook ends on the first frame that the authored end card has resolved its save outcome and its stable choices accept input; the post-`HOOK_014` fade, record feedback, and end-card reveal are therefore part of the measured hook handoff rather than unmeasured post-roll. Active control means movement, exploration, interaction choice, name entry, party/Field Relay use, world-map choice, battle command/target selection, or retry/end-card choice. Merely advancing mandatory dialogue does not count. The design must not stall the player or inflate text to hit time.
+The current public release target is a polished **6–8 minute** first-playthrough-style opening chapter. This replaces the former 18–25 minute, two-location plan. Where older sections below mention the world map, Veyra Observatory Estate, Rusk, Ivo, Tavi's offsite recovery, or a second battle, those details are retained as legacy expansion reference only and are not release authority. The one-week release includes no world map, no Estate destination, no Rusk battle, no Ivo scene, and no second combat encounter.
+
+Run two qualifying first-playthrough-style Ares v148 certification captures, excluding idle time from each. Both captures must complete from cold boot through the stable end-card handoff in the 6–8 minute target band, with enough active control to prove the chapter is genuinely playable rather than a passive text reel. Active control means movement, exploration, interaction choice, name entry, party/Field Relay use, battle command/target selection, retry/end-card choice, or other player-authored progression. Merely advancing mandatory dialogue does not count. The design must not stall the player or inflate text to hit time.
 
 | Clock target | Segment | Required content | Active-control budget |
 |---|---|---|---:|
-| 0:00–0:11 | Boot/title | Game mark, real initialization, first-run New Game selection | 0:05 |
-| 0:11–0:15 | Opening slot | 106-frame slate: 8-frame fade, 90-frame fully visible `INSERT CUTSCENE HERE` hold, 8-frame fade; or immediate skip | 0:00 |
-| 0:15–0:45 | Name entry | 1–8 uppercase characters, default `ARI`, protected confirm/cancel | 0:30 |
-| 0:45–4:40 | Simulation | Fly-in and complete interactive 2v2 tutorial | 3:10 |
-| 4:40–10:35 | Meridian Annex | Starter onboarding, assignment, two-level exploration, Field Relay, Tavi clue, exit | 4:20 |
-| 10:35–11:20 | World map/travel | Estate selection, travel animation, real loading | 0:35 |
-| 11:20–13:15 | Estate courtyard | Arrival exploration, Rusk confrontation | 1:20 |
-| 13:15–16:10 | Rusk battle | Complete real 2v2 battle, result/progression | 2:30 |
-| 16:10–19:35 | Estate interior | Apology, invention exploration, Ivo/Tavi reunion, follower return | 2:00 |
-| 19:35–22:15 | Annex return/hook | Map return, objective resolution, Solace beacon, Fracture response | 0:55 |
-| 22:15–22:30 | End state | Save confirmation, chapter card, stable choice | 0:10 |
-|  | **Target total** |  | **15:35** |
+| 0:00–0:25 | Boot/title/loading | Game mark, real initialization, controller-ready New Game, polished loading treatment | 0:08 |
+| 0:25–1:25 | Opening slot and arrival | Final-styled `INSERT CUTSCENE HERE` slate, skip-safe handoff, player name/default, Annex establishing arrival | 0:35 |
+| 1:25–3:20 | Meridian Annex exploration | Focused single-destination route through the Annex, readable objective prompts, starter onboarding, Field Relay pickup | 1:35 |
+| 3:20–6:15 | Resonance battle | One complete interactive 2v2 battle: Quarrune and Ayselor against Gyreclast and Kivarrax, legal retries, deterministic win/loss/reward state | 2:30 |
+| 6:15–7:30 | Beacon hook/end state | Solace beacon reveal, Fractured response, explicit save/result feedback, stable replay/continue choices | 0:40 |
+|  | **Target total** | Two certified runs must land in the 6–8 minute band | **5:28** |
 
-The controlled-time budget includes interactive menu/UI reading and decision time, but it excludes advancing or merely reading mandatory dialogue and includes no optional detour longer than 45 seconds. Mandatory paths must remain direct. Optional interactions can add roughly 2–4 minutes for curious players without being required to reach the 18-minute floor. Certification runners receive no route instructions beyond the on-screen game.
+Clock entries are authored arrival targets with a ±20-second tolerance at each boundary, not timers. The game never waits for a boundary before allowing progress. Optional interactions may add small flavor, but they cannot be required to satisfy timing, hide missing content, or distract from the critical path.
 
-Clock entries are authored arrival targets with a ±15-second tolerance at each boundary, not timers. The game never waits for a boundary before allowing progress.
+The certification bundle must include the two timed playthrough captures plus a transition soak of 10 complete title/Annex/battle/end-card loops. The soak must preserve the 512 KiB free-heap floor, stable 30 FPS target behavior, repeatable input response, correct save/retry outcomes, and no persistent visual/audio corruption.
 
 ## 2. Original story premise and clean-room boundary
 
