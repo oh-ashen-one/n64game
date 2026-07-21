@@ -67,6 +67,82 @@ Nintendo64
         self.assertEqual(payload["settings"]["result"], "STALE")
         self.assertIn("0x1/0/92;0x1/0/62", payload["settings"]["legacy_fragments"])
 
+    def test_settings_with_stale_l_axis_arrow_bindings_are_reported_stale(self) -> None:
+        self.write_settings(
+            """
+Nintendo64
+  Input
+    Controller.Port.1
+      Gamepad
+        L-Up: 0x1/0/81;0x1/0/22;
+        L-Down: 0x1/0/82;0x1/0/26;
+        L-Left: 0x1/0/80;0x1/0/4;
+        L-Right: 0x1/0/79;0x1/0/7;
+        Up: 0x1/0/82;0x1/0/26;;
+        Down: 0x1/0/81;0x1/0/22;;
+        Left: 0x1/0/80;0x1/0/4;;
+        Right: 0x1/0/79;0x1/0/7;;
+        B: 0x1/0/29;;
+        A: 0x1/0/27;;
+        C-Down: 0x1/0/44;;
+        Z: 0x1/0/225;;
+        Start: 0x1/0/40;;
+        X-Axis
+          Lo: 0x1/0/80;0x1/0/4;;
+          Hi: 0x1/0/79;0x1/0/7;;
+        Y-Axis
+          Lo: 0x1/0/81;0x1/0/22;;
+          Hi: 0x1/0/82;0x1/0/26;;
+      Mouse
+        X: ;;
+"""
+        )
+        payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
+        self.assertEqual(payload["result"], "WARN_STALE_ARES_PROCESS")
+        self.assertEqual(payload["settings"]["result"], "STALE")
+        self.assertIn("L-Up", payload["settings"]["missing_controls"])
+        self.assertEqual(
+            payload["settings"]["port1_gamepad_bindings"]["L-Up"],
+            "0x1/0/81;0x1/0/22;",
+        )
+
+    def test_repaired_settings_pass_with_empty_l_axis_and_keyboard_arrows(self) -> None:
+        self.write_settings(
+            """
+Nintendo64
+  Input
+    Controller.Port.1
+      Gamepad
+        L-Up: ;;
+        L-Down: ;;
+        L-Left: ;;
+        L-Right: ;;
+        Up: 0x1/0/82;0x1/0/26;;
+        Down: 0x1/0/81;0x1/0/22;;
+        Left: 0x1/0/80;0x1/0/4;;
+        Right: 0x1/0/79;0x1/0/7;;
+        B: 0x1/0/29;;
+        A: 0x1/0/27;;
+        C-Down: 0x1/0/44;;
+        Z: 0x1/0/225;;
+        Start: 0x1/0/40;;
+        X-Axis
+          Lo: 0x1/0/80;0x1/0/4;;
+          Hi: 0x1/0/79;0x1/0/7;;
+        Y-Axis
+          Lo: 0x1/0/81;0x1/0/22;;
+          Hi: 0x1/0/82;0x1/0/26;;
+      Mouse
+        X: ;;
+Hotkey
+  CaptureScreenshot: 0x1/0/19;;
+"""
+        )
+        payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
+        self.assertEqual(payload["result"], "PASS")
+        self.assertEqual(payload["settings"]["result"], "PASS")
+        self.assertEqual(payload["settings"]["port1_gamepad_bindings"]["L-Up"], ";;")
+
     def test_running_legacy_process_is_reported_without_failing_wrapper(self) -> None:
         snapshot = self.root / "ps.txt"
         snapshot.write_text(

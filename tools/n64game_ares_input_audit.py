@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -44,6 +45,13 @@ EXPECTED_HOTKEY_BINDINGS = {
     "CaptureScreenshot": "0x1/0/19;;",
 }
 
+EXPECTED_EMPTY_GAMEPAD_BINDINGS = {
+    "L-Up": ";;",
+    "L-Down": ";;",
+    "L-Left": ";;",
+    "L-Right": ";;",
+}
+
 LEGACY_BINDING_FRAGMENTS = (
     "0x1/0/92;0x1/0/62",
     "0x1/0/93;0x1/0/58",
@@ -55,6 +63,39 @@ LEGACY_BINDING_FRAGMENTS = (
     "0x1/0/98;;",
     "0x1/0/97;;",
 )
+
+
+def expected_settings_value(binding: str) -> str:
+    if binding == ";;" or binding.endswith(";;"):
+        return binding
+    return f"{binding};"
+
+
+def extract_port1_gamepad_bindings(text: str) -> dict[str, str]:
+    match = re.search(
+        r"(?ms)^    Controller\.Port\.1\n      Gamepad\n(?P<body>.*?)(?=^      Mouse\n)",
+        text,
+    )
+    if match is None:
+        return {}
+    bindings: dict[str, str] = {}
+    active_axis: str | None = None
+    for raw_line in match.group("body").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped in {"X-Axis", "Y-Axis"}:
+            active_axis = stripped
+            continue
+        if ": " not in stripped:
+            continue
+        key, value = stripped.split(": ", 1)
+        if active_axis in {"X-Axis", "Y-Axis"} and key in {"Lo", "Hi"}:
+            bindings[f"{active_axis}/{key}"] = value
+        else:
+            active_axis = None
+            bindings[key] = value
+    return bindings
 
 
 def display_path(path: Path, root: Path) -> str:
@@ -97,8 +138,20 @@ def settings_audit(settings_file: Path) -> dict[str, Any]:
     text = settings_file.read_text(encoding="utf-8", errors="replace")
     missing = []
     legacy = []
-    for control, binding in EXPECTED_BINDINGS.items():
-        if binding not in text:
+    port1_bindings = extract_port1_gamepad_bindings(text)
+    if port1_bindings:
+        for control, binding in EXPECTED_BINDINGS.items():
+            expected = expected_settings_value(binding)
+            if port1_bindings.get(control) != expected:
+                missing.append(control)
+        for control, binding in EXPECTED_EMPTY_GAMEPAD_BINDINGS.items():
+            if port1_bindings.get(control) != binding:
+                missing.append(control)
+    else:
+        for control, binding in EXPECTED_BINDINGS.items():
+            if binding not in text:
+                missing.append(control)
+        for control in EXPECTED_EMPTY_GAMEPAD_BINDINGS:
             missing.append(control)
     for hotkey, binding in EXPECTED_HOTKEY_BINDINGS.items():
         if f"{hotkey}: {binding}" not in text:
@@ -112,6 +165,7 @@ def settings_audit(settings_file: Path) -> dict[str, Any]:
         "result": "PASS" if not missing and not legacy else "STALE",
         "missing_controls": missing,
         "legacy_fragments": legacy,
+        "port1_gamepad_bindings": port1_bindings,
     }
 
 
@@ -246,6 +300,7 @@ def audit(root: Path, state_root: Path, process_snapshot: Path | None) -> dict[s
         "settings": settings,
         "processes": processes,
         "expected_bindings": EXPECTED_BINDINGS,
+        "expected_empty_gamepad_bindings": EXPECTED_EMPTY_GAMEPAD_BINDINGS,
         "expected_hotkey_bindings": EXPECTED_HOTKEY_BINDINGS,
         "remediation": [
             "quit any running Ares process that reports stale bindings",
