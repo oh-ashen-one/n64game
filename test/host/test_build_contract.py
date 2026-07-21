@@ -389,11 +389,12 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--open-input-monitoring) OPEN_INPUT_MONITORING=1 ;;", wrapper)
         self.assertIn("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent", wrapper)
         self.assertIn("ares_bundle_id=dev.ares.ares", wrapper)
+        self.assertIn('if [[ ! -f "$SETTINGS_FILE" ]]; then', wrapper)
+        self.assertIn('"$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null', wrapper)
+        self.assertIn("perl -0pi -e", wrapper)
+        self.assertIn("s/(\\n  Defocus: )[^\\n]*/${1}Allow/;", wrapper)
+        self.assertIn("s/(\\n  ExpansionPak: )[^\\n]*/${1}false/;", wrapper)
         expected_keyboard_bindings = {
-            "L-Up": "0x1/0/92;0x1/0/62;",
-            "L-Down": "0x1/0/93;0x1/0/58;",
-            "L-Left": "0x1/0/94;0x1/0/40;",
-            "L-Right": "0x1/0/95;0x1/0/43;",
             "Up": "0x1/0/92;0x1/0/62;",
             "Down": "0x1/0/93;0x1/0/58;",
             "Left": "0x1/0/94;0x1/0/40;",
@@ -414,6 +415,42 @@ class BuildContractTests(unittest.TestCase):
                 f"{control}={assignments}"
             )
             self.assertIn(setting, wrapper)
+            if "/" not in control:
+                escaped_assignments = assignments.replace("/", "\\/")
+                bml_assignments = (
+                    escaped_assignments
+                    if assignments.endswith(";;")
+                    else f"{escaped_assignments};"
+                )
+                self.assertIn(
+                    f"s/(\\n        {control}: )[^\\n]*/${{1}}{bml_assignments}/",
+                    wrapper,
+                )
+        for legacy_control in ("L-Up", "L-Down", "L-Left", "L-Right"):
+            self.assertNotIn(
+                f"Nintendo64/Input/Controller.Port.1/Gamepad/{legacy_control}=",
+                wrapper,
+            )
+            self.assertIn(
+                f"s/(\\n        {legacy_control}: )[^\\n]*/${{1}};;/;",
+                wrapper,
+            )
+        self.assertIn(
+            "s/(\\n        X-Axis\\n          Lo: )[^\\n]*/${1}0x1\\/0\\/94;0x1\\/0\\/40;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        X-Axis\\n          Lo: [^\\n]*\\n          Hi: )[^\\n]*/${1}0x1\\/0\\/95;0x1\\/0\\/43;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        Y-Axis\\n          Lo: )[^\\n]*/${1}0x1\\/0\\/93;0x1\\/0\\/58;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        Y-Axis\\n          Lo: [^\\n]*\\n          Hi: )[^\\n]*/${1}0x1\\/0\\/92;0x1\\/0\\/62;;/",
+            wrapper,
+        )
         main_source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
         self.assertIn("DIGITAL_STICK_THRESHOLD = 48", main_source)
         self.assertIn("previous_direction_held", main_source)

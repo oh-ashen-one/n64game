@@ -80,6 +80,31 @@ fi
 
 STATE_ROOT="${N64GAME_ARES_STATE:-$HOME/Library/Application Support/ares-v148-n64game}"
 mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves/Nintendo 64" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
+SETTINGS_FILE="$STATE_ROOT/settings.bml"
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+    "$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null
+fi
+perl -0pi -e '
+    s/(\n  Defocus: )[^\n]*/${1}Allow/;
+    s/(\n  ExpansionPak: )[^\n]*/${1}false/;
+    s/(\n        L-Up: )[^\n]*/${1};;/;
+    s/(\n        L-Down: )[^\n]*/${1};;/;
+    s/(\n        L-Left: )[^\n]*/${1};;/;
+    s/(\n        L-Right: )[^\n]*/${1};;/;
+    s/(\n        Up: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
+    s/(\n        Down: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Left: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        Right: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        B: )[^\n]*/${1}0x1\/0\/63;;/;
+    s/(\n        A: )[^\n]*/${1}0x1\/0\/65;;/;
+    s/(\n        C-Down: )[^\n]*/${1}0x1\/0\/42;;/;
+    s/(\n        Z: )[^\n]*/${1}0x1\/0\/98;;/;
+    s/(\n        Start: )[^\n]*/${1}0x1\/0\/97;;/;
+    s/(\n        X-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        X-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Y-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
+' "$SETTINGS_FILE"
 VERSION_RAW="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
 if [[ ! "$VERSION_RAW" =~ ^[[:space:]]*v148[[:space:]]*$ ]]; then
     printf 'unexpected Ares version output: %q\n' "$VERSION_RAW" >&2
@@ -126,10 +151,6 @@ exec "$ARES" \
     --setting Nintendo64/ExpansionPak=false \
     --setting Input/Driver=SDL \
     --setting Input/Defocus=Allow \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=0x1/0/92;0x1/0/62;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=0x1/0/93;0x1/0/58;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=0x1/0/94;0x1/0/40;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=0x1/0/95;0x1/0/43;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/93;0x1/0/58;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/94;0x1/0/40;' \

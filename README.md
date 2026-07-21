@@ -27,7 +27,7 @@ This screenshot is the small Gate 3 diagnostic—not gameplay or representative 
 - `Start` or `Z`: open or close Pause
 - `C-down`: open or close the Field Relay after it is unlocked
 
-When launched through `scripts/run-ares` on the pinned macOS Ares v148 build, the wrapper supplies a deterministic keyboard map. Arrow keys and `WASD` drive both the N64 D-pad and control-stick directions, so the same keys work in menus and during movement. Keyboard `Z` is N64 `A`, keyboard `X` is N64 `B`, keyboard `C` is N64 C-down, `Space` is N64 `Z`, and `Return` is N64 `Start`.
+When launched through `scripts/run-ares` on the pinned macOS Ares v148 build, the wrapper repairs the isolated Ares `settings.bml` before launch and supplies a deterministic keyboard map. Arrow keys and `WASD` drive the N64 D-pad plus the nested control-stick X/Y axes, so the same keys work in menus and during movement. Keyboard `Z` is N64 `A`, keyboard `X` is N64 `B`, keyboard `C` is N64 C-down, `Space` is N64 `Z`, and `Return` is N64 `Start`.
 
 On macOS, add the signed Ares app (`dev.ares.ares`) under **System Settings → Privacy & Security → Input Monitoring**, then restart Ares. Ares v148 polls keyboard state through Quartz; without this permission all keyboard mappings can appear dead. Click the game window once after relaunching.
 
