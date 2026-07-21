@@ -36,6 +36,7 @@ CAPTURE_NAMES = (
 )
 PLACEHOLDERS = ("TODO", "PENDING", "REPLACE", "NOT_CAPTURED", "TBD")
 NATIVE_SIZE = (320, 240)
+ARES_HORIZONTAL_DUPLICATE_SIZE = (640, 240)
 ENLARGED_SIZE = (1280, 960)
 DEFAULT_PACKET = ROOT / "build" / "visual-benchmark" / "capture-packet.json"
 DEFAULT_REPORT = ROOT / "build" / "reports" / "visual-capture-evidence.json"
@@ -256,6 +257,27 @@ def enlarge_rgba_4x(native_rgba: bytes) -> bytes:
     return bytes(enlarged)
 
 
+def derive_native_from_horizontal_duplicate(ares_rgba: bytes) -> bytes:
+    expected_len = ARES_HORIZONTAL_DUPLICATE_SIZE[0] * ARES_HORIZONTAL_DUPLICATE_SIZE[1] * 4
+    if len(ares_rgba) != expected_len:
+        raise CapturePacketError(f"Ares RGBA buffer length {len(ares_rgba)} != {expected_len}")
+    native = bytearray(NATIVE_SIZE[0] * NATIVE_SIZE[1] * 4)
+    for y in range(NATIVE_SIZE[1]):
+        for x in range(NATIVE_SIZE[0]):
+            left_offset = ((y * ARES_HORIZONTAL_DUPLICATE_SIZE[0]) + (x * 2)) * 4
+            right_offset = left_offset + 4
+            left = ares_rgba[left_offset:left_offset + 4]
+            right = ares_rgba[right_offset:right_offset + 4]
+            if left != right:
+                raise CapturePacketError(
+                    "Ares 640x240 source is not exact horizontal 2x duplication "
+                    f"at native({x},{y}) source columns {x * 2}/{x * 2 + 1}"
+                )
+            target = ((y * NATIVE_SIZE[0]) + x) * 4
+            native[target:target + 4] = left
+    return bytes(native)
+
+
 def assert_exact_nearest_neighbor(native_rgba: bytes, enlarged_rgba: bytes, label: str) -> None:
     for y in range(NATIVE_SIZE[1]):
         for x in range(NATIVE_SIZE[0]):
@@ -345,6 +367,28 @@ def generate_enlarged_images(packet: dict[str, Any], artifact_root: Path, overwr
     return written
 
 
+def import_ares_horizontal_duplicate(source_value: str, output_value: str, artifact_root: Path, overwrite: bool) -> dict[str, str]:
+    source_path = resolve_artifact(source_value, "ares_source", artifact_root)
+    output_path = resolve_output_artifact(output_value, "native_output", artifact_root, overwrite)
+    _width, _height, ares_rgba = decode_png_rgba(
+        source_path,
+        ARES_HORIZONTAL_DUPLICATE_SIZE,
+        "ares_source",
+    )
+    native_rgba = derive_native_from_horizontal_duplicate(ares_rgba)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(encode_png_rgba(NATIVE_SIZE[0], NATIVE_SIZE[1], native_rgba))
+    return {
+        "source": display_path(source_path, artifact_root),
+        "source_sha256": sha256(source_path),
+        "source_rgba_sha256": rgba_sha256(ares_rgba),
+        "native": display_path(output_path, artifact_root),
+        "native_sha256": sha256(output_path),
+        "native_rgba_sha256": rgba_sha256(native_rgba),
+        "derivation": "exact-horizontal-2x-duplicate-deinterleave",
+    }
+
+
 def validate_packet(packet: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
     require_capture_rows(packet)
     reject_placeholders(packet)
@@ -424,6 +468,8 @@ def main() -> int:
     parser.add_argument("--artifact-root", type=Path, default=ROOT)
     parser.add_argument("--init-template", action="store_true", help="write a placeholder capture packet and exit")
     parser.add_argument("--generate-enlarged", action="store_true", help="generate exact 4x nearest-neighbor enlarged PNGs from packet native_path rows before validation")
+    parser.add_argument("--import-ares-640x240", metavar="SOURCE", help="derive one native 320x240 PNG from an Ares 640x240 screenshot only if every horizontal pixel pair is identical")
+    parser.add_argument("--native-out", metavar="OUTPUT", help="repository-relative output path for --import-ares-640x240")
     parser.add_argument("--overwrite-generated", action="store_true", help="allow --generate-enlarged to replace existing enlarged_path PNGs")
     args = parser.parse_args()
 
@@ -435,6 +481,23 @@ def main() -> int:
         packet.parent.mkdir(parents=True, exist_ok=True)
         packet.write_text(json.dumps(template(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps({"result": "TEMPLATE_WRITTEN", "packet": display_path(packet, ROOT)}, sort_keys=True))
+        return 0
+
+    if args.import_ares_640x240:
+        if not args.native_out:
+            print("VISUAL_CAPTURE_PACKET_ERROR: --native-out is required with --import-ares-640x240")
+            return 1
+        try:
+            imported = import_ares_horizontal_duplicate(
+                args.import_ares_640x240,
+                args.native_out,
+                artifact_root,
+                args.overwrite_generated,
+            )
+        except (OSError, CapturePacketError) as exc:
+            print(f"VISUAL_CAPTURE_PACKET_ERROR: {exc}")
+            return 1
+        print(json.dumps({"result": "PASS", **imported}, sort_keys=True))
         return 0
 
     try:

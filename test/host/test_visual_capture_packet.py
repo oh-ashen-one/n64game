@@ -104,6 +104,17 @@ class VisualCapturePacketTests(unittest.TestCase):
                         enlarged[target:target + 4] = pixel
         return bytes(enlarged)
 
+    def horizontal_duplicate_2x(self, native: bytes) -> bytes:
+        duplicated = bytearray(640 * 240 * 4)
+        for y in range(240):
+            for x in range(320):
+                source = ((y * 320) + x) * 4
+                pixel = native[source:source + 4]
+                left = ((y * 640) + x * 2) * 4
+                duplicated[left:left + 4] = pixel
+                duplicated[left + 4:left + 8] = pixel
+        return bytes(duplicated)
+
     def make_packet(self) -> None:
         captures = {}
         for index, name in enumerate(CAPTURE_NAMES):
@@ -147,6 +158,42 @@ class VisualCapturePacketTests(unittest.TestCase):
             stderr=subprocess.STDOUT,
             check=False,
         )
+
+    def test_import_ares_640x240_exact_horizontal_duplicate_to_native(self) -> None:
+        native = self.make_native_rgba(9)
+        self.write_png_rgba(self.root / "captures/ares-menu.png", 640, 240, self.horizontal_duplicate_2x(native))
+        output = self.root / "captures/imported-native.png"
+        result = self.run_script(
+            "--import-ares-640x240",
+            "captures/ares-menu.png",
+            "--native-out",
+            "captures/imported-native.png",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(output.is_file())
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["derivation"], "exact-horizontal-2x-duplicate-deinterleave")
+        self.assertEqual(payload["native"], "captures/imported-native.png")
+        replacement = json.loads(self.packet.read_text(encoding="utf-8"))
+        replacement["captures"]["exploration"]["native_path"] = "captures/imported-native.png"
+        replacement["captures"]["exploration"]["enlarged_path"] = "captures/imported-native_4x.png"
+        self.packet.write_text(json.dumps(replacement, sort_keys=True), encoding="utf-8")
+        generated = self.run_script("--generate-enlarged", "--overwrite-generated")
+        self.assertEqual(generated.returncode, 0, generated.stdout)
+
+    def test_import_ares_640x240_rejects_non_duplicate_horizontal_pairs(self) -> None:
+        native = bytearray(self.horizontal_duplicate_2x(self.make_native_rgba(10)))
+        native[((7 * 640) + 11) * 4:((7 * 640) + 11) * 4 + 4] = bytes((1, 2, 3, 255))
+        self.write_png_rgba(self.root / "captures/ares-bad.png", 640, 240, bytes(native))
+        result = self.run_script(
+            "--import-ares-640x240",
+            "captures/ares-bad.png",
+            "--native-out",
+            "captures/imported-bad.png",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not exact horizontal 2x duplication", result.stdout)
+        self.assertFalse((self.root / "captures/imported-bad.png").exists())
 
     def test_valid_packet_writes_exact_capture_report(self) -> None:
         result = self.run_script()

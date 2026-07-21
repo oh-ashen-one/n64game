@@ -56,9 +56,31 @@ scripts/audit-ares-capture-preflight \
 
 The menu path is currently the verified way to make Ares write screenshot files
 from the local wrapper, but the observed Ares output is `640×240`. That proves
-capture reachability only. Do not use those files as `native` packet members
-until the packet validator has a deliberate approved path for producing the
-required `320×240` gameplay frame from them.
+capture reachability only. Do not use those raw files directly as `native`
+packet members.
+
+If a `640×240` Ares screenshot is only exact horizontal 2× duplication of the
+game's `320×240` framebuffer, derive the native packet member through the
+fail-closed importer:
+
+```sh
+scripts/assemble-visual-benchmark-captures \
+  --artifact-root "$PWD" \
+  --import-ares-640x240 review/benchmark/evidence/ares-raw/exploration.png \
+  --native-out review/benchmark/evidence/native/exploration.png
+```
+
+The importer decodes the source PNG and rejects it unless every horizontal
+pixel pair `(2x, 2x+1)` is byte-identical for all 320×240 native positions. It
+then writes a fresh `320×240` PNG and reports the source/native file hashes and
+decoded RGBA hashes. A rejection means the screenshot is scaled, filtered,
+aspect-corrected, or otherwise not a safe native-frame source; leave the packet
+row empty and fix capture rather than downsampling by eye.
+
+The existing 2026-07-21 Ares menu screenshots in the local isolated screenshot
+directory were tested against this importer and rejected because their
+horizontal pixel pairs were not exact duplicates. They remain diagnostic
+capture-reachability artifacts only, not visual benchmark input.
 
 After the native files and non-placeholder packet metadata are filled in, the
 assembler can create the review enlargements deterministically:
