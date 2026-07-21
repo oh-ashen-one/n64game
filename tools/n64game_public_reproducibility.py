@@ -174,6 +174,21 @@ def find_successful_run(root: Path, repo: str, head: str) -> dict[str, Any]:
     raise ReproError(f"no successful public Build ROM run found for {head}")
 
 
+def find_run_artifact(root: Path, repo: str, run_id: int) -> str:
+    raw = gh(root, "api", f"repos/{repo}/actions/runs/{run_id}/artifacts", timeout=120)
+    artifacts = json.loads(raw).get("artifacts", [])
+    names = [
+        artifact.get("name")
+        for artifact in artifacts
+        if not artifact.get("expired")
+        and isinstance(artifact.get("name"), str)
+        and re.fullmatch(r"n64game-gate3-[0-9a-f]{40}", artifact["name"])
+    ]
+    if len(names) != 1:
+        raise ReproError(f"expected exactly one live n64game-gate3 artifact for run {run_id}, found {names}")
+    return names[0]
+
+
 def build_fresh_public_clone(root: Path, repo: str, head: str, keep_clone: Path | None) -> tuple[RomIdentity, dict[str, str], str]:
     temp_root = root / "build" / "tmp-public-repro"
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -214,8 +229,7 @@ def build_fresh_public_clone(root: Path, repo: str, head: str, keep_clone: Path 
             shutil.rmtree(parent, ignore_errors=True)
 
 
-def download_ci_artifact(root: Path, repo: str, run_info: dict[str, Any], head: str) -> tuple[RomIdentity, dict[str, str]]:
-    artifact_name = f"{ARTIFACT_NAME_PREFIX}{head}"
+def download_ci_artifact(root: Path, repo: str, run_info: dict[str, Any], artifact_name: str) -> tuple[RomIdentity, dict[str, str]]:
     with tempfile.TemporaryDirectory(prefix="n64game-ci-artifact-") as temp:
         out_dir = Path(temp) / "artifact"
         out_dir.mkdir()
@@ -259,8 +273,9 @@ def build_report(root: Path, repo: str, keep_clone: Path | None) -> dict[str, An
         BUILD_REPORT_REL.as_posix(): require_file(root, BUILD_REPORT_REL),
     }
     run_info = find_successful_run(root, repo, head)
+    artifact_name = find_run_artifact(root, repo, int(run_info["databaseId"]))
     fresh, fresh_files, clone_path = build_fresh_public_clone(root, repo, head, keep_clone)
-    artifact, artifact_files = download_ci_artifact(root, repo, run_info, head)
+    artifact, artifact_files = download_ci_artifact(root, repo, run_info, artifact_name)
     compare_identities(local, fresh, artifact)
     return {
         "schema": "n64game-public-reproducibility-v1",
@@ -272,7 +287,7 @@ def build_report(root: Path, repo: str, keep_clone: Path | None) -> dict[str, An
             "name": "Build ROM",
             "run_id": run_info["databaseId"],
             "url": run_info["url"],
-            "artifact_name": f"{ARTIFACT_NAME_PREFIX}{head}",
+            "artifact_name": artifact_name,
         },
         "local": {"rom": local.to_json(), "files": local_files},
         "fresh_public_clone": {"rom": fresh.to_json(), "files": fresh_files, "clone_path": clone_path},
