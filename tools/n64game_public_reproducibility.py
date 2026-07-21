@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import re
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -87,6 +86,14 @@ def git(root: Path, *args: str, timeout: int = 120) -> str:
 
 def gh(root: Path, *args: str, timeout: int = 120) -> str:
     return require_success(run(["gh", *args], cwd=root, timeout=timeout), f"gh {' '.join(args)}").strip()
+
+
+def materialize_lfs(clone: Path) -> None:
+    version = run(["git", "lfs", "version"], cwd=clone, timeout=60)
+    if version.returncode != 0:
+        raise ReproError("git lfs is required to materialize public clone assets")
+    require_success(run(["git", "lfs", "install", "--local"], cwd=clone, timeout=60), "git lfs install in fresh clone")
+    require_success(run(["git", "lfs", "pull"], cwd=clone, timeout=600), "git lfs pull in fresh clone")
 
 
 def rom_identity(root: Path, relative: Path) -> RomIdentity:
@@ -175,8 +182,7 @@ def build_fresh_public_clone(root: Path, repo: str, head: str, keep_clone: Path 
             "credential-free fresh public clone",
         )
         git(clone, "checkout", "--detach", head)
-        if shutil.which("git-lfs"):
-            require_success(run(["git", "lfs", "pull"], cwd=clone, timeout=300), "git lfs pull in fresh clone")
+        materialize_lfs(clone)
         require_success(run(["npm", "ci", "--ignore-scripts"], cwd=clone, timeout=900), "npm ci in fresh clone")
         require_success(run(["make", "validate"], cwd=clone, timeout=900), "make validate in fresh clone")
         require_success(run(["make", "rom"], cwd=clone, timeout=1800), "make rom in fresh clone")
