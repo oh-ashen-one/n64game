@@ -175,9 +175,14 @@ def certification_manifest_state(root: Path) -> tuple[str, tuple[str, ...], tupl
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         return "MISSING", (str(manifest.relative_to(root)),), ("validator output was not JSON",)
-    return "PARTIAL", (
+    evidence = (
         f"{manifest.relative_to(root)} validated result={payload.get('result')} certification={payload.get('certification')}",
-    ), ("validator explicitly reports NOT_CLAIMED; final visual/audio/controller/release checks still required",)
+    )
+    if payload.get("certification") == "COMPLETE":
+        return "PASS", evidence, ()
+    if payload.get("certification") == "NOT_CLAIMED":
+        return "PARTIAL", evidence, ("validator explicitly reports NOT_CLAIMED; final visual/audio/controller/release checks still required",)
+    return "MISSING", evidence, ("certification evidence validator returned an unsupported certification state",)
 
 
 def visual_approval_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -295,7 +300,7 @@ def build_items(root: Path) -> list[AuditItem]:
         AuditItem("FAC-05", "Name entry, Annex exploration, Field Relay, one full 2v2 battle, victory/defeat/retry, save/reload, dialogue, transitions, and flags work.", host_status, host_evidence, host_missing),
         AuditItem("FAC-06", "Ten transition loops show no persistent memory growth; peak free heap is at least 512 KiB.", cert_status, cert_evidence, cert_missing),
         AuditItem("FAC-07", "Required scenes meet the evidence-backed 30 FPS target.", cert_status, cert_evidence, cert_missing),
-        AuditItem("FAC-08", "There are no crashes, softlocks, collision traps, missing assets, broken audio, unreadable required UI, progression blockers, duplicate rewards, or corrupt transitions.", "MISSING", host_evidence, ("full Ares QA matrix and visual/audio inspection",)),
+        AuditItem("FAC-08", "There are no crashes, softlocks, collision traps, missing assets, broken audio, unreadable required UI, progression blockers, duplicate rewards, or corrupt transitions.", cert_status, (*host_evidence, *cert_evidence), cert_missing if cert_status == "PASS" else ("full Ares QA matrix and visual/audio inspection", *cert_missing)),
         AuditItem("FAC-09", "Every retained production asset has provenance, passed seven art gates, and looks finished at the actual gameplay camera.", visual_status, visual_evidence, visual_missing),
         AuditItem("FAC-10", "No primitive, default material, raw generated texture, temporary animation, unfinished environment, or gameplay-affecting TODO remains, except INSERT CUTSCENE HERE.", visual_status, visual_evidence, visual_missing),
         AuditItem("FAC-11", "Twelve storyboard panels, individual files, contact sheet, continuity sheet, color script, and shot list are visually reviewed and delivered directly to the user.", storyboard_status, storyboard_evidence, storyboard_missing),

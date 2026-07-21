@@ -167,6 +167,87 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
         self.assertIn("final visual/audio/controller/release checks still required", by_id["FAC-03"]["missing"][0])
         self.assertEqual(payload["result"], "INCOMPLETE")
 
+    def test_complete_certification_evidence_promotes_ares_rows_only(self) -> None:
+        rom = self.root / "build/game/n64game-gate3.z64"
+        qa_rows = {
+            "cold_boot_default_name": "PASS",
+            "cold_boot_custom_name": "PASS",
+            "slate_watched": "PASS",
+            "slate_skipped": "PASS",
+            "required_annex_route": "PASS",
+            "optional_examines": "PASS",
+            "save_reboot_resume": "PASS",
+            "battle_alternate_inputs": "PASS",
+            "battle_victory": "PASS",
+            "battle_defeat_retry": "PASS",
+            "battle_defeat_return": "PASS",
+            "horizon_break_legal": "PASS",
+            "horizon_break_illegal": "PASS",
+            "dialogue_rapid_confirm_cancel": "PASS",
+            "controller_disconnect_reconnect": "PASS",
+            "corrupted_eeprom_fallback": "PASS",
+            "completed_sector_reentry": "PASS",
+            "stable_post_chapter_state": "PASS",
+        }
+        self.write(
+            "build/certification/evidence.json",
+            json.dumps(
+                {
+                    "schema": "n64game-certification-evidence-v1",
+                    "certification": "COMPLETE",
+                    "rom": {
+                        "sha256": hashlib.sha256(rom.read_bytes()).hexdigest(),
+                        "size": rom.stat().st_size,
+                    },
+                    "ares": {
+                        "version": "v148",
+                        "executable_sha256": "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345",
+                        "homebrew_mode": True,
+                        "expansion_pak": False,
+                    },
+                    "timed_runs": [
+                        {
+                            "id": "timed-run-a",
+                            "duration_seconds": 390,
+                            "active_control_seconds": 260,
+                            "route_result": "STABLE_BEACON_HOOK",
+                        },
+                        {
+                            "id": "timed-run-b",
+                            "duration_seconds": 450,
+                            "active_control_seconds": 300,
+                            "route_result": "STABLE_BEACON_HOOK",
+                        },
+                    ],
+                    "transition_soak": {
+                        "loops": 10,
+                        "heap_delta_bytes": 0,
+                        "resource_delta_count": 0,
+                        "peak_free_heap_bytes": 700000,
+                    },
+                    "performance": {
+                        "fps_min": 30,
+                        "free_heap_min_bytes": 700000,
+                        "sustained_sub30_windows": 0,
+                    },
+                    "qa_matrix": qa_rows,
+                },
+                sort_keys=True,
+            ),
+        )
+        self.make_executable(
+            "scripts/validate-certification-evidence",
+            (ROOT / "scripts" / "validate-certification-evidence").read_text(encoding="utf-8"),
+        )
+        payload = audit_tool.audit(self.root)
+        by_id = {item["id"]: item for item in payload["items"]}
+        for item_id in ("FAC-03", "FAC-04", "FAC-06", "FAC-07", "FAC-08"):
+            self.assertEqual(by_id[item_id]["status"], "PASS", item_id)
+            self.assertEqual(by_id[item_id]["missing"], [], item_id)
+            self.assertIn("certification=COMPLETE", " ".join(by_id[item_id]["evidence"]))
+        self.assertEqual(by_id["FAC-09"]["status"], "MISSING")
+        self.assertEqual(payload["result"], "INCOMPLETE")
+
     def test_public_reproducibility_report_must_match_head_and_all_identities(self) -> None:
         self.write_public_repro_report(head="0" * 40)
         status, evidence, missing = audit_tool.public_reproducibility_state(self.root)
