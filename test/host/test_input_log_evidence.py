@@ -131,6 +131,75 @@ class InputLogEvidenceTests(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("INPUT_LOG_FAIL", failed.stdout)
 
+    def test_capture_helper_validate_only_requires_full_keyboard_map(self) -> None:
+        required = [
+            ("up", {"stick_y": 127}),
+            ("down", {"stick_y": -127}),
+            ("left", {"stick_x": -127}),
+            ("right", {"stick_x": 127}),
+            ("confirm", {}),
+            ("cancel", {}),
+            ("start", {}),
+            ("pause", {}),
+            ("relay", {}),
+        ]
+        path = self.write_log(*[
+            input_record(
+                sequence,
+                pressed=input_log.BUTTON_MASKS[name],
+                **kwargs,
+            )
+            for sequence, (name, kwargs) in enumerate(required)
+        ])
+        passed = subprocess.run(
+            [
+                str(ROOT / "scripts" / "capture-input-smoke"),
+                "--validate-only",
+                f"--log={path}",
+                f"--rom={self.rom}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        payload = json.loads(passed.stdout)
+        self.assertEqual(payload["result"], "INPUT_LOG_PASS")
+        self.assertEqual(payload["required_inputs"], [name for name, _ in required])
+
+        missing_relay = self.write_log(*[
+            input_record(
+                sequence,
+                pressed=input_log.BUTTON_MASKS[name],
+                **kwargs,
+            )
+            for sequence, (name, kwargs) in enumerate(required[:-1])
+        ])
+        failed = subprocess.run(
+            [
+                str(ROOT / "scripts" / "capture-input-smoke"),
+                "--validate-only",
+                f"--log={missing_relay}",
+                f"--rom={self.rom}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("INPUT_LOG_FAIL", failed.stdout)
+        self.assertIn("relay", failed.stdout)
+
+    def test_capture_helper_documents_fail_closed_operator_path(self) -> None:
+        helper = (ROOT / "scripts" / "capture-input-smoke").read_text(encoding="utf-8")
+        self.assertIn("N64G_INPUT edge records", helper)
+        self.assertIn("--require up", helper)
+        self.assertIn("--require relay", helper)
+        self.assertIn("This creates input-smoke evidence only", helper)
+        self.assertIn('"$ROOT/scripts/run-ares"', helper)
+        self.assertIn("tee \"$LOG\"", helper)
+
     def test_mutations_are_rejected(self) -> None:
         cases = {
             "wrong_rom_hash": self.write_log(

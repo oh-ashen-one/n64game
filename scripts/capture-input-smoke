@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROM="$ROOT/build/game/n64game-gate3.z64"
+LOG="$ROOT/build/certification/input-smoke.log"
+EXPECTED_ROM_SHA=""
+EXPECTED_ROM_SHA_SET=0
+VALIDATE_ONLY=0
+
+usage() {
+    cat <<'EOF'
+usage: scripts/capture-input-smoke [--rom PATH] [--log PATH] [--expected-rom-sha256 HEX64] [--validate-only]
+
+Launch the pinned Ares wrapper, capture its log, and fail closed unless the log
+contains ROM-bound N64G_INPUT edge records for every keyboard-mapped control:
+up, down, left, right, confirm, cancel, start, pause, and relay.
+
+This creates input-smoke evidence only. It is not release certification.
+EOF
+}
+
+for argument in "$@"; do
+    case "$argument" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --validate-only)
+            VALIDATE_ONLY=1
+            ;;
+        --rom=*)
+            ROM="${argument#*=}"
+            ;;
+        --log=*)
+            LOG="${argument#*=}"
+            ;;
+        --expected-rom-sha256=*)
+            if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 ]]; then
+                printf 'duplicate --expected-rom-sha256 argument\n' >&2
+                exit 64
+            fi
+            EXPECTED_ROM_SHA_SET=1
+            EXPECTED_ROM_SHA="${argument#*=}"
+            ;;
+        --*)
+            printf 'unsupported argument: %s\n' "$argument" >&2
+            exit 64
+            ;;
+        *)
+            printf 'positional arguments are not supported: %s\n' "$argument" >&2
+            exit 64
+            ;;
+    esac
+done
+
+if [[ "$ROM" != /* ]]; then
+    ROM="$ROOT/$ROM"
+fi
+if [[ "$LOG" != /* ]]; then
+    LOG="$ROOT/$LOG"
+fi
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 && ! "$EXPECTED_ROM_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'expected ROM SHA-256 must be 64 lowercase hexadecimal characters\n' >&2
+    exit 64
+fi
+if [[ ! -f "$ROM" || -L "$ROM" ]]; then
+    printf 'ROM must be a non-symlink regular file: %s\n' "$ROM" >&2
+    exit 1
+fi
+if [[ -e "$LOG" && ( ! -f "$LOG" || -L "$LOG" ) ]]; then
+    printf 'log path must be a non-symlink regular file when it exists: %s\n' "$LOG" >&2
+    exit 1
+fi
+
+validate_log() {
+    "$ROOT/scripts/validate-input-log" \
+        --rom "$ROM" \
+        --log "$LOG" \
+        --require up \
+        --require down \
+        --require left \
+        --require right \
+        --require confirm \
+        --require cancel \
+        --require start \
+        --require pause \
+        --require relay
+}
+
+if [[ "$VALIDATE_ONLY" -eq 1 ]]; then
+    validate_log
+    exit $?
+fi
+
+mkdir -p "$(dirname "$LOG")"
+
+printf '%s\n' \
+    'N64GAME input-smoke capture' \
+    '1. Click the Ares game window after it opens.' \
+    '2. Press Arrow/WASD directions, Z, X, C, Space, and Return in visible game contexts.' \
+    '3. Close Ares after every required input has been pressed at least once.' \
+    '4. The validator will fail unless the ROM emitted real N64G_INPUT edge records.' >&2
+
+run_args=("--homebrew-mode")
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 ]]; then
+    run_args+=("--expected-rom-sha256=$EXPECTED_ROM_SHA")
+fi
+run_args+=("$ROM")
+
+set +e
+"$ROOT/scripts/run-ares" "${run_args[@]}" 2>&1 | tee "$LOG"
+run_status=${PIPESTATUS[0]}
+set -e
+if [[ "$run_status" -ne 0 ]]; then
+    printf 'Ares wrapper exited with status %s; log retained at %s\n' "$run_status" "$LOG" >&2
+    exit "$run_status"
+fi
+
+validate_log
