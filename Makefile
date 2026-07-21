@@ -20,7 +20,7 @@ test-authoring:
 	scripts/test-authoring-stack
 
 test-certification:
-	/usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_certification_evidence.py' -v
+	scripts/test-certification
 
 authoring-check:
 	scripts/check-authoring-stack

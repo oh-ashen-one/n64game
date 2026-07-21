@@ -78,3 +78,4 @@ jobs:
             build/reports/rom-size.md
             build/reports/validation-summary.md
             build/reports/host-tests.txt
+            build/reports/certification-tests.txt
