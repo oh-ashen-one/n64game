@@ -60,6 +60,19 @@ If it reports `ARES_EXITED_DURING_PROBE` or produces no screenshot/capture files
 do not fill visual benchmark packet rows from desktop screenshots or prose.
 Resolve the interactive emulator visibility/capture problem first.
 
+To make the preflight attempt the repository-bound capture key and record the
+exact before/after screenshot result, run:
+
+```sh
+scripts/audit-ares-capture-preflight \
+  --probe-launch \
+  --attempt-screenshot-hotkey
+```
+
+The report distinguishes a visible Ares window, a sent `P` hotkey, and actual
+new screenshot files. A visible window plus `hotkey_attempt: SENT` is still not
+visual evidence when `new_screenshot_count` is `0`.
+
 The isolated wrapper also binds Ares `Capture Screenshot` to `P`
 (`Hotkey/CaptureScreenshot=0x1/0/19;;`) and sends screenshots to:
 

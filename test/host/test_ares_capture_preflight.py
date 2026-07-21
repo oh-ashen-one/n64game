@@ -49,7 +49,7 @@ class AresCapturePreflightTests(unittest.TestCase):
             "  exit 0\n"
             "fi\n"
         )
-        payload = preflight.audit(self.root, self.rom, probe=False, wait_seconds=0.01, keep_running=False)
+        payload = preflight.audit(self.root, self.rom, probe=False, wait_seconds=0.01, keep_running=False, attempt_hotkey=False)
         self.assertEqual(payload["result"], "PASS")
         self.assertEqual(payload["launch_probe"]["result"], "NOT_RUN")
         self.assertEqual(payload["check_only"]["result"], "PASS")
@@ -67,7 +67,7 @@ class AresCapturePreflightTests(unittest.TestCase):
         old_screenshots = preflight.SCREENSHOTS
         preflight.SCREENSHOTS = self.root / "screenshots"
         try:
-            payload = preflight.audit(self.root, self.rom, probe=True, wait_seconds=0.01, keep_running=False)
+            payload = preflight.audit(self.root, self.rom, probe=True, wait_seconds=0.01, keep_running=False, attempt_hotkey=False)
         finally:
             preflight.SCREENSHOTS = old_screenshots
         self.assertEqual(payload["result"], "WARN_CAPTURE_NOT_READY")
@@ -77,7 +77,41 @@ class AresCapturePreflightTests(unittest.TestCase):
     def test_invalid_rom_fails_before_preflight_claims_anything(self) -> None:
         self.rom.write_bytes(b"not an n64 rom")
         with self.assertRaises(preflight.PreflightError):
-            preflight.audit(self.root, self.rom, probe=False, wait_seconds=0.01, keep_running=False)
+            preflight.audit(self.root, self.rom, probe=False, wait_seconds=0.01, keep_running=False, attempt_hotkey=False)
+
+    def test_probe_records_hotkey_attempt_without_promoting_capture(self) -> None:
+        self.write_run_ares(
+            "if [[ \" ${*} \" == *' --check-only '* ]]; then\n"
+            "  ROM=\"${@: -1}\"\n"
+            "  printf 'ares_version=\\nv148\\nrom_sha256=%s\\n' \"$(shasum -a 256 \"$ROM\" | awk '{print $1}')\"\n"
+            "  exit 0\n"
+            "fi\n"
+            "sleep 2\n"
+        )
+        old_screenshots = preflight.SCREENSHOTS
+        old_hotkey = preflight.attempt_screenshot_hotkey
+        preflight.SCREENSHOTS = self.root / "screenshots"
+
+        def fake_hotkey(wait_seconds: float) -> dict[str, object]:
+            return {
+                "result": "SENT",
+                "method": "fixture",
+                "key": "P",
+                "wait_seconds": wait_seconds,
+            }
+
+        preflight.attempt_screenshot_hotkey = fake_hotkey
+        try:
+            payload = preflight.audit(self.root, self.rom, probe=True, wait_seconds=0.01, keep_running=False, attempt_hotkey=True)
+        finally:
+            preflight.SCREENSHOTS = old_screenshots
+            preflight.attempt_screenshot_hotkey = old_hotkey
+        self.assertEqual(payload["result"], "WARN_CAPTURE_NOT_READY")
+        self.assertEqual(payload["launch_probe"]["hotkey_attempt"]["result"], "SENT")
+        self.assertIn(
+            "screenshot hotkey attempt produced no files in the isolated Ares screenshot directory",
+            payload["warnings"],
+        )
 
 
 if __name__ == "__main__":

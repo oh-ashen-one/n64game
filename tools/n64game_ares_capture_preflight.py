@@ -175,7 +175,52 @@ print(String(data: data, encoding: .utf8)!)
     }
 
 
-def launch_probe(root: Path, rom: Path, wait_seconds: float, keep_running: bool) -> dict[str, Any]:
+def attempt_screenshot_hotkey(wait_seconds: float) -> dict[str, Any]:
+    """Focus the Ares process and press the wrapper's screenshot hotkey.
+
+    This is a capture attempt, not evidence promotion. macOS UI automation can
+    fail or deliver no key event even when the Ares window is visible, so callers
+    must still compare the screenshot directory before/after.
+    """
+    script = """
+tell application "System Events"
+  set frontmost of process "ares" to true
+  delay 0.2
+  key code 35
+end tell
+"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=max(2.0, wait_seconds + 2.0),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "result": "UNAVAILABLE",
+            "method": "macos-system-events-key-code-35",
+            "key": "P",
+            "error": str(exc),
+        }
+    return {
+        "result": "SENT" if result.returncode == 0 else "FAILED",
+        "method": "macos-system-events-key-code-35",
+        "key": "P",
+        "returncode": result.returncode,
+        "output_tail": result.stdout.splitlines()[-10:],
+    }
+
+
+def launch_probe(
+    root: Path,
+    rom: Path,
+    wait_seconds: float,
+    keep_running: bool,
+    attempt_hotkey: bool,
+) -> dict[str, Any]:
     log_path = Path("/tmp") / f"n64game-ares-capture-preflight-{os.getpid()}.log"
     before = list_screenshots(SCREENSHOTS)
     with log_path.open("w", encoding="utf-8") as log:
@@ -195,6 +240,14 @@ def launch_probe(root: Path, rom: Path, wait_seconds: float, keep_running: bool)
     time.sleep(wait_seconds)
     still_running = process.poll() is None
     windows = ares_window_snapshot() if still_running else {"result": "NOT_VISIBLE", "windows": [], "count": 0}
+    hotkey_attempt = {
+        "result": "NOT_RUN",
+        "reason": "pass --attempt-screenshot-hotkey to focus Ares and press P after the launch probe",
+    }
+    if still_running and attempt_hotkey:
+        hotkey_attempt = attempt_screenshot_hotkey(wait_seconds)
+        time.sleep(max(0.5, min(wait_seconds, 3.0)))
+
     if still_running and not keep_running:
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -227,18 +280,23 @@ def launch_probe(root: Path, rom: Path, wait_seconds: float, keep_running: bool)
         "log_tail": log_tail(log_path),
         "window_probe": windows,
         "screenshot_dir": str(SCREENSHOTS),
+        "hotkey_attempt": hotkey_attempt,
         "new_screenshot_count": len(new_screenshots),
         "new_screenshots": new_screenshots,
     }
 
 
-def audit(root: Path, rom: Path, *, probe: bool, wait_seconds: float, keep_running: bool) -> dict[str, Any]:
+def audit(root: Path, rom: Path, *, probe: bool, wait_seconds: float, keep_running: bool, attempt_hotkey: bool) -> dict[str, Any]:
     identity = rom_identity(rom)
     check = run_check_only(root, rom)
     input_audit = run_input_audit(root)
-    launch = launch_probe(root, rom, wait_seconds, keep_running) if probe else {
+    launch = launch_probe(root, rom, wait_seconds, keep_running, attempt_hotkey) if probe else {
         "result": "NOT_RUN",
         "reason": "pass --probe-launch to test whether Ares remains alive for capture",
+        "hotkey_attempt": {
+            "result": "NOT_RUN",
+            "reason": "launch probe was not run",
+        },
     }
     failures = []
     warnings = []
@@ -251,7 +309,10 @@ def audit(root: Path, rom: Path, *, probe: bool, wait_seconds: float, keep_runni
     if launch.get("window_probe", {}).get("result") == "NOT_VISIBLE" and probe:
         warnings.append("launch probe did not expose a visible Ares window")
     if launch.get("new_screenshot_count", 0) == 0 and probe:
-        warnings.append("launch probe produced no files in the isolated Ares screenshot directory")
+        if attempt_hotkey:
+            warnings.append("screenshot hotkey attempt produced no files in the isolated Ares screenshot directory")
+        else:
+            warnings.append("launch probe produced no files in the isolated Ares screenshot directory")
     result = "FAIL" if failures else ("WARN_CAPTURE_NOT_READY" if warnings else "PASS")
     return {
         "schema": "n64game-ares-capture-preflight-v1",
@@ -265,6 +326,7 @@ def audit(root: Path, rom: Path, *, probe: bool, wait_seconds: float, keep_runni
         "next_actions": [
             "do not populate visual benchmark captures unless native 320x240 Ares/gameplay PNGs exist",
             "if launch_probe is ARES_EXITED_DURING_PROBE, run Ares interactively and capture the visible failure/log before retrying evidence capture",
+            "use --probe-launch --attempt-screenshot-hotkey to record whether the bound Ares P hotkey creates files",
             "after native frames exist, fill build/visual-benchmark/capture-packet.json and run scripts/assemble-visual-benchmark-captures --generate-enlarged",
         ],
     }
@@ -280,6 +342,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Input audit: `{payload['input_audit']['result']}`",
         f"- Launch probe: `{payload['launch_probe']['result']}`",
         f"- Ares window: `{payload['launch_probe'].get('window_probe', {}).get('result', 'NOT_RUN')}`",
+        f"- Screenshot hotkey: `{payload['launch_probe'].get('hotkey_attempt', {}).get('result', 'NOT_RUN')}`",
         f"- New screenshots: `{payload['launch_probe'].get('new_screenshot_count', 0)}`",
         "",
         "## Warnings",
@@ -298,6 +361,11 @@ def main() -> int:
     parser.add_argument("--probe-launch", action="store_true")
     parser.add_argument("--wait-seconds", type=float, default=4.0)
     parser.add_argument("--keep-running", action="store_true")
+    parser.add_argument(
+        "--attempt-screenshot-hotkey",
+        action="store_true",
+        help="during --probe-launch, focus Ares with macOS System Events and press the wrapper-bound P screenshot hotkey",
+    )
     parser.add_argument("--json-out", type=Path, default=ROOT / "build" / "reports" / "ares-capture-preflight.json")
     parser.add_argument("--md-out", type=Path, default=ROOT / "build" / "reports" / "ares-capture-preflight.md")
     args = parser.parse_args()
@@ -305,7 +373,14 @@ def main() -> int:
     root = args.root.resolve()
     rom = args.rom if args.rom.is_absolute() else root / args.rom
     try:
-        payload = audit(root, rom.resolve(), probe=args.probe_launch, wait_seconds=args.wait_seconds, keep_running=args.keep_running)
+        payload = audit(
+            root,
+            rom.resolve(),
+            probe=args.probe_launch,
+            wait_seconds=args.wait_seconds,
+            keep_running=args.keep_running,
+            attempt_hotkey=args.attempt_screenshot_hotkey,
+        )
     except (OSError, PreflightError) as exc:
         print(f"ARES_CAPTURE_PREFLIGHT_ERROR: {exc}")
         return 2
