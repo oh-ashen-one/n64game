@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Fail-closed validator for the opening storyboard release projection.
+
+This branch's final-acceptance audit uses the release-projection hook to prove
+that the GPT Image storyboard package requested for the opening cutscene is
+present, ordered, hash-bound, and ready to hand to a later AI-video animation
+pass. It deliberately does not claim production gameplay art approval or Ares
+certification.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import struct
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+EXPECTED_RUNTIME_SECONDS = 54.5
+PANEL_DIMENSIONS = (1600, 1200)
+SUPPORT_IMAGES = {
+    "storyboard/opening/CONTACT_SHEET.png": (1848, 1904),
+    "storyboard/opening/COLOR_SCRIPT.png": (2112, 462),
+    "storyboard/opening/continuity/CONTINUITY_SHEET.png": (2000, 1500),
+}
+SUPPORT_DOCS = (
+    "storyboard/opening/SHOT_LIST.md",
+    "storyboard/opening/PROMPT_MANIFEST.md",
+    "storyboard/opening/DELIVERY_MANIFEST.md",
+    "storyboard/opening/COLOR_SCRIPT.md",
+)
+PANEL_ROW_RE = re.compile(
+    r"^\|\s*(?P<order>\d{2})\s*\|\s*`(?P<path>storyboard/opening/panels/(?P=order)\.png)`\s*\|"
+    r".*?\|\s*(?P<width>\d+) x (?P<height>\d+)\s*\|\s*(?P<bytes>[0-9,]+)\s*\|"
+    r"\s*`(?P<sha>[0-9a-f]{64})`\s*\|",
+    re.MULTILINE,
+)
+SUPPORT_ROW_RE = re.compile(
+    r"^\|\s*`(?P<path>storyboard/opening/(?:continuity/CONTINUITY_SHEET|CONTACT_SHEET|COLOR_SCRIPT)\.png)`"
+    r"\s*\|.*?\|\s*(?P<width>\d+) x (?P<height>\d+)\s*\|\s*(?P<bytes>[0-9,]+)\s*\|"
+    r"\s*`(?P<sha>[0-9a-f]{64})`\s*\|",
+    re.MULTILINE,
+)
+
+
+class ProjectionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ManifestRow:
+    path: str
+    dimensions: tuple[int, int]
+    byte_size: int
+    sha256: str
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise ProjectionError(f"not a canonical PNG: {path}")
+    return struct.unpack(">II", data[16:24])
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def parse_rows(pattern: re.Pattern[str], text: str) -> dict[str, ManifestRow]:
+    rows: dict[str, ManifestRow] = {}
+    for match in pattern.finditer(text):
+        path = match.group("path")
+        rows[path] = ManifestRow(
+            path=path,
+            dimensions=(int(match.group("width")), int(match.group("height"))),
+            byte_size=int(match.group("bytes").replace(",", "")),
+            sha256=match.group("sha"),
+        )
+    return rows
+
+
+def require_file(root: Path, relative: str) -> Path:
+    path = root / relative
+    if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0:
+        raise ProjectionError(f"missing, symlinked, or empty file: {relative}")
+    return path
+
+
+def validate_manifest_rows(root: Path, rows: dict[str, ManifestRow], expected: dict[str, tuple[int, int]]) -> None:
+    if set(rows) != set(expected):
+        missing = sorted(set(expected) - set(rows))
+        extra = sorted(set(rows) - set(expected))
+        raise ProjectionError(f"manifest rows differ; missing={missing} extra={extra}")
+    for relative, dimensions in expected.items():
+        row = rows[relative]
+        path = require_file(root, relative)
+        if row.dimensions != dimensions:
+            raise ProjectionError(f"manifest dimensions changed for {relative}")
+        if png_dimensions(path) != dimensions:
+            raise ProjectionError(f"actual dimensions changed for {relative}")
+        if path.stat().st_size != row.byte_size:
+            raise ProjectionError(f"byte size changed for {relative}")
+        actual_sha = sha256(path)
+        if actual_sha != row.sha256:
+            raise ProjectionError(f"SHA-256 changed for {relative}")
+
+
+def validate_shot_list(root: Path) -> None:
+    text = require_file(root, "storyboard/opening/SHOT_LIST.md").read_text(encoding="utf-8")
+    if "one 54.5-second" not in text or "**00.0–54.5**" not in text or "**54.5 s**" not in text:
+        raise ProjectionError("shot list does not bind the 54.5-second runtime")
+    panel_mentions = re.findall(r"\[`panels/(\d{2})\.png`\]\(panels/\1\.png\)", text)
+    if panel_mentions != [f"{index:02d}" for index in range(1, 13)]:
+        raise ProjectionError("shot list does not reference panels 01-12 in order")
+
+def validate_prompt_manifest(root: Path) -> None:
+    text = require_file(root, "storyboard/opening/PROMPT_MANIFEST.md").read_text(encoding="utf-8")
+    for token in ("## Exact effective prompts", "### CONTINUITY", "### 01", "### 12", "Rejected outputs"):
+        if token not in text:
+            raise ProjectionError(f"prompt manifest missing {token}")
+    for index in range(1, 13):
+        if f"storyboard/opening/panels/{index:02d}.png" not in text:
+            raise ProjectionError(f"prompt manifest missing panel {index:02d}")
+
+
+def validate_color_script(root: Path) -> None:
+    text = require_file(root, "storyboard/opening/COLOR_SCRIPT.md").read_text(encoding="utf-8")
+    for token in ("Warm dusk", "First Fracture", "Violet crisis", "Cool signal"):
+        if token not in text:
+            raise ProjectionError(f"color script missing {token}")
+
+
+def validate(root: Path) -> tuple[int, int, int]:
+    delivery = require_file(root, "storyboard/opening/DELIVERY_MANIFEST.md").read_text(encoding="utf-8")
+    if f"Sequence runtime: `{EXPECTED_RUNTIME_SECONDS} seconds`" not in delivery:
+        raise ProjectionError("delivery manifest runtime changed")
+    if "Ordered panel count: `12`" not in delivery or "Fail-closed delivery checklist" not in delivery:
+        raise ProjectionError("delivery manifest is missing panel count or checklist")
+
+    panel_expected = {
+        f"storyboard/opening/panels/{index:02d}.png": PANEL_DIMENSIONS
+        for index in range(1, 13)
+    }
+    panel_rows = parse_rows(PANEL_ROW_RE, delivery)
+    support_rows = parse_rows(SUPPORT_ROW_RE, delivery)
+    validate_manifest_rows(root, panel_rows, panel_expected)
+    validate_manifest_rows(root, support_rows, SUPPORT_IMAGES)
+    for relative in SUPPORT_DOCS:
+        require_file(root, relative)
+    validate_shot_list(root)
+    validate_prompt_manifest(root)
+    validate_color_script(root)
+    return len(panel_rows), len(support_rows), len(SUPPORT_DOCS)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args()
+    root = args.root.resolve()
+    try:
+        panels, support_images, support_docs = validate(root)
+    except (OSError, UnicodeDecodeError, ProjectionError) as exc:
+        print(f"release_projection=FAIL error={exc}", file=sys.stderr)
+        return 1
+    print(
+        "release_projection=PASS "
+        f"storyboard_panels={panels} support_images={support_images} "
+        f"support_docs={support_docs} runtime_seconds={EXPECTED_RUNTIME_SECONDS:.1f}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
