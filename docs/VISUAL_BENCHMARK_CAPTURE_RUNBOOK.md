@@ -59,9 +59,23 @@ from the local wrapper, but the observed Ares output is `640×240`. That proves
 capture reachability only. Do not use those raw files directly as `native`
 packet members.
 
-If a `640×240` Ares screenshot is only exact horizontal 2× duplication of the
-game's `320×240` framebuffer, derive the native packet member through the
-fail-closed importer:
+Before attempting import, analyze each `640×240` screenshot:
+
+```sh
+scripts/assemble-visual-benchmark-captures \
+  --artifact-root "$PWD" \
+  --analyze-ares-640x240 review/benchmark/evidence/ares-raw/exploration.png \
+  --analysis-out build/reports/ares-640x240-exploration-analysis.json
+```
+
+The analyzer records the exact-pair pass/fail result, mismatch count, first
+sample mismatches, worst rows/columns, max channel delta, and whether failures
+are border-only or present inside the gameplay frame. The output is diagnostic
+only and is explicitly marked `DIAGNOSTIC_ONLY_NOT_VISUAL_BENCHMARK_EVIDENCE`;
+it does not approve, convert, crop, or downsample anything.
+
+If the analyzer reports `PASS_EXACT_DUPLICATE`, derive the native packet member
+through the fail-closed importer:
 
 ```sh
 scripts/assemble-visual-benchmark-captures \
@@ -75,11 +89,15 @@ pixel pair `(2x, 2x+1)` is byte-identical for all 320×240 native positions. It
 then writes a fresh `320×240` PNG and reports the source/native file hashes and
 decoded RGBA hashes. A rejection means the screenshot is scaled, filtered,
 aspect-corrected, or otherwise not a safe native-frame source; leave the packet
-row empty and fix capture rather than downsampling by eye.
+row empty and fix capture rather than downsampling, cropping, or filtering by
+eye.
 
 The existing 2026-07-21 Ares menu screenshots in the local isolated screenshot
-directory were tested against this importer and rejected because their
-horizontal pixel pairs were not exact duplicates. They remain diagnostic
+directory were tested against this analyzer/importer and rejected because their
+horizontal pixel pairs were not exact duplicates. The diagnostic reports showed
+4,552 interior mismatching native-pairs per screenshot, with approximately
+4,826–5,051 total mismatching pairs depending on the file. That is not a
+border-only or overscan-only mismatch; those files remain diagnostic
 capture-reachability artifacts only, not visual benchmark input.
 
 After the native files and non-placeholder packet metadata are filled in, the

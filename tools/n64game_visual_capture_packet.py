@@ -40,6 +40,7 @@ ARES_HORIZONTAL_DUPLICATE_SIZE = (640, 240)
 ENLARGED_SIZE = (1280, 960)
 DEFAULT_PACKET = ROOT / "build" / "visual-benchmark" / "capture-packet.json"
 DEFAULT_REPORT = ROOT / "build" / "reports" / "visual-capture-evidence.json"
+DEFAULT_ARES_ANALYSIS = ROOT / "build" / "reports" / "ares-640x240-capture-analysis.json"
 
 
 class CapturePacketError(RuntimeError):
@@ -278,6 +279,121 @@ def derive_native_from_horizontal_duplicate(ares_rgba: bytes) -> bytes:
     return bytes(native)
 
 
+def analyze_ares_horizontal_duplicate(
+    source_path: Path,
+    artifact_root: Path,
+    *,
+    border_native_pixels: int = 8,
+    max_samples: int = 24,
+) -> dict[str, Any]:
+    _width, _height, ares_rgba = decode_png_rgba(
+        source_path,
+        ARES_HORIZONTAL_DUPLICATE_SIZE,
+        "ares_source",
+    )
+    if border_native_pixels < 0:
+        raise CapturePacketError("border_native_pixels must be non-negative")
+    if border_native_pixels * 2 >= NATIVE_SIZE[0] or border_native_pixels * 2 >= NATIVE_SIZE[1]:
+        raise CapturePacketError("border_native_pixels is too large for a 320x240 native frame")
+
+    total_pairs = NATIVE_SIZE[0] * NATIVE_SIZE[1]
+    mismatch_count = 0
+    border_mismatch_count = 0
+    interior_mismatch_count = 0
+    max_channel_delta = 0
+    delta_sum = 0
+    first_mismatches: list[dict[str, Any]] = []
+    row_mismatch_counts = [0 for _ in range(NATIVE_SIZE[1])]
+    column_mismatch_counts = [0 for _ in range(NATIVE_SIZE[0])]
+
+    for y in range(NATIVE_SIZE[1]):
+        for x in range(NATIVE_SIZE[0]):
+            left_offset = ((y * ARES_HORIZONTAL_DUPLICATE_SIZE[0]) + (x * 2)) * 4
+            right_offset = left_offset + 4
+            left = ares_rgba[left_offset:left_offset + 4]
+            right = ares_rgba[right_offset:right_offset + 4]
+            if left == right:
+                continue
+            deltas = [abs(left[index] - right[index]) for index in range(4)]
+            pair_max = max(deltas)
+            max_channel_delta = max(max_channel_delta, pair_max)
+            delta_sum += sum(deltas[:3])
+            mismatch_count += 1
+            row_mismatch_counts[y] += 1
+            column_mismatch_counts[x] += 1
+            is_border = (
+                x < border_native_pixels or
+                x >= NATIVE_SIZE[0] - border_native_pixels or
+                y < border_native_pixels or
+                y >= NATIVE_SIZE[1] - border_native_pixels
+            )
+            if is_border:
+                border_mismatch_count += 1
+            else:
+                interior_mismatch_count += 1
+            if len(first_mismatches) < max_samples:
+                first_mismatches.append(
+                    {
+                        "native_x": x,
+                        "native_y": y,
+                        "source_columns": [x * 2, x * 2 + 1],
+                        "left_rgba": list(left),
+                        "right_rgba": list(right),
+                        "max_channel_delta": pair_max,
+                    }
+                )
+
+    worst_rows = sorted(
+        (
+            {"native_y": y, "mismatches": count}
+            for y, count in enumerate(row_mismatch_counts)
+            if count
+        ),
+        key=lambda item: (-item["mismatches"], item["native_y"]),
+    )[:8]
+    worst_columns = sorted(
+        (
+            {"native_x": x, "mismatches": count}
+            for x, count in enumerate(column_mismatch_counts)
+            if count
+        ),
+        key=lambda item: (-item["mismatches"], item["native_x"]),
+    )[:8]
+    mismatch_ratio = mismatch_count / total_pairs
+    return {
+        "schema": "n64game-ares-640x240-capture-analysis-v1",
+        "result": "PASS_EXACT_DUPLICATE" if mismatch_count == 0 else "FAIL_NOT_EXACT_DUPLICATE",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": display_path(source_path, artifact_root),
+        "source_sha256": sha256(source_path),
+        "source_rgba_sha256": rgba_sha256(ares_rgba),
+        "dimensions": {
+            "width": ARES_HORIZONTAL_DUPLICATE_SIZE[0],
+            "height": ARES_HORIZONTAL_DUPLICATE_SIZE[1],
+            "expected_derivation": "horizontal 2x exact duplicate of 320x240 native frame",
+        },
+        "pair_analysis": {
+            "total_pairs": total_pairs,
+            "matching_pairs": total_pairs - mismatch_count,
+            "mismatching_pairs": mismatch_count,
+            "mismatch_ratio": mismatch_ratio,
+            "max_channel_delta": max_channel_delta,
+            "mean_rgb_delta_per_mismatching_pair": (
+                0.0 if mismatch_count == 0 else delta_sum / (mismatch_count * 3)
+            ),
+            "border_native_pixels": border_native_pixels,
+            "border_mismatches": border_mismatch_count,
+            "interior_mismatches": interior_mismatch_count,
+            "mismatches_are_border_only": mismatch_count > 0 and interior_mismatch_count == 0,
+        },
+        "first_mismatches": first_mismatches,
+        "worst_rows": worst_rows,
+        "worst_columns": worst_columns,
+        "exact_import_allowed": mismatch_count == 0,
+        "approval_effect": "DIAGNOSTIC_ONLY_NOT_VISUAL_BENCHMARK_EVIDENCE",
+    }
+
+
 def assert_exact_nearest_neighbor(native_rgba: bytes, enlarged_rgba: bytes, label: str) -> None:
     for y in range(NATIVE_SIZE[1]):
         for x in range(NATIVE_SIZE[0]):
@@ -468,6 +584,9 @@ def main() -> int:
     parser.add_argument("--artifact-root", type=Path, default=ROOT)
     parser.add_argument("--init-template", action="store_true", help="write a placeholder capture packet and exit")
     parser.add_argument("--generate-enlarged", action="store_true", help="generate exact 4x nearest-neighbor enlarged PNGs from packet native_path rows before validation")
+    parser.add_argument("--analyze-ares-640x240", metavar="SOURCE", help="diagnose whether an Ares 640x240 PNG is exact horizontal 2x duplicate native evidence")
+    parser.add_argument("--analysis-out", type=Path, default=DEFAULT_ARES_ANALYSIS, help="JSON report path for --analyze-ares-640x240")
+    parser.add_argument("--analysis-border-native-pixels", type=int, default=8, help="native-pixel border width used only for diagnostic mismatch classification")
     parser.add_argument("--import-ares-640x240", metavar="SOURCE", help="derive one native 320x240 PNG from an Ares 640x240 screenshot only if every horizontal pixel pair is identical")
     parser.add_argument("--native-out", metavar="OUTPUT", help="repository-relative output path for --import-ares-640x240")
     parser.add_argument("--overwrite-generated", action="store_true", help="allow --generate-enlarged to replace existing enlarged_path PNGs")
@@ -476,6 +595,7 @@ def main() -> int:
     artifact_root = args.artifact_root if args.artifact_root.is_absolute() else ROOT / args.artifact_root
     packet = args.packet if args.packet.is_absolute() else ROOT / args.packet
     report = args.report if args.report.is_absolute() else ROOT / args.report
+    analysis_out = args.analysis_out if args.analysis_out.is_absolute() else ROOT / args.analysis_out
 
     if args.init_template:
         packet.parent.mkdir(parents=True, exist_ok=True)
@@ -498,6 +618,31 @@ def main() -> int:
             print(f"VISUAL_CAPTURE_PACKET_ERROR: {exc}")
             return 1
         print(json.dumps({"result": "PASS", **imported}, sort_keys=True))
+        return 0
+
+    if args.analyze_ares_640x240:
+        try:
+            source_path = resolve_artifact(args.analyze_ares_640x240, "ares_source", artifact_root)
+            analysis = analyze_ares_horizontal_duplicate(
+                source_path,
+                artifact_root,
+                border_native_pixels=args.analysis_border_native_pixels,
+            )
+            analysis_out.parent.mkdir(parents=True, exist_ok=True)
+            analysis_out.write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except (OSError, CapturePacketError) as exc:
+            print(f"VISUAL_CAPTURE_PACKET_ERROR: {exc}")
+            return 1
+        print(json.dumps(
+            {
+                "result": analysis["result"],
+                "analysis": display_path(analysis_out, ROOT),
+                "exact_import_allowed": analysis["exact_import_allowed"],
+                "mismatching_pairs": analysis["pair_analysis"]["mismatching_pairs"],
+                "interior_mismatches": analysis["pair_analysis"]["interior_mismatches"],
+            },
+            sort_keys=True,
+        ))
         return 0
 
     try:

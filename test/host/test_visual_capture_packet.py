@@ -181,6 +181,49 @@ class VisualCapturePacketTests(unittest.TestCase):
         generated = self.run_script("--generate-enlarged", "--overwrite-generated")
         self.assertEqual(generated.returncode, 0, generated.stdout)
 
+    def test_analyze_ares_640x240_reports_exact_duplicate_without_approval(self) -> None:
+        native = self.make_native_rgba(12)
+        self.write_png_rgba(self.root / "captures/ares-exact.png", 640, 240, self.horizontal_duplicate_2x(native))
+        analysis = self.root / "analysis/exact.json"
+        result = self.run_script(
+            "--analyze-ares-640x240",
+            "captures/ares-exact.png",
+            "--analysis-out",
+            str(analysis),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        stdout = json.loads(result.stdout)
+        self.assertEqual(stdout["result"], "PASS_EXACT_DUPLICATE")
+        self.assertTrue(stdout["exact_import_allowed"])
+        payload = json.loads(analysis.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema"], "n64game-ares-640x240-capture-analysis-v1")
+        self.assertEqual(payload["pair_analysis"]["mismatching_pairs"], 0)
+        self.assertEqual(payload["approval_effect"], "DIAGNOSTIC_ONLY_NOT_VISUAL_BENCHMARK_EVIDENCE")
+
+    def test_analyze_ares_640x240_reports_interior_mismatches(self) -> None:
+        native = bytearray(self.horizontal_duplicate_2x(self.make_native_rgba(13)))
+        native[((0 * 640) + 3) * 4:((0 * 640) + 3) * 4 + 4] = bytes((1, 2, 3, 255))
+        native[((55 * 640) + 101) * 4:((55 * 640) + 101) * 4 + 4] = bytes((4, 5, 6, 255))
+        self.write_png_rgba(self.root / "captures/ares-filtered.png", 640, 240, bytes(native))
+        analysis = self.root / "analysis/filtered.json"
+        result = self.run_script(
+            "--analyze-ares-640x240",
+            "captures/ares-filtered.png",
+            "--analysis-out",
+            str(analysis),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        stdout = json.loads(result.stdout)
+        self.assertEqual(stdout["result"], "FAIL_NOT_EXACT_DUPLICATE")
+        self.assertFalse(stdout["exact_import_allowed"])
+        self.assertEqual(stdout["mismatching_pairs"], 2)
+        self.assertEqual(stdout["interior_mismatches"], 1)
+        payload = json.loads(analysis.read_text(encoding="utf-8"))
+        self.assertEqual(payload["pair_analysis"]["border_mismatches"], 1)
+        self.assertEqual(payload["pair_analysis"]["interior_mismatches"], 1)
+        self.assertFalse(payload["pair_analysis"]["mismatches_are_border_only"])
+        self.assertEqual(payload["first_mismatches"][0]["source_columns"], [2, 3])
+
     def test_import_ares_640x240_rejects_non_duplicate_horizontal_pairs(self) -> None:
         native = bytearray(self.horizontal_duplicate_2x(self.make_native_rgba(10)))
         native[((7 * 640) + 11) * 4:((7 * 640) + 11) * 4 + 4] = bytes((1, 2, 3, 255))
