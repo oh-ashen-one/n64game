@@ -52,6 +52,16 @@ Every evidence path is relative to the manifest directory. `timing_runs` contain
 
 Use the manifest assembler instead of hand-editing hash fields once the raw logs and preserved EEPROM snapshots exist under the ignored evidence directory. It computes every hash from disk, rejects absolute paths, `..` traversal, symlink traversal, duplicate run IDs, duplicate raw logs, duplicate EEPROM snapshots, wrong timing-path order, unsupported save scenarios, and non-512-byte EEPROM snapshots before a package can be passed to the validator.
 
+Before the real operator pass, generate the capture plan for the exact ROM being tested:
+
+```sh
+scripts/plan-certification-captures \
+  --rom build/game/n64game-gate3.z64 \
+  --out-dir build/certification
+```
+
+This writes `build/certification/capture-plan.json` and `build/certification/CAPTURE_PLAN.md` with the exact run matrix, expected ROM hash, Ares launch commands, input-smoke validation, manifest-assembly command, and validator/summary command. It creates only an ignored plan and empty evidence directories. It is not evidence and always reports `certification=NOT_CLAIMED`.
+
 ```sh
 mkdir -p build/certification/logs build/certification/saves
 
