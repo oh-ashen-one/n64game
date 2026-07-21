@@ -271,6 +271,18 @@ def validate_storyboard(rows: list[Row], root: Path) -> None:
         raise ProjectionError("storyboard projection is not the delivered 12-panel package")
     delivery_path = root / "storyboard" / "opening" / "DELIVERY_MANIFEST.md"
     delivery = delivery_path.read_text(encoding="utf-8")
+    if "codex/storyboard-opening" in delivery or "github.com/oh-ashen-one/n64game/blob/" in delivery:
+        raise ProjectionError("storyboard delivery manifest must use portable repository-relative links")
+    for link in [f"](panels/{index:02d}.png)" for index in range(1, 13)]:
+        if link not in delivery:
+            raise ProjectionError(f"storyboard delivery manifest is missing relative link {link}")
+    for link in (
+        "](continuity/CONTINUITY_SHEET.png)",
+        "](CONTACT_SHEET.png)",
+        "](COLOR_SCRIPT.png)",
+    ):
+        if link not in delivery:
+            raise ProjectionError(f"storyboard delivery manifest is missing relative link {link}")
     for index in range(1, 13):
         path = root / "storyboard" / "opening" / "panels" / f"{index:02d}.png"
         if png_dimensions(path) != (1600, 1200):
