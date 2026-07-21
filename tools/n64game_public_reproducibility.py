@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -174,7 +175,9 @@ def find_successful_run(root: Path, repo: str, head: str) -> dict[str, Any]:
 
 
 def build_fresh_public_clone(root: Path, repo: str, head: str, keep_clone: Path | None) -> tuple[RomIdentity, dict[str, str], str]:
-    parent = Path(tempfile.mkdtemp(prefix="n64game-public-clone-"))
+    temp_root = root / "build" / "tmp-public-repro"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    parent = Path(tempfile.mkdtemp(prefix="clone-", dir=temp_root))
     clone = parent / "n64game"
     try:
         require_success(
