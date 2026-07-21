@@ -197,6 +197,13 @@ static void resolve_round(N64GameBattle *battle)
     }
 }
 
+static void begin_command_battle(N64GameBattle *battle)
+{
+    n64game_battle_begin(battle);
+    assert(battle->phase == N64GAME_BATTLE_INTRO);
+    battle->phase = N64GAME_BATTLE_COMMAND;
+}
+
 static void test_input_only_release_route(void)
 {
     N64GameCore game;
@@ -574,7 +581,7 @@ static void test_controller_disconnect_freezes_and_reconnect_clears_edges(void)
 
     game.paused = false;
     game.scene = N64GAME_SCENE_BATTLE;
-    n64game_battle_begin(&game.battle);
+    begin_command_battle(&game.battle);
     assert(n64game_battle_commit_action(&game.battle, 0U, 0U, 2U));
     assert(n64game_battle_commit_action(&game.battle, 1U, 0U, 3U));
     game.battle_present_delay = 19U;
@@ -643,7 +650,7 @@ static void test_performance_summary_uses_runtime_telemetry(void)
 static void test_battle_legality_order_retarget_and_retry(void)
 {
     N64GameBattle battle;
-    n64game_battle_begin(&battle);
+    begin_command_battle(&battle);
     assert(!n64game_battle_commit_finisher(&battle));
     assert(!n64game_battle_commit_action(&battle, 1U, 0U, 2U));
     assert(!n64game_battle_commit_action(&battle, 0U, 0U, 1U));
@@ -668,7 +675,7 @@ static void test_battle_legality_order_retarget_and_retry(void)
     game.party_hp[0] = 51;
     game.party_hp[1] = 44;
     game.prebattle_resonance = 17U;
-    n64game_battle_begin(&game.battle);
+    begin_command_battle(&game.battle);
     game.battle.resonance = 83U;
     game.battle.phase = N64GAME_BATTLE_DEFEAT;
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
@@ -690,7 +697,7 @@ static void test_battle_controller_selection_and_presentation_cadence(void)
     n64game_core_init(&game);
     game.scene = N64GAME_SCENE_BATTLE;
     game.scene_ticks = 45U;
-    n64game_battle_begin(&game.battle);
+    begin_command_battle(&game.battle);
 
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     assert(game.battle_selecting_target);
@@ -768,7 +775,7 @@ static void test_trial_entry_selects_a_living_player_or_defeats(void)
 static void test_direct_damage_strategy_can_win_with_one_survivor(void)
 {
     N64GameBattle battle;
-    n64game_battle_begin(&battle);
+    begin_command_battle(&battle);
     unsigned rounds = 0U;
     while (battle.phase == N64GAME_BATTLE_COMMAND) {
         const uint8_t first_enemy = battle.actors[2].hp > 0 ? 2U : 3U;
@@ -795,6 +802,7 @@ static void test_save_round_trip_and_corruption_deaths(void)
     game.opening_cinematic_seen = true;
     game.relay_unlocked = true;
     n64game_battle_begin(&game.battle);
+    assert(game.battle.phase == N64GAME_BATTLE_INTRO);
     game.party_hp[0] = 61;
     game.party_hp[1] = 55;
     game.battle.resonance = 44U;

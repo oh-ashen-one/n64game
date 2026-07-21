@@ -113,8 +113,10 @@ static void restore_prebattle_snapshot(N64GameCore *game)
     game->battle.actors[0].hp = game->party_hp[0];
     game->battle.actors[1].hp = game->party_hp[1];
     if (game->battle.actors[0].hp > 0) {
+        game->battle.phase = N64GAME_BATTLE_COMMAND;
         game->battle.command_actor = 0U;
     } else if (game->battle.actors[1].hp > 0) {
+        game->battle.phase = N64GAME_BATTLE_COMMAND;
         game->battle.command_actor = 1U;
     } else {
         game->battle.phase = N64GAME_BATTLE_DEFEAT;
@@ -1030,7 +1032,6 @@ void n64game_battle_begin(N64GameBattle *battle)
         },
         .round = 1U,
     };
-    battle->phase = N64GAME_BATTLE_COMMAND;
 }
 
 static bool alive(const N64GameBattleActor *actor)
