@@ -311,6 +311,8 @@ def main() -> int:
                 str(manifest),
                 "--rom",
                 str(rom),
+                "--artifact-root",
+                str(artifact_root),
             ],
             cwd=ROOT,
             text=True,

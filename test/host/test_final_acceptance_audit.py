@@ -44,6 +44,17 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
+    def sha256_file(self, relative: str) -> str:
+        return hashlib.sha256((self.root / relative).read_bytes()).hexdigest()
+
+    def artifact_record(self, relative: str) -> dict[str, object]:
+        path = self.root / relative
+        return {
+            "path": relative,
+            "sha256": self.sha256_file(relative),
+            "size": path.stat().st_size,
+        }
+
     def make_executable(self, relative: str, text: str) -> None:
         self.write(relative, text)
         (self.root / relative).chmod(0o755)
@@ -189,6 +200,19 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
             "completed_sector_reentry": "PASS",
             "stable_post_chapter_state": "PASS",
         }
+        timed_a = "build/certification/timed-run-a.md"
+        timed_b = "build/certification/timed-run-b.md"
+        soak = "build/certification/transition-soak.md"
+        performance = "build/certification/performance.md"
+        self.write(timed_a, "timed run a stable beacon hook\n")
+        self.write(timed_b, "timed run b stable beacon hook\n")
+        self.write(soak, "ten-loop soak passes heap/resource invariants\n")
+        self.write(performance, "fps and heap performance pass\n")
+        qa_artifacts: dict[str, str] = {}
+        for name in qa_rows:
+            relative = f"build/certification/qa/{name}.md"
+            self.write(relative, f"{name}: PASS\n")
+            qa_artifacts[name] = relative
         self.write(
             "build/certification/evidence.json",
             json.dumps(
@@ -211,12 +235,16 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
                             "duration_seconds": 390,
                             "active_control_seconds": 260,
                             "route_result": "STABLE_BEACON_HOOK",
+                            "evidence_path": timed_a,
+                            "evidence_sha256": self.sha256_file(timed_a),
                         },
                         {
                             "id": "timed-run-b",
                             "duration_seconds": 450,
                             "active_control_seconds": 300,
                             "route_result": "STABLE_BEACON_HOOK",
+                            "evidence_path": timed_b,
+                            "evidence_sha256": self.sha256_file(timed_b),
                         },
                     ],
                     "transition_soak": {
@@ -224,13 +252,30 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
                         "heap_delta_bytes": 0,
                         "resource_delta_count": 0,
                         "peak_free_heap_bytes": 700000,
+                        "evidence_path": soak,
+                        "evidence_sha256": self.sha256_file(soak),
                     },
                     "performance": {
                         "fps_min": 30,
                         "free_heap_min_bytes": 700000,
                         "sustained_sub30_windows": 0,
+                        "evidence_path": performance,
+                        "evidence_sha256": self.sha256_file(performance),
                     },
                     "qa_matrix": qa_rows,
+                    "evidence_artifacts": {
+                        "required_count": 22,
+                        "timed_and_metric_artifacts": {
+                            "timed_runs[1]": self.artifact_record(timed_a),
+                            "timed_runs[2]": self.artifact_record(timed_b),
+                            "transition_soak": self.artifact_record(soak),
+                            "performance": self.artifact_record(performance),
+                        },
+                        "qa_artifacts": {
+                            name: self.artifact_record(relative)
+                            for name, relative in qa_artifacts.items()
+                        },
+                    },
                 },
                 sort_keys=True,
             ),

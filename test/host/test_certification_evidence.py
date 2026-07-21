@@ -38,6 +38,14 @@ class CertificationEvidenceTests(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
         return relative
 
+    def artifact_record(self, relative: str) -> dict[str, object]:
+        path = self.root / relative
+        return {
+            "path": relative,
+            "sha256": self.run_command(["shasum", "-a", "256", str(path)]).stdout.split()[0],
+            "size": path.stat().st_size,
+        }
+
     def base_payload(self) -> dict[str, object]:
         return {
             "schema": "n64game-certification-evidence-v1",
@@ -48,7 +56,15 @@ class CertificationEvidenceTests(unittest.TestCase):
 
     def test_not_claimed_manifest_validates_without_certifying_release(self) -> None:
         manifest = self.write_manifest(self.base_payload())
-        result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertEqual(result.returncode, 0, result.stdout)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["result"], "PASS")
@@ -59,7 +75,15 @@ class CertificationEvidenceTests(unittest.TestCase):
         payload = self.base_payload()
         payload["rom"] = {"sha256": "0" * 64, "size": self.rom.stat().st_size}
         manifest = self.write_manifest(payload)
-        result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("rom.sha256 does not match", result.stdout)
 
@@ -67,11 +91,47 @@ class CertificationEvidenceTests(unittest.TestCase):
         payload = self.base_payload()
         payload["certification"] = "COMPLETE"
         manifest = self.write_manifest(payload)
-        result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("ares must be an object", result.stdout)
 
     def test_complete_manifest_can_validate_when_all_required_rows_pass(self) -> None:
+        qa_names = (
+            "cold_boot_default_name",
+            "cold_boot_custom_name",
+            "slate_watched",
+            "slate_skipped",
+            "required_annex_route",
+            "optional_examines",
+            "save_reboot_resume",
+            "battle_alternate_inputs",
+            "battle_victory",
+            "battle_defeat_retry",
+            "battle_defeat_return",
+            "horizon_break_legal",
+            "horizon_break_illegal",
+            "dialogue_rapid_confirm_cancel",
+            "controller_disconnect_reconnect",
+            "corrupted_eeprom_fallback",
+            "completed_sector_reentry",
+            "stable_post_chapter_state",
+        )
+        timed_a = self.write_artifact("timed-run-a.md", "timed run a stable beacon hook\n")
+        timed_b = self.write_artifact("timed-run-b.md", "timed run b stable beacon hook\n")
+        soak = self.write_artifact("transition-soak.md", "ten loops heap/resource stable\n")
+        performance = self.write_artifact("performance.md", "fps and heap pass\n")
+        qa_artifacts = {
+            name: self.write_artifact(f"qa/{name}.md", f"{name}: PASS\n")
+            for name in qa_names
+        }
         payload = {
             "schema": "n64game-certification-evidence-v1",
             "certification": "COMPLETE",
@@ -88,12 +148,16 @@ class CertificationEvidenceTests(unittest.TestCase):
                     "duration_seconds": 390,
                     "active_control_seconds": 260,
                     "route_result": "STABLE_BEACON_HOOK",
+                    "evidence_path": timed_a,
+                    "evidence_sha256": self.artifact_record(timed_a)["sha256"],
                 },
                 {
                     "id": "timed-run-b",
                     "duration_seconds": 450,
                     "active_control_seconds": 300,
                     "route_result": "STABLE_BEACON_HOOK",
+                    "evidence_path": timed_b,
+                    "evidence_sha256": self.artifact_record(timed_b)["sha256"],
                 },
             ],
             "transition_soak": {
@@ -101,35 +165,43 @@ class CertificationEvidenceTests(unittest.TestCase):
                 "heap_delta_bytes": 0,
                 "resource_delta_count": 0,
                 "peak_free_heap_bytes": 700000,
+                "evidence_path": soak,
+                "evidence_sha256": self.artifact_record(soak)["sha256"],
             },
             "performance": {
                 "fps_min": 30,
                 "free_heap_min_bytes": 700000,
                 "sustained_sub30_windows": 0,
+                "evidence_path": performance,
+                "evidence_sha256": self.artifact_record(performance)["sha256"],
             },
             "qa_matrix": {
-                "cold_boot_default_name": "PASS",
-                "cold_boot_custom_name": "PASS",
-                "slate_watched": "PASS",
-                "slate_skipped": "PASS",
-                "required_annex_route": "PASS",
-                "optional_examines": "PASS",
-                "save_reboot_resume": "PASS",
-                "battle_alternate_inputs": "PASS",
-                "battle_victory": "PASS",
-                "battle_defeat_retry": "PASS",
-                "battle_defeat_return": "PASS",
-                "horizon_break_legal": "PASS",
-                "horizon_break_illegal": "PASS",
-                "dialogue_rapid_confirm_cancel": "PASS",
-                "controller_disconnect_reconnect": "PASS",
-                "corrupted_eeprom_fallback": "PASS",
-                "completed_sector_reentry": "PASS",
-                "stable_post_chapter_state": "PASS",
+                name: "PASS" for name in qa_names
+            },
+            "evidence_artifacts": {
+                "required_count": 22,
+                "timed_and_metric_artifacts": {
+                    "timed_runs[1]": self.artifact_record(timed_a),
+                    "timed_runs[2]": self.artifact_record(timed_b),
+                    "transition_soak": self.artifact_record(soak),
+                    "performance": self.artifact_record(performance),
+                },
+                "qa_artifacts": {
+                    name: self.artifact_record(relative)
+                    for name, relative in qa_artifacts.items()
+                },
             },
         }
         manifest = self.write_manifest(payload)
-        result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertEqual(result.returncode, 0, result.stdout)
         output = json.loads(result.stdout)
         self.assertEqual(output["certification"], "COMPLETE")
@@ -137,6 +209,68 @@ class CertificationEvidenceTests(unittest.TestCase):
         self.assertEqual(output["timed_run_median_seconds"], 420)
 
     def test_complete_manifest_rejects_low_fps_and_missing_qa(self) -> None:
+        payload = self.base_payload()
+        timed_a = self.write_artifact("timed-lowfps-a.md")
+        timed_b = self.write_artifact("timed-lowfps-b.md")
+        soak = self.write_artifact("soak-lowfps.md")
+        performance = self.write_artifact("performance-lowfps.md")
+        payload.update(
+            {
+                "certification": "COMPLETE",
+                "ares": {
+                    "version": "v148",
+                    "executable_sha256": PINNED_ARES_SHA256,
+                    "homebrew_mode": True,
+                    "expansion_pak": False,
+                },
+                "timed_runs": [
+                    {
+                        "duration_seconds": 390,
+                        "active_control_seconds": 260,
+                        "route_result": "STABLE_BEACON_HOOK",
+                        "evidence_path": timed_a,
+                        "evidence_sha256": self.artifact_record(timed_a)["sha256"],
+                    },
+                    {
+                        "duration_seconds": 450,
+                        "active_control_seconds": 300,
+                        "route_result": "STABLE_BEACON_HOOK",
+                        "evidence_path": timed_b,
+                        "evidence_sha256": self.artifact_record(timed_b)["sha256"],
+                    },
+                ],
+                "transition_soak": {
+                    "loops": 10,
+                    "heap_delta_bytes": 0,
+                    "resource_delta_count": 0,
+                    "peak_free_heap_bytes": 700000,
+                    "evidence_path": soak,
+                    "evidence_sha256": self.artifact_record(soak)["sha256"],
+                },
+                "performance": {
+                    "fps_min": 29,
+                    "free_heap_min_bytes": 700000,
+                    "sustained_sub30_windows": 0,
+                    "evidence_path": performance,
+                    "evidence_sha256": self.artifact_record(performance)["sha256"],
+                },
+                "qa_matrix": {},
+            }
+        )
+        manifest = self.write_manifest(payload)
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("performance.fps_min is below 30", result.stdout)
+
+    def test_complete_manifest_rejects_missing_artifact_bindings(self) -> None:
         payload = self.base_payload()
         payload.update(
             {
@@ -158,17 +292,44 @@ class CertificationEvidenceTests(unittest.TestCase):
                     "peak_free_heap_bytes": 700000,
                 },
                 "performance": {
-                    "fps_min": 29,
+                    "fps_min": 30,
                     "free_heap_min_bytes": 700000,
                     "sustained_sub30_windows": 0,
                 },
-                "qa_matrix": {},
+                "qa_matrix": {name: "PASS" for name in (
+                    "cold_boot_default_name",
+                    "cold_boot_custom_name",
+                    "slate_watched",
+                    "slate_skipped",
+                    "required_annex_route",
+                    "optional_examines",
+                    "save_reboot_resume",
+                    "battle_alternate_inputs",
+                    "battle_victory",
+                    "battle_defeat_retry",
+                    "battle_defeat_return",
+                    "horizon_break_legal",
+                    "horizon_break_illegal",
+                    "dialogue_rapid_confirm_cancel",
+                    "controller_disconnect_reconnect",
+                    "corrupted_eeprom_fallback",
+                    "completed_sector_reentry",
+                    "stable_post_chapter_state",
+                )},
             }
         )
         manifest = self.write_manifest(payload)
-        result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("performance.fps_min is below 30", result.stdout)
+        self.assertIn("timed_runs[1].path", result.stdout)
 
     def complete_capture_packet(self) -> dict[str, object]:
         qa_rows = {
@@ -306,8 +467,32 @@ class CertificationEvidenceTests(unittest.TestCase):
         self.assertEqual(assembled["certification"], "COMPLETE")
         self.assertEqual(assembled["evidence_artifacts"]["required_count"], 22)
         self.assertIn("evidence_sha256", assembled["timed_runs"][0])
-        validation = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        validation = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
         self.assertEqual(validation.returncode, 0, validation.stdout)
+
+        Path(self.root / assembled["timed_runs"][0]["evidence_path"]).write_text(
+            "tampered after assembly\n",
+            encoding="utf-8",
+        )
+        tampered = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
+        self.assertNotEqual(tampered.returncode, 0, tampered.stdout)
+        self.assertIn("evidence_sha256 does not match", tampered.stdout)
 
 
 if __name__ == "__main__":
