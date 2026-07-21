@@ -46,6 +46,32 @@ static uint32_t telemetry_invalid_samples(const N64GameTelemetry *telemetry)
         telemetry->invalid_transitions + telemetry->invalid_heap_samples;
 }
 
+static void telemetry_emit_input_edge(
+    uint32_t *sequence,
+    uint64_t wall_ticks,
+    uint32_t submitted_frames,
+    N64GameScene scene,
+    N64GameInput input
+)
+{
+    if (input.pressed == 0U) {
+        return;
+    }
+    debugf(
+        "N64G_INPUT schema=1 seq=%lu status=INSTRUMENTATION_ONLY "
+        "wall_ticks=%llu submitted_frames=%lu scene=%u pressed=%03x held=%03x "
+        "stick_x=%d stick_y=%d\n",
+        (unsigned long)(*sequence)++,
+        (unsigned long long)wall_ticks,
+        (unsigned long)submitted_frames,
+        (unsigned int)scene,
+        (unsigned int)input.pressed,
+        (unsigned int)input.held,
+        (int)input.stick_x,
+        (int)input.stick_y
+    );
+}
+
 static void telemetry_emit_session(
     const N64GameTelemetry *telemetry,
     uint32_t *sequence,
@@ -628,6 +654,7 @@ int main(void)
     SaveWriter save_writer = {0};
     bool controller_was_connected = false;
     bool chapter_completion_emitted = false;
+    uint32_t input_sequence = 0U;
 
     for (;;) {
         joypad_poll();
@@ -650,6 +677,13 @@ int main(void)
         }
         if (controller_connected && !clear_edge_frame) {
             play_input_feedback(input);
+            telemetry_emit_input_edge(
+                &input_sequence,
+                get_ticks(),
+                telemetry.total.submitted_frames,
+                game.scene,
+                input
+            );
         }
         if (scene_before != game.scene) {
             n64game_audio_trigger(N64GAME_AUDIO_CUE_TRANSITION);

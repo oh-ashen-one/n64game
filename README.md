@@ -37,6 +37,18 @@ If arrows, `WASD`, or `Z` still do nothing, launch from this repo instead of ope
 scripts/run-ares --homebrew-mode
 ```
 
+For input smoke evidence, capture the wrapper preamble plus emulator log and validate the observed edges:
+
+```sh
+scripts/validate-input-log \
+  --rom build/game/n64game-gate3.z64 \
+  --log build/certification/input-smoke.log \
+  --require up --require down --require left --require right \
+  --require confirm --require start
+```
+
+This returns `INPUT_LOG_PASS` only for a ROM-bound log with real `N64G_INPUT` edge records. It is input evidence, not release certification.
+
 To jump straight to the macOS permission pane for the pinned Ares app:
 
 ```sh

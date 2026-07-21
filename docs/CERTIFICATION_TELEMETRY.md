@@ -111,3 +111,25 @@ make certification-check \
 A successful result is `EVIDENCE_CONTRACT_PASS` with `certification=NOT_CLAIMED`. It means the package is internally consistent with this bounded contract. It does not grant performance, visual, audio, controller, hardware, or overall game certification. CI runs `make test-certification` against synthetic death fixtures only; it never manufactures or substitutes release evidence.
 
 The older broad architecture document still contains superseded three-run/twenty-loop language. For this one-week release, the authoritative master specification requires two timing runs and ten loops.
+
+## Manual input-edge evidence
+
+The timing/soak validator intentionally does not infer operator intent from the route. For the keyboard/controller acceptance pass, the ROM also emits separate input-edge records:
+
+```text
+N64G_INPUT schema=1 seq=<strictly-increasing-u32> status=INSTRUMENTATION_ONLY wall_ticks=<ticks> submitted_frames=<frames> scene=<scene> pressed=<hex-mask> held=<hex-mask> stick_x=<signed-int8> stick_y=<signed-int8>
+```
+
+`N64G_INPUT` is not parsed as certification telemetry and does not certify a run by itself. It is a manual-Ares proof aid for showing that the pinned wrapper's keyboard/controller mappings reached the ROM. Directional arrows and `WASD` should produce `up`, `down`, `left`, or `right` edges; `Z`, `X`, Return, Space, and `C` should produce confirm, cancel, start, pause, and Relay edges according to the wrapper map.
+
+After capturing a raw Ares log with the same preamble produced by `scripts/run-ares`, validate the input subset explicitly:
+
+```sh
+scripts/validate-input-log \
+  --rom build/game/n64game-gate3.z64 \
+  --log build/certification/input-smoke.log \
+  --require up --require down --require left --require right \
+  --require confirm --require cancel --require start --require pause --require relay
+```
+
+A pass returns `INPUT_LOG_PASS` with `certification=NOT_CLAIMED`. It proves only that those logical input edges appeared in a ROM/Ares-bound log; capture review is still required to prove the operator used them in the expected on-screen contexts.
