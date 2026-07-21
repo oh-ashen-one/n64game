@@ -5,11 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROM="$ROOT/build/game/n64game-gate3.z64"
 EXPECTED_ROM_SHA=""
 CHECK_ONLY=0
+CAPTURE_SESSION=0
 
 for argument in "$@"; do
     case "$argument" in
         --homebrew-mode) ;;
         --check-only) CHECK_ONLY=1 ;;
+        --capture-session) CAPTURE_SESSION=1 ;;
         --expected-rom-sha256=*) EXPECTED_ROM_SHA="${argument#*=}" ;;
         --*) printf 'unsupported argument: %s\n' "$argument" >&2; exit 64 ;;
         *) ROM="$argument" ;;
@@ -94,34 +96,38 @@ if ! "$ROOT/scripts/audit-ares-input" --strict >"$AUDIT_JSON"; then
 fi
 rm -f "$AUDIT_JSON"
 
-exec "$ARES" \
-    --settings-file "$STATE_ROOT/settings.bml" \
-    --setting General/HomebrewMode=true \
-    --setting Nintendo64/ExpansionPak=false \
-    --setting Input/Driver=SDL \
-    --setting Input/Defocus=Allow \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/82;0x1/0/26;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/81;0x1/0/22;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/80;0x1/0/4;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Right=0x1/0/79;0x1/0/7;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Lo=0x1/0/80;0x1/0/4;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Hi=0x1/0/79;0x1/0/7;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Lo=0x1/0/81;0x1/0/22;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Hi=0x1/0/82;0x1/0/26;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/B=0x1/0/29;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/27;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/C-Down=0x1/0/44;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Z=0x1/0/225;;' \
-    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Start=0x1/0/40;;' \
-    --setting "Paths/Home=$STATE_ROOT/Systems/" \
-    --setting "Paths/Saves=$STATE_ROOT/Saves/" \
-    --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/" \
-    --setting "Paths/Debugging=$STATE_ROOT/Debugging/" \
-    --setting 'Hotkey/CaptureScreenshot=0x1/0/19;;' \
-    --system "Nintendo 64" \
-    --kiosk \
-    "$ROM"
+ARES_ARGS=(
+    --settings-file "$STATE_ROOT/settings.bml"
+    --setting General/HomebrewMode=true
+    --setting Nintendo64/ExpansionPak=false
+    --setting Input/Driver=SDL
+    --setting Input/Defocus=Allow
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/82;0x1/0/26;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/81;0x1/0/22;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/80;0x1/0/4;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Right=0x1/0/79;0x1/0/7;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Lo=0x1/0/80;0x1/0/4;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Hi=0x1/0/79;0x1/0/7;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Lo=0x1/0/81;0x1/0/22;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Hi=0x1/0/82;0x1/0/26;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/B=0x1/0/29;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/27;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/C-Down=0x1/0/44;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Z=0x1/0/225;;'
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Start=0x1/0/40;;'
+    --setting "Paths/Home=$STATE_ROOT/Systems/"
+    --setting "Paths/Saves=$STATE_ROOT/Saves/"
+    --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/"
+    --setting "Paths/Debugging=$STATE_ROOT/Debugging/"
+    --setting 'Hotkey/CaptureScreenshot=0x1/0/19;;'
+    --system "Nintendo 64"
+)
+if [[ "$CAPTURE_SESSION" -eq 0 ]]; then
+    ARES_ARGS+=(--kiosk)
+fi
+ARES_ARGS+=("$ROM")
+exec "$ARES" "${ARES_ARGS[@]}"

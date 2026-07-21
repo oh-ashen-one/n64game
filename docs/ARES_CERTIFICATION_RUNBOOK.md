@@ -73,6 +73,22 @@ The report distinguishes a visible Ares window, a sent `P` hotkey, and actual
 new screenshot files. A visible window plus `hotkey_attempt: SENT` is still not
 visual evidence when `new_screenshot_count` is `0`.
 
+For Ares' menu-based capture path, use the explicit menu-capable capture mode:
+
+```sh
+scripts/audit-ares-capture-preflight \
+  --probe-launch \
+  --attempt-screenshot-menu
+```
+
+This launches through `scripts/run-ares --capture-session`, which omits `--kiosk`
+only for capture diagnostics so Ares' **Tools → Capture Screenshot** menu exists.
+On this Mac/Ares v148 setup, that path produced a screenshot file under
+`Screenshots/Nintendo 64/`, but the observed image was `640×240`, not native
+`320×240`; treat it as diagnostic proof of Ares capture reachability, not as a
+visual benchmark packet member unless a validator-approved native/representative
+conversion path is added.
+
 The isolated wrapper also binds Ares `Capture Screenshot` to `P`
 (`Hotkey/CaptureScreenshot=0x1/0/19;;`) and sends screenshots to:
 
@@ -93,6 +109,9 @@ scripts/run-ares --homebrew-mode \
   --expected-rom-sha256="$(shasum -a 256 build/game/n64game-gate3.z64 | awk '{print $1}')" \
   build/game/n64game-gate3.z64
 ```
+
+Use `--capture-session` only for menu-based capture diagnostics; the ordinary
+certification launch remains kiosk-controlled.
 
 Keyboard mapping supplied by `scripts/run-ares`:
 

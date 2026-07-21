@@ -46,6 +46,20 @@ Each row needs:
   representative capture plan;
 - notes that describe what the frame proves.
 
+Before filling packet rows from Ares, run:
+
+```sh
+scripts/audit-ares-capture-preflight \
+  --probe-launch \
+  --attempt-screenshot-menu
+```
+
+The menu path is currently the verified way to make Ares write screenshot files
+from the local wrapper, but the observed Ares output is `640×240`. That proves
+capture reachability only. Do not use those files as `native` packet members
+until the packet validator has a deliberate approved path for producing the
+required `320×240` gameplay frame from them.
+
 After the native files and non-placeholder packet metadata are filled in, the
 assembler can create the review enlargements deterministically:
 
