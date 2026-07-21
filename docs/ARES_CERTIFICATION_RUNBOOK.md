@@ -52,13 +52,19 @@ Record wall-clock start at cold boot and stop at the stable post-chapter menu af
 9. Examine the workshop log.
 10. Examine the overlook scope.
 11. Open Field Relay with `C` and inspect Party, Messages, Resonance, and Save.
-12. Trigger a manual save from the Relay Save page.
-13. Return to Sera and begin the trial.
-14. Complete the Quarrune/Ayselor versus Gyreclast/Kivarrax 2v2 battle through legal commands.
-15. Capture at least one alternate legal battle input path across the two runs.
-16. Capture victory, reward, Annex return, and post-battle save behavior.
-17. Trace the beacon at the overlook.
-18. Verify `END OF OPENING CHAPTER` / stable post-chapter menu.
+12. Capture the Relay Save page. It prints the current route evidence line:
+    `TIME mm:ss / CTRL mm:ss`, `STATE <scene> / <quest>`, and
+    `EXAM n/4 RELAY n/4 <OPEN|HOOK>`. These values are derived from live ROM
+    state and are suitable screenshot evidence for timing and route coverage.
+13. Trigger a manual save from the Relay Save page.
+14. Return to Sera and begin the trial.
+15. Complete the Quarrune/Ayselor versus Gyreclast/Kivarrax 2v2 battle through legal commands.
+16. Capture at least one alternate legal battle input path across the two runs.
+17. Capture victory, reward, Annex return, and post-battle save behavior.
+18. Trace the beacon at the overlook.
+19. Verify `END OF OPENING CHAPTER` / stable post-chapter menu. Re-open the
+    archive pages and, when returning to Annex through a supported path, capture
+    the Save page again with `HOOK` and final timing/control values visible.
 
 The two timed runs must each be 6–10 minutes, and their median must be 6–8 minutes. Each run must show at least four minutes of player control.
 

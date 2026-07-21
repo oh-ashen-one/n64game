@@ -1,6 +1,7 @@
 #include "n64game_core.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 enum {
@@ -834,6 +835,99 @@ const N64GameMoveDef *n64game_move_def(N64GameEchoform actor, uint8_t move)
         return NULL;
     }
     return &MOVES[actor][move];
+}
+
+static const char *scene_code(N64GameScene scene)
+{
+    switch (scene) {
+    case N64GAME_SCENE_BOOT: return "BOOT";
+    case N64GAME_SCENE_OPENING_SLATE: return "SLATE";
+    case N64GAME_SCENE_NAME_ENTRY: return "NAME";
+    case N64GAME_SCENE_ANNEX: return "ANNEX";
+    case N64GAME_SCENE_BATTLE: return "BATTLE";
+    case N64GAME_SCENE_END_CHAPTER: return "END";
+    }
+    return "UNKNOWN";
+}
+
+static const char *quest_code(N64GameQuest quest)
+{
+    switch (quest) {
+    case N64GAME_QUEST_MEET_SERA: return "MEET_SERA";
+    case N64GAME_QUEST_RETRIEVE_RELAY: return "GET_RELAY";
+    case N64GAME_QUEST_RETURN_TO_SERA: return "RETURN";
+    case N64GAME_QUEST_RESONANCE_TRIAL: return "TRIAL";
+    case N64GAME_QUEST_BEACON_OVERLOOK: return "BEACON";
+    case N64GAME_QUEST_COMPLETE: return "COMPLETE";
+    }
+    return "UNKNOWN";
+}
+
+static uint8_t bit_count8(uint8_t value)
+{
+    uint8_t count = 0U;
+    while (value != 0U) {
+        count = (uint8_t)(count + (uint8_t)(value & UINT8_C(1)));
+        value = (uint8_t)(value >> 1);
+    }
+    return count;
+}
+
+void n64game_core_certification_summary(
+    const N64GameCore *game,
+    char *timing,
+    size_t timing_size,
+    char *state,
+    size_t state_size,
+    char *coverage,
+    size_t coverage_size
+)
+{
+    if (game == NULL) {
+        if (timing != NULL && timing_size > 0U) {
+            timing[0] = '\0';
+        }
+        if (state != NULL && state_size > 0U) {
+            state[0] = '\0';
+        }
+        if (coverage != NULL && coverage_size > 0U) {
+            coverage[0] = '\0';
+        }
+        return;
+    }
+
+    const uint32_t play_seconds = game->play_ticks / UINT32_C(30);
+    const uint32_t active_seconds = game->active_control_ticks / UINT32_C(30);
+    if (timing != NULL && timing_size > 0U) {
+        (void)snprintf(
+            timing,
+            timing_size,
+            "TIME %02u:%02u / CTRL %02u:%02u",
+            (unsigned)(play_seconds / UINT32_C(60)),
+            (unsigned)(play_seconds % UINT32_C(60)),
+            (unsigned)(active_seconds / UINT32_C(60)),
+            (unsigned)(active_seconds % UINT32_C(60))
+        );
+    }
+    if (state != NULL && state_size > 0U) {
+        (void)snprintf(
+            state,
+            state_size,
+            "STATE %s / %s",
+            scene_code(game->scene),
+            quest_code(game->quest)
+        );
+    }
+    if (coverage != NULL && coverage_size > 0U) {
+        (void)snprintf(
+            coverage,
+            coverage_size,
+            "EXAM %u/4 RELAY %u/4 %s",
+            (unsigned)bit_count8(game->examine_flags),
+            (unsigned)bit_count8(game->relay_pages_seen),
+            game->slice_complete ? "HOOK" : "OPEN"
+        );
+    }
 }
 
 static N64GameBattleActor make_actor(

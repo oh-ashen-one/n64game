@@ -1195,16 +1195,29 @@ static void draw_resonance_page(const N64GameCore *game)
     text_at(44.0f, 196.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
 }
 
-static void draw_save_page(void)
+static void draw_save_page(const N64GameCore *game)
 {
+    char timing[48];
+    char state[48];
+    char coverage[48];
+    n64game_core_certification_summary(
+        game,
+        timing, sizeof(timing),
+        state, sizeof(state),
+        coverage, sizeof(coverage)
+    );
+
     panel(38, 48, 282, 204);
     centered(58.0f, STYLE_ACCENT, "SAVE RESONANCE FILE");
     text_at(
-        54.0f, 91.0f, STYLE_TEXT, 212.0f,
+        54.0f, 84.0f, STYLE_TEXT, 212.0f,
         "Record your safe Annex checkpoint, objectives, and Field Relay discoveries."
     );
-    text_at(54.0f, 156.0f, STYLE_WARNING, 212.0f, "A  SAVE");
-    text_at(54.0f, 178.0f, STYLE_MUTED, 212.0f, "B  BACK");
+    text_at(54.0f, 121.0f, STYLE_ACCENT, 212.0f, timing);
+    text_at(54.0f, 137.0f, STYLE_MUTED, 212.0f, state);
+    text_at(54.0f, 153.0f, STYLE_MUTED, 212.0f, coverage);
+    text_at(54.0f, 174.0f, STYLE_WARNING, 212.0f, "A  SAVE");
+    text_at(54.0f, 188.0f, STYLE_MUTED, 212.0f, "B  BACK");
 }
 
 static void draw_help_page(void)
@@ -1251,7 +1264,7 @@ static void draw_annex_menu(const N64GameCore *game)
         draw_resonance_page(game);
         break;
     case N64GAME_MENU_SAVE:
-        draw_save_page();
+        draw_save_page(game);
         break;
     case N64GAME_MENU_HELP:
         draw_help_page();

@@ -238,6 +238,15 @@ void n64game_core_set_player_position(N64GameCore *game, int32_t x_q8, int32_t z
 bool n64game_core_can_interact(const N64GameCore *game);
 const char *n64game_core_interaction_label(const N64GameCore *game);
 uint8_t n64game_dialogue_page_count(N64GameDialogue dialogue);
+void n64game_core_certification_summary(
+    const N64GameCore *game,
+    char *timing,
+    size_t timing_size,
+    char *state,
+    size_t state_size,
+    char *coverage,
+    size_t coverage_size
+);
 
 const N64GameMoveDef *n64game_move_def(N64GameEchoform actor, uint8_t move);
 void n64game_battle_begin(N64GameBattle *battle);

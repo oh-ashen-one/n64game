@@ -586,6 +586,32 @@ static void test_controller_disconnect_freezes_and_reconnect_clears_edges(void)
     assert(game.battle_present_delay == 0U && game.battle.queue_cursor == 1U);
 }
 
+static void test_certification_summary_uses_live_route_state(void)
+{
+    N64GameCore game;
+    n64game_core_init(&game);
+    game.scene = N64GAME_SCENE_ANNEX;
+    game.quest = N64GAME_QUEST_BEACON_OVERLOOK;
+    game.play_ticks = UINT32_C(30) * UINT32_C(427) + UINT32_C(12);
+    game.active_control_ticks = UINT32_C(30) * UINT32_C(252) + UINT32_C(29);
+    game.examine_flags = TEST_ALL_EXAMINES;
+    game.relay_pages_seen = TEST_ALL_RELAY_PAGES;
+    game.slice_complete = true;
+
+    char timing[48];
+    char state[48];
+    char coverage[48];
+    n64game_core_certification_summary(
+        &game,
+        timing, sizeof(timing),
+        state, sizeof(state),
+        coverage, sizeof(coverage)
+    );
+    assert(strcmp(timing, "TIME 07:07 / CTRL 04:12") == 0);
+    assert(strcmp(state, "STATE ANNEX / BEACON") == 0);
+    assert(strcmp(coverage, "EXAM 4/4 RELAY 4/4 HOOK") == 0);
+}
+
 static void test_battle_legality_order_retarget_and_retry(void)
 {
     N64GameBattle battle;
@@ -917,6 +943,7 @@ int main(void)
     test_opening_slate_natural_timing_is_exact();
     test_name_editing_movement_pause_and_optional_dialogue();
     test_controller_disconnect_freezes_and_reconnect_clears_edges();
+    test_certification_summary_uses_live_route_state();
     test_battle_legality_order_retarget_and_retry();
     test_battle_controller_selection_and_presentation_cadence();
     test_trial_entry_selects_a_living_player_or_defeats();
