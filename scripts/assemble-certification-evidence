@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Assemble a COMPLETE Ares certification manifest from captured evidence.
+
+This tool intentionally does not play the game or invent measurements. It
+turns a filled capture packet into `build/certification/evidence.json` only
+after every required timing, soak, performance, QA row, and referenced artifact
+is present and free of placeholder text.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ROM = ROOT / "build" / "game" / "n64game-gate3.z64"
+DEFAULT_PACKET = ROOT / "build" / "certification" / "capture-packet.json"
+DEFAULT_MANIFEST = ROOT / "build" / "certification" / "evidence.json"
+PACKET_SCHEMA = "n64game-certification-capture-packet-v1"
+MANIFEST_SCHEMA = "n64game-certification-evidence-v1"
+PINNED_ARES_SHA256 = "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345"
+PLACEHOLDERS = ("TODO", "PENDING", "REPLACE", "NOT_CAPTURED", "TBD")
+REQUIRED_QA = (
+    "cold_boot_default_name",
+    "cold_boot_custom_name",
+    "slate_watched",
+    "slate_skipped",
+    "required_annex_route",
+    "optional_examines",
+    "save_reboot_resume",
+    "battle_alternate_inputs",
+    "battle_victory",
+    "battle_defeat_retry",
+    "battle_defeat_return",
+    "horizon_break_legal",
+    "horizon_break_illegal",
+    "dialogue_rapid_confirm_cancel",
+    "controller_disconnect_reconnect",
+    "corrupted_eeprom_fallback",
+    "completed_sector_reentry",
+    "stable_post_chapter_state",
+)
+
+
+class PacketError(RuntimeError):
+    pass
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def display_path(path: Path, root: Path = ROOT) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def require_mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PacketError(f"{label} must be an object")
+    return value
+
+
+def require_list(value: Any, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise PacketError(f"{label} must be a list")
+    return value
+
+
+def require_number(value: Any, label: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise PacketError(f"{label} must be numeric")
+    return float(value)
+
+
+def require_int(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise PacketError(f"{label} must be an integer")
+    return value
+
+
+def reject_placeholders(value: Any, label: str = "packet") -> None:
+    if isinstance(value, str):
+        upper = value.upper()
+        for placeholder in PLACEHOLDERS:
+            if placeholder in upper:
+                raise PacketError(f"{label} contains placeholder text: {placeholder}")
+        if not value.strip():
+            raise PacketError(f"{label} contains an empty string")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            reject_placeholders(child, f"{label}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            reject_placeholders(child, f"{label}[{index}]")
+
+
+def resolve_artifact(path_value: Any, label: str, artifact_root: Path) -> dict[str, Any]:
+    if not isinstance(path_value, str) or not path_value:
+        raise PacketError(f"{label} must be a repository-relative artifact path")
+    if path_value.startswith("/") or ".." in Path(path_value).parts:
+        raise PacketError(f"{label} must be a safe repository-relative path")
+    path = artifact_root / path_value
+    if not path.is_file() or path.is_symlink():
+        raise PacketError(f"{label} is not one regular non-symlink file: {path_value}")
+    if path.stat().st_size <= 0:
+        raise PacketError(f"{label} is empty: {path_value}")
+    return {
+        "path": path_value,
+        "sha256": sha256(path),
+        "size": path.stat().st_size,
+    }
+
+
+def build_template(rom: Path) -> dict[str, Any]:
+    rom_info = {
+        "path": display_path(rom),
+        "sha256": sha256(rom),
+        "size": rom.stat().st_size,
+    }
+    qa = {
+        name: {
+            "status": "PENDING",
+            "evidence_path": f"build/certification/screenshots/{name}.png",
+            "notes": "TODO replace with observed Ares result",
+        }
+        for name in REQUIRED_QA
+    }
+    return {
+        "schema": PACKET_SCHEMA,
+        "certification_request": "COMPLETE",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "rom": rom_info,
+        "ares": {
+            "version": "v148",
+            "executable_sha256": PINNED_ARES_SHA256,
+            "homebrew_mode": True,
+            "expansion_pak": False,
+        },
+        "timed_runs": [
+            {
+                "id": "timed-run-01",
+                "duration_seconds": 0,
+                "active_control_seconds": 0,
+                "route_result": "PENDING",
+                "evidence_path": "build/certification/timed-run-01.md",
+            },
+            {
+                "id": "timed-run-02",
+                "duration_seconds": 0,
+                "active_control_seconds": 0,
+                "route_result": "PENDING",
+                "evidence_path": "build/certification/timed-run-02.md",
+            },
+        ],
+        "transition_soak": {
+            "loops": 0,
+            "heap_delta_bytes": 999999,
+            "resource_delta_count": 999999,
+            "peak_free_heap_bytes": 0,
+            "evidence_path": "build/certification/transition-soak.md",
+        },
+        "performance": {
+            "fps_min": 0,
+            "free_heap_min_bytes": 0,
+            "sustained_sub30_windows": 999999,
+            "evidence_path": "build/certification/performance.md",
+        },
+        "qa_matrix": qa,
+    }
+
+
+def validate_packet(packet: dict[str, Any], rom: Path, packet_path: Path, artifact_root: Path) -> dict[str, Any]:
+    if packet.get("schema") != PACKET_SCHEMA:
+        raise PacketError(f"packet.schema must be {PACKET_SCHEMA}")
+    if packet.get("certification_request") != "COMPLETE":
+        raise PacketError("packet.certification_request must be COMPLETE")
+    reject_placeholders(packet)
+
+    packet_rom = require_mapping(packet.get("rom"), "rom")
+    actual_rom = {"path": display_path(rom), "sha256": sha256(rom), "size": rom.stat().st_size}
+    if packet_rom.get("sha256") != actual_rom["sha256"] or packet_rom.get("size") != actual_rom["size"]:
+        raise PacketError("packet ROM identity does not match the supplied ROM")
+
+    ares = require_mapping(packet.get("ares"), "ares")
+    if ares.get("version") not in ("v148", "148"):
+        raise PacketError("ares.version must be v148")
+    if ares.get("executable_sha256") != PINNED_ARES_SHA256:
+        raise PacketError("ares.executable_sha256 does not match pinned Ares 148")
+    if ares.get("homebrew_mode") is not True or ares.get("expansion_pak") is not False:
+        raise PacketError("Ares must be Homebrew Mode with Expansion Pak disabled")
+
+    artifacts: dict[str, dict[str, Any]] = {}
+    timed_runs: list[dict[str, Any]] = []
+    for index, row_value in enumerate(require_list(packet.get("timed_runs"), "timed_runs"), 1):
+        row = require_mapping(row_value, f"timed_runs[{index}]")
+        artifact = resolve_artifact(row.get("evidence_path"), f"timed_runs[{index}].evidence_path", artifact_root)
+        artifacts[f"timed_runs[{index}]"] = artifact
+        timed_runs.append(
+            {
+                "id": row.get("id"),
+                "duration_seconds": require_number(row.get("duration_seconds"), f"timed_runs[{index}].duration_seconds"),
+                "active_control_seconds": require_number(row.get("active_control_seconds"), f"timed_runs[{index}].active_control_seconds"),
+                "route_result": row.get("route_result"),
+                "evidence_path": artifact["path"],
+                "evidence_sha256": artifact["sha256"],
+            }
+        )
+
+    soak = require_mapping(packet.get("transition_soak"), "transition_soak")
+    soak_artifact = resolve_artifact(soak.get("evidence_path"), "transition_soak.evidence_path", artifact_root)
+    artifacts["transition_soak"] = soak_artifact
+    performance = require_mapping(packet.get("performance"), "performance")
+    performance_artifact = resolve_artifact(performance.get("evidence_path"), "performance.evidence_path", artifact_root)
+    artifacts["performance"] = performance_artifact
+
+    qa_packet = require_mapping(packet.get("qa_matrix"), "qa_matrix")
+    qa_matrix: dict[str, str] = {}
+    qa_artifacts: dict[str, dict[str, Any]] = {}
+    missing = [name for name in REQUIRED_QA if name not in qa_packet]
+    if missing:
+        raise PacketError("qa_matrix missing rows: " + ", ".join(missing))
+    for name in REQUIRED_QA:
+        row = require_mapping(qa_packet[name], f"qa_matrix.{name}")
+        if row.get("status") != "PASS":
+            raise PacketError(f"qa_matrix.{name}.status must be PASS")
+        artifact = resolve_artifact(row.get("evidence_path"), f"qa_matrix.{name}.evidence_path", artifact_root)
+        qa_matrix[name] = "PASS"
+        qa_artifacts[name] = artifact
+
+    return {
+        "schema": MANIFEST_SCHEMA,
+        "certification": "COMPLETE",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "rom": actual_rom,
+        "ares": {
+            "version": ares["version"],
+            "executable_sha256": ares["executable_sha256"],
+            "homebrew_mode": True,
+            "expansion_pak": False,
+        },
+        "timed_runs": timed_runs,
+        "transition_soak": {
+            "loops": require_int(soak.get("loops"), "transition_soak.loops"),
+            "heap_delta_bytes": require_int(soak.get("heap_delta_bytes"), "transition_soak.heap_delta_bytes"),
+            "resource_delta_count": require_int(soak.get("resource_delta_count"), "transition_soak.resource_delta_count"),
+            "peak_free_heap_bytes": require_int(soak.get("peak_free_heap_bytes"), "transition_soak.peak_free_heap_bytes"),
+            "evidence_path": soak_artifact["path"],
+            "evidence_sha256": soak_artifact["sha256"],
+        },
+        "performance": {
+            "fps_min": require_number(performance.get("fps_min"), "performance.fps_min"),
+            "free_heap_min_bytes": require_int(performance.get("free_heap_min_bytes"), "performance.free_heap_min_bytes"),
+            "sustained_sub30_windows": require_int(performance.get("sustained_sub30_windows"), "performance.sustained_sub30_windows"),
+            "evidence_path": performance_artifact["path"],
+            "evidence_sha256": performance_artifact["sha256"],
+        },
+        "qa_matrix": qa_matrix,
+        "evidence_artifacts": {
+            "required_count": 2 + 2 + len(REQUIRED_QA),
+            "timed_and_metric_artifacts": artifacts,
+            "qa_artifacts": qa_artifacts,
+        },
+        "source_packet_sha256": sha256(packet_path),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
+    parser.add_argument("--packet", type=Path, default=DEFAULT_PACKET)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--artifact-root", type=Path, default=ROOT)
+    parser.add_argument("--init-template", action="store_true", help="write a placeholder capture packet and exit")
+    args = parser.parse_args()
+
+    rom = args.rom if args.rom.is_absolute() else ROOT / args.rom
+    if not rom.is_file() or rom.is_symlink():
+        raise SystemExit(f"ROM must be one regular file: {rom}")
+    packet = args.packet if args.packet.is_absolute() else ROOT / args.packet
+    manifest = args.manifest if args.manifest.is_absolute() else ROOT / args.manifest
+    artifact_root = args.artifact_root if args.artifact_root.is_absolute() else ROOT / args.artifact_root
+
+    if args.init_template:
+        packet.parent.mkdir(parents=True, exist_ok=True)
+        packet.write_text(json.dumps(build_template(rom), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps({"result": "TEMPLATE_WRITTEN", "packet": display_path(packet)}, sort_keys=True))
+        return 0
+
+    try:
+        payload = json.loads(packet.read_text(encoding="utf-8"))
+        manifest_payload = validate_packet(payload, rom, packet, artifact_root)
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        validation = subprocess.run(
+            [
+                str(ROOT / "scripts" / "validate-certification-evidence"),
+                "--manifest",
+                str(manifest),
+                "--rom",
+                str(rom),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if validation.returncode != 0:
+            raise PacketError(validation.stdout.strip())
+    except (OSError, json.JSONDecodeError, PacketError) as exc:
+        print(f"CERTIFICATION_PACKET_ERROR: {exc}")
+        return 1
+    print(validation.stdout.strip())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

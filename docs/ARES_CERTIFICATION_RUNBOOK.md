@@ -128,3 +128,27 @@ scripts/validate-certification-evidence \
 ```
 
 Only a passing `COMPLETE` manifest may promote the Ares rows in `scripts/audit-final-acceptance`.
+
+For a real completion attempt, first create the capture packet:
+
+```sh
+scripts/assemble-certification-evidence --init-template \
+  --rom build/game/n64game-gate3.z64 \
+  --packet build/certification/capture-packet.json
+```
+
+Then replace every placeholder in `build/certification/capture-packet.json` with
+the two timed-run metrics, the ten-loop soak metrics, performance metrics, QA
+row results, and repository-relative paths to the actual captured screenshots,
+notes, or video-derived reports. Finally assemble and validate:
+
+```sh
+scripts/assemble-certification-evidence \
+  --rom build/game/n64game-gate3.z64 \
+  --packet build/certification/capture-packet.json \
+  --manifest build/certification/evidence.json
+```
+
+The assembler fails closed on placeholder text, missing/empty artifact files,
+bad ROM identity, wrong Ares identity, non-`PASS` QA rows, and any manifest that
+`scripts/validate-certification-evidence` rejects.

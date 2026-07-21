@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / "scripts" / "validate-certification-evidence"
+ASSEMBLER = ROOT / "scripts" / "assemble-certification-evidence"
 PINNED_ARES_SHA256 = "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345"
 
 
@@ -30,6 +31,12 @@ class CertificationEvidenceTests(unittest.TestCase):
         path = self.root / "evidence.json"
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
         return path
+
+    def write_artifact(self, relative: str, body: str = "captured Ares evidence\n") -> str:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        return relative
 
     def base_payload(self) -> dict[str, object]:
         return {
@@ -162,6 +169,145 @@ class CertificationEvidenceTests(unittest.TestCase):
         result = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("performance.fps_min is below 30", result.stdout)
+
+    def complete_capture_packet(self) -> dict[str, object]:
+        qa_rows = {
+            name: {
+                "status": "PASS",
+                "evidence_path": self.write_artifact(f"qa/{name}.md", f"{name}: PASS\n"),
+                "notes": f"{name} observed in Ares v148",
+            }
+            for name in (
+                "cold_boot_default_name",
+                "cold_boot_custom_name",
+                "slate_watched",
+                "slate_skipped",
+                "required_annex_route",
+                "optional_examines",
+                "save_reboot_resume",
+                "battle_alternate_inputs",
+                "battle_victory",
+                "battle_defeat_retry",
+                "battle_defeat_return",
+                "horizon_break_legal",
+                "horizon_break_illegal",
+                "dialogue_rapid_confirm_cancel",
+                "controller_disconnect_reconnect",
+                "corrupted_eeprom_fallback",
+                "completed_sector_reentry",
+                "stable_post_chapter_state",
+            )
+        }
+        return {
+            "schema": "n64game-certification-capture-packet-v1",
+            "certification_request": "COMPLETE",
+            "rom": {"sha256": self.rom_sha, "size": self.rom.stat().st_size},
+            "ares": {
+                "version": "v148",
+                "executable_sha256": PINNED_ARES_SHA256,
+                "homebrew_mode": True,
+                "expansion_pak": False,
+            },
+            "timed_runs": [
+                {
+                    "id": "timed-run-a",
+                    "duration_seconds": 390,
+                    "active_control_seconds": 260,
+                    "route_result": "STABLE_BEACON_HOOK",
+                    "evidence_path": self.write_artifact("timed-run-a.md"),
+                },
+                {
+                    "id": "timed-run-b",
+                    "duration_seconds": 450,
+                    "active_control_seconds": 300,
+                    "route_result": "STABLE_BEACON_HOOK",
+                    "evidence_path": self.write_artifact("timed-run-b.md"),
+                },
+            ],
+            "transition_soak": {
+                "loops": 10,
+                "heap_delta_bytes": 0,
+                "resource_delta_count": 0,
+                "peak_free_heap_bytes": 700000,
+                "evidence_path": self.write_artifact("transition-soak.md"),
+            },
+            "performance": {
+                "fps_min": 30,
+                "free_heap_min_bytes": 700000,
+                "sustained_sub30_windows": 0,
+                "evidence_path": self.write_artifact("performance.md"),
+            },
+            "qa_matrix": qa_rows,
+        }
+
+    def test_assembler_rejects_placeholder_capture_packet(self) -> None:
+        packet = self.root / "packet.json"
+        packet.write_text(
+            json.dumps(
+                {
+                    "schema": "n64game-certification-capture-packet-v1",
+                    "certification_request": "COMPLETE",
+                    "rom": {"sha256": self.rom_sha, "size": self.rom.stat().st_size},
+                    "ares": {
+                        "version": "v148",
+                        "executable_sha256": PINNED_ARES_SHA256,
+                        "homebrew_mode": True,
+                        "expansion_pak": False,
+                    },
+                    "timed_runs": [
+                        {
+                            "id": "timed-run-a",
+                            "duration_seconds": 390,
+                            "active_control_seconds": 260,
+                            "route_result": "PENDING",
+                            "evidence_path": "missing.md",
+                        }
+                    ],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_command(
+            [
+                str(ASSEMBLER),
+                "--rom",
+                str(self.rom),
+                "--packet",
+                str(packet),
+                "--manifest",
+                str(self.root / "assembled.json"),
+                "--artifact-root",
+                str(self.root),
+            ]
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("placeholder", result.stdout)
+
+    def test_assembler_writes_complete_validator_compatible_manifest(self) -> None:
+        packet = self.root / "packet.json"
+        manifest = self.root / "assembled.json"
+        packet.write_text(json.dumps(self.complete_capture_packet(), sort_keys=True), encoding="utf-8")
+        result = self.run_command(
+            [
+                str(ASSEMBLER),
+                "--rom",
+                str(self.rom),
+                "--packet",
+                str(packet),
+                "--manifest",
+                str(manifest),
+                "--artifact-root",
+                str(self.root),
+            ]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        assembled = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(assembled["certification"], "COMPLETE")
+        self.assertEqual(assembled["evidence_artifacts"]["required_count"], 22)
+        self.assertIn("evidence_sha256", assembled["timed_runs"][0])
+        validation = self.run_command([str(VALIDATOR), "--manifest", str(manifest), "--rom", str(self.rom)])
+        self.assertEqual(validation.returncode, 0, validation.stdout)
 
 
 if __name__ == "__main__":
