@@ -4,26 +4,65 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROM="$ROOT/build/game/n64game-gate3.z64"
 EXPECTED_ROM_SHA=""
+EXPECTED_ROM_SHA_SET=0
+EXPECTED_EEPROM_SHA=""
+EXPECTED_EEPROM_SHA_SET=0
 CHECK_ONLY=0
+OPEN_INPUT_MONITORING=0
+ROM_SET=0
 
 for argument in "$@"; do
     case "$argument" in
         --homebrew-mode) ;;
         --check-only) CHECK_ONLY=1 ;;
-        --expected-rom-sha256=*) EXPECTED_ROM_SHA="${argument#*=}" ;;
+        --open-input-monitoring) OPEN_INPUT_MONITORING=1 ;;
+        --expected-rom-sha256=*)
+            if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 ]]; then
+                printf 'duplicate --expected-rom-sha256 argument\n' >&2
+                exit 64
+            fi
+            EXPECTED_ROM_SHA_SET=1
+            EXPECTED_ROM_SHA="${argument#*=}"
+            ;;
+        --expected-eeprom-sha256=*)
+            if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 ]]; then
+                printf 'duplicate --expected-eeprom-sha256 argument\n' >&2
+                exit 64
+            fi
+            EXPECTED_EEPROM_SHA_SET=1
+            EXPECTED_EEPROM_SHA="${argument#*=}"
+            ;;
         --*) printf 'unsupported argument: %s\n' "$argument" >&2; exit 64 ;;
-        *) ROM="$argument" ;;
+        *)
+            if [[ "$ROM_SET" -eq 1 ]]; then
+                printf 'multiple ROM paths are not supported\n' >&2
+                exit 64
+            fi
+            ROM_SET=1
+            ROM="$argument"
+            ;;
     esac
 done
+
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 && ! "$EXPECTED_ROM_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'expected ROM SHA-256 must be 64 lowercase hexadecimal characters\n' >&2
+    exit 64
+fi
+if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 && ! "$EXPECTED_EEPROM_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'expected EEPROM SHA-256 must be 64 lowercase hexadecimal characters\n' >&2
+    exit 64
+fi
 
 if [[ "$ROM" != /* ]]; then
     ROM="$ROOT/$ROM"
 fi
-test -f "$ROM"
-test ! -L "$ROM"
+if [[ ! -f "$ROM" || -L "$ROM" ]]; then
+    printf 'ROM must be a non-symlink regular file: %s\n' "$ROM" >&2
+    exit 1
+fi
 
 ACTUAL_ROM_SHA="$(shasum -a 256 "$ROM" | awk '{print $1}')"
-if [[ -n "$EXPECTED_ROM_SHA" && "$ACTUAL_ROM_SHA" != "$EXPECTED_ROM_SHA" ]]; then
+if [[ "$EXPECTED_ROM_SHA_SET" -eq 1 && "$ACTUAL_ROM_SHA" != "$EXPECTED_ROM_SHA" ]]; then
     printf 'ROM SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_ROM_SHA" "$EXPECTED_ROM_SHA" >&2
     exit 1
 fi
@@ -40,15 +79,105 @@ if [[ "$ACTUAL_ARES_SHA" != "$EXPECTED_ARES_SHA" ]]; then
 fi
 
 STATE_ROOT="${N64GAME_ARES_STATE:-$HOME/Library/Application Support/ares-v148-n64game}"
-mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
-VERSION="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
-if [[ "$VERSION" != *"v148"* ]]; then
-    printf 'unexpected Ares version: %s\n' "$VERSION" >&2
+mkdir -p "$STATE_ROOT/Systems" "$STATE_ROOT/Saves/Nintendo 64" "$STATE_ROOT/Screenshots" "$STATE_ROOT/Debugging"
+SETTINGS_FILE="$STATE_ROOT/settings.bml"
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+    "$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null
+fi
+repair_ares_settings() {
+    perl -0pi -e '
+    s/(\n  Defocus: )[^\n]*/${1}Allow/;
+    s/(\n  ExpansionPak: )[^\n]*/${1}false/;
+    s/(\n        L-Up: )[^\n]*/${1};;/;
+    s/(\n        L-Down: )[^\n]*/${1};;/;
+    s/(\n        L-Left: )[^\n]*/${1};;/;
+    s/(\n        L-Right: )[^\n]*/${1};;/;
+    s/(\n        Up: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
+    s/(\n        Down: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Left: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        Right: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        B: )[^\n]*/${1}0x1\/0\/63;;/;
+    s/(\n        A: )[^\n]*/${1}0x1\/0\/65;;/;
+    s/(\n        C-Down: )[^\n]*/${1}0x1\/0\/42;;/;
+    s/(\n        Z: )[^\n]*/${1}0x1\/0\/98;;/;
+    s/(\n        Start: )[^\n]*/${1}0x1\/0\/97;;/;
+    s/(\n        X-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/94;0x1\/0\/40;;/;
+    s/(\n        X-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/95;0x1\/0\/43;;/;
+    s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
+    s/(\n        Y-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
+' "$SETTINGS_FILE"
+}
+repair_ares_settings
+VERSION_RAW="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
+if [[ ! "$VERSION_RAW" =~ ^[[:space:]]*v148[[:space:]]*$ ]]; then
+    printf 'unexpected Ares version output: %q\n' "$VERSION_RAW" >&2
     exit 1
 fi
+repair_ares_settings
+/usr/bin/python3 - "$SETTINGS_FILE" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+settings = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = settings.find("\nNintendo64\n")
+if start < 0:
+    raise SystemExit("Ares settings are missing the Nintendo64 block")
+port = settings.find("\n    Controller.Port.1\n      Gamepad\n", start)
+if port < 0:
+    raise SystemExit("Ares settings are missing Nintendo64 Controller.Port.1 Gamepad")
+end = settings.find("\n      Mouse\n", port)
+if end < 0:
+    raise SystemExit("Ares settings are missing the Controller.Port.1 Gamepad terminator")
+block = settings[port:end]
+for binding in (
+    "        L-Up: ;;",
+    "        L-Down: ;;",
+    "        L-Left: ;;",
+    "        L-Right: ;;",
+    "        Up: 0x1/0/92;0x1/0/62;",
+    "        Down: 0x1/0/93;0x1/0/58;",
+    "        Left: 0x1/0/94;0x1/0/40;",
+    "        Right: 0x1/0/95;0x1/0/43;",
+    "          Lo: 0x1/0/94;0x1/0/40;",
+    "          Hi: 0x1/0/95;0x1/0/43;",
+    "          Lo: 0x1/0/93;0x1/0/58;",
+    "          Hi: 0x1/0/92;0x1/0/62;",
+):
+    if binding not in block:
+        raise SystemExit(f"Ares keyboard map repair did not persist binding: {binding}")
+PY
+VERSION_CANONICAL="ares version v148"
 
 printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
-    "$VERSION" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+    "$VERSION_CANONICAL" "$ACTUAL_ARES_SHA" "$ACTUAL_ROM_SHA"
+
+if [[ "$OPEN_INPUT_MONITORING" -eq 1 ]]; then
+    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent'
+    printf 'opened_input_monitoring=true\nares_bundle_id=dev.ares.ares\n'
+    exit 0
+fi
+
+if [[ "$EXPECTED_EEPROM_SHA_SET" -eq 1 ]]; then
+    ROM_FILENAME="$(basename "$ROM")"
+    EEPROM_PATH="$STATE_ROOT/Saves/Nintendo 64/${ROM_FILENAME%.*}.eeprom"
+    if [[ ! -f "$EEPROM_PATH" || -L "$EEPROM_PATH" ]]; then
+        printf 'active Ares EEPROM must be a non-symlink regular file: %s\n' "$EEPROM_PATH" >&2
+        exit 1
+    fi
+    EEPROM_BYTES="$(stat -f '%z' "$EEPROM_PATH")"
+    if [[ "$EEPROM_BYTES" != "512" ]]; then
+        printf 'active Ares EEPROM must be exactly 512 bytes: got %s\n' "$EEPROM_BYTES" >&2
+        exit 1
+    fi
+    ACTUAL_EEPROM_SHA="$(shasum -a 256 "$EEPROM_PATH" | awk '{print $1}')"
+    if [[ "$ACTUAL_EEPROM_SHA" != "$EXPECTED_EEPROM_SHA" ]]; then
+        printf 'EEPROM SHA-256 mismatch: got %s expected %s\n' "$ACTUAL_EEPROM_SHA" "$EXPECTED_EEPROM_SHA" >&2
+        exit 1
+    fi
+    printf 'eeprom_sha256=%s\n' "$ACTUAL_EEPROM_SHA"
+fi
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
     exit 0
@@ -58,7 +187,25 @@ exec "$ARES" \
     --settings-file "$STATE_ROOT/settings.bml" \
     --setting General/HomebrewMode=true \
     --setting Nintendo64/ExpansionPak=false \
+    --setting Input/Driver=SDL \
     --setting Input/Defocus=Allow \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/93;0x1/0/58;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/94;0x1/0/40;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Right=0x1/0/95;0x1/0/43;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Lo=0x1/0/94;0x1/0/40;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/X-Axis/Hi=0x1/0/95;0x1/0/43;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Lo=0x1/0/93;0x1/0/58;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Y-Axis/Hi=0x1/0/92;0x1/0/62;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/B=0x1/0/63;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/A=0x1/0/65;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/C-Down=0x1/0/42;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Z=0x1/0/98;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Start=0x1/0/97;;' \
     --setting "Paths/Home=$STATE_ROOT/Systems/" \
     --setting "Paths/Saves=$STATE_ROOT/Saves/" \
     --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/" \

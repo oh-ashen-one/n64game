@@ -4,9 +4,9 @@ subset_sha256: 4e1a0c8180fa4008b0bfe937ebea26b3056cd600af3b44d7ae167fdbd06554b5
 subset_allowlist: NONE
 creator_id: openai.codex-n64game
 rights_holder_id: oh-ashen-one.project
-source_manifest: assets-src/prop/prop.annex.sim_dais/SOURCE_MANIFEST.sha256@d26d99729fde4c39efe3ca787ccbed21846bfb5f8749d677c7172d1538a8837e
+source_manifest: assets-src/prop/prop.annex.sim_dais/SOURCE_MANIFEST.sha256@296f4750cb6c1970363d9876087371beafe23b4488f41206e93788dc9a536328
 output_manifest: NONE
 rights_basis: project-original
-rights_evidence: assets-src/prop/prop.annex.sim_dais/RIGHTS.md@90d70f13fc42c409f51d76eccf59c8f0807758ccfe8c8478795e2ea14c81119b
-transformations_sha256: 3765eb408c514ec1ef7c918c0633abadad1eebe28abb7f1dea6ba37d254efad8
+rights_evidence: assets-src/prop/prop.annex.sim_dais/RIGHTS.md@8e161c7938f83af571758d9d38e89cdacdd3920829cb39c21a2067cc1cebdc39
+transformations_sha256: 27abc78d9b610c1f12cd5797bc36165c20bad311cc20c60dfaf023c3da678a14
 output_license: project-all-rights-reserved

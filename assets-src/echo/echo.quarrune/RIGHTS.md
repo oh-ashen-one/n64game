@@ -1,0 +1,10 @@
+schema: n64game-rights-evidence-v1
+subject_id: echo.quarrune
+rights_basis: generated-provider-terms
+rights_holder_id: oh-ashen-one.project
+output_license: provider-terms-output
+evidence_kind: GENERATIVE_TERMS
+input_records: assets-src/echo/echo.quarrune/quarrune_concept_g1_v3.png@4b30b5fe0e4c1b952402a05ad2a67d6372148aba313bdbac615fe598b8064d7e|2026-07-20T20:14:33Z|concept-reference|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.quarrune/rights-support/OPENAI_PROVIDER_TERMS.md@6b0074063709ad4e580d6d040c55e87a4ee6efbc0d6b3e4fe083181b79f02e77|NONE|NONE;assets-src/echo/echo.quarrune/quarrune_functional_three_quarter_g1_v1.png@6d95f565fa8bc3c61ec587e1787b18aa66b67643d36626463737d63c387c1221|2026-07-20T20:55:21Z|concept-functional-three-quarter|generated-provider-terms|provider-terms|openai-terms-2026-07-20|assets-src/echo/echo.quarrune/rights-support/OPENAI_PROVIDER_TERMS.md@6b0074063709ad4e580d6d040c55e87a4ee6efbc0d6b3e4fe083181b79f02e77|NONE|NONE
+third_party_notices: assets-src/echo/echo.quarrune/rights-support/THIRD_PARTY_NOTICE.md@c9639bcc93aab37011584af6f11d5099a5f1bdba070fe9f57d849aa341256a49
+reviewer_id: openai.codex-rights-auditor
+verified_at: 2026-07-20T21:12:45Z

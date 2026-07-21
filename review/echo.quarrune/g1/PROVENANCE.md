@@ -1,0 +1,12 @@
+schema: n64game-provenance-v1
+production_id: echo.quarrune
+subset_sha256: 4e1a0c8180fa4008b0bfe937ebea26b3056cd600af3b44d7ae167fdbd06554b5
+subset_allowlist: NONE
+creator_id: openai.codex-n64game
+rights_holder_id: oh-ashen-one.project
+source_manifest: assets-src/echo/echo.quarrune/SOURCE_MANIFEST.sha256@841ae06cd395268b7a98651ad7edbb16c86eed37c7b21f3d0582f5e0e6fe18ee
+output_manifest: NONE
+rights_basis: generated-provider-terms
+rights_evidence: assets-src/echo/echo.quarrune/RIGHTS.md@348c46ef2b1b3ca656d697ef25890ba03a25923562f814244aab0d67d21ab828
+transformations_sha256: 75aab46219881215ac772a0b6ee92aab892e8e06c457b9e3c4d59a48bf60095a
+output_license: provider-terms-output

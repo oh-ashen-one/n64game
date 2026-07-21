@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+mkdir -p build/reports
+/usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_certification*.py' -v
+/usr/bin/python3 -I -B -m unittest discover -s test/host -p 'test_input_log_evidence.py' -v
+printf 'suite=n64game_certification_contracts\nresult=PASS\nscope=certification telemetry validator, manifest assembler, capture plan, deterministic EEPROM save fixtures, input-log evidence validator, and fail-closed death cases; synthetic tests only, no real Ares certification claimed\n' > build/reports/certification-tests.txt

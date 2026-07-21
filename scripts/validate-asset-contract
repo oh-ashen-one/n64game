@@ -2443,13 +2443,15 @@ def validate_ordinary_generation_records(payload_context, source_manifest_path, 
   generated_sources = source_owned.select do |path|
     payload_context[:entries].dig(path, :role) == "source.generated"
   end.sort
-  expected_record_paths = generated_sources.map do |source_path|
-    "#{generation_root}#{Digest::SHA256.hexdigest(source_path)[0, 16]}.md"
+  expected_record_path_by_source = generated_sources.to_h do |source_path|
+    [source_path, "#{generation_root}#{Digest::SHA256.hexdigest(source_path)[0, 16]}.md"]
   end
+  expected_record_paths = expected_record_path_by_source.values.sort
   actual_record_paths = source_owned.select { |path| path.start_with?(generation_root) }.sort
   error("#{label}: ordinary generation records must exactly cover every source.generated member") unless
     actual_record_paths == expected_record_paths
-  generated_sources.zip(expected_record_paths).each do |source_path, record_path|
+  generated_sources.each do |source_path|
+    record_path = expected_record_path_by_source.fetch(source_path)
     source_entry = payload_context[:entries][source_path]
     record_entry = payload_context[:entries][record_path]
     unless source_entry && record_entry

@@ -1,3 +1,7 @@
-assets-src/env/env.annex.atrium_lower/RIGHTS.md	589	0f990967c0bd4760d45314261868be4d4595417729af6d5fa6d38ebaa42ca20e	build:-	capture:-	role:rights.record
-assets-src/env/env.annex.atrium_lower/TRANSFORMATIONS.md	292	3dd16f390847e79c608a9ff520d92a004f1ea73e1615010c65714cb77f2709d1	build:-	capture:-	role:metadata.transformations
-assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend	1212931	a41610c679a3a4a8d1323dddcc63bb12b3f833db4a0badd2a9142181e34d20e6	build:-	capture:-	role:source.authored
+assets-src/env/env.annex.atrium_lower/RIGHTS.md	1122	40e38ca8d50f841dbd949fdcf978930e6c77641168ca9c0a7c835702831ff207	build:-	capture:-	role:rights.record
+assets-src/env/env.annex.atrium_lower/TRANSFORMATIONS.md	306	08e8793ee8fd8ebdbe8e8cf1ba9f994f9e3cbd391df162b8e79fa63cbf0ed735	build:-	capture:-	role:metadata.transformations
+assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_art_target_g1_v2.png	1992903	a417859be17f967241baebdd92a9ad775b9665c43475cd0d72e5880bceab5375	build:-	capture:-	role:source.generated
+assets-src/env/env.annex.atrium_lower/env_annex_atrium_lower_concept.blend	1578566	13fb53e15b9526989cb06f4a5c32e06ca3516f4f51baddad12cb12e5c4bfaaa2	build:-	capture:-	role:source.authored
+assets-src/env/env.annex.atrium_lower/generation/13475edad12e23ed.md	3106	7263aef19f3c6f8f07b2972ffa183f3c9af102b14275eb7256cbc5b106b13a5d	build:-	capture:-	role:generation.record
+assets-src/env/env.annex.atrium_lower/rights-support/OPENAI_PROVIDER_TERMS.md	697	2128c1f7c7c198061841972534b90fe0394c72f96bd7dae1bfc28a4e663973c6	build:-	capture:-	role:rights.support
+assets-src/env/env.annex.atrium_lower/rights-support/THIRD_PARTY_NOTICE.md	582	2ff38de7369c28e55a118ad942786149fd52b8ab7e094bc6269d8555ac7c6414	build:-	capture:-	role:rights.support

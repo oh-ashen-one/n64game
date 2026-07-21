@@ -4,9 +4,9 @@ subset_sha256: 4e1a0c8180fa4008b0bfe937ebea26b3056cd600af3b44d7ae167fdbd06554b5
 subset_allowlist: NONE
 creator_id: openai.codex-n64game
 rights_holder_id: oh-ashen-one.project
-source_manifest: assets-src/lmk/lmk.annex.skylight_spine/SOURCE_MANIFEST.sha256@2483093c1e31629072248e56145fe0c156bb6cf7e3cfa65e2d88275002c1b43c
+source_manifest: assets-src/lmk/lmk.annex.skylight_spine/SOURCE_MANIFEST.sha256@087d7c0d7c560b2e497f9030fe1920d3c3974931393ef0a8cac162ee56e29255
 output_manifest: NONE
 rights_basis: project-original
-rights_evidence: assets-src/lmk/lmk.annex.skylight_spine/RIGHTS.md@2884cadf99ffc76a34e6cd5677fc6ea27ce73f792d4de639117615dec267f78e
-transformations_sha256: 0fa149c356850dcceb31802361f6fe155c6ab722bd9570928a2fbccd261c9971
+rights_evidence: assets-src/lmk/lmk.annex.skylight_spine/RIGHTS.md@2b9d06800e77314df590b9d76c97c4f322e38f9b051e7fe29664473ce8de4d94
+transformations_sha256: 9f1aa4a1adf7e5618cb3a2463eb7295c963bfaa3aa82d139d2171871e05d7381
 output_license: project-all-rights-reserved

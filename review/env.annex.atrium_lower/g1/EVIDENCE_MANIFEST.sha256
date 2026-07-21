@@ -1,1 +1,8 @@
-review/env.annex.atrium_lower/g1/CONCEPT_RENDER.png	1555477	a0f4b66fc8cd283c8ae5c78c37ac740e7b29576c2c52dc810cea16f244c4e139	build:-	capture:g1.env.annex.atrium_lower.sheet	role:concept.presentation
+review/env.annex.atrium_lower/g1/ART_TARGET.png	1950960	91b92b6c40acfbfcdf126e53bcf11ca37e108208300920684551d765cb97fd0d	build:-	capture:g1.env.annex.atrium_lower.art_target	role:concept.environment_target
+review/env.annex.atrium_lower/g1/CONCEPT_RENDER.png	2026401	aa46097e09096b4a8c187b1247079e86ba1a4b5af45c80402b38fe1f8f095851	build:-	capture:g1.env.annex.atrium_lower.sheet	role:concept.presentation
+review/env.annex.atrium_lower/g1/CONSTRUCTION_NOTES.md	6898	3d4a55dca5c58365238f48e4c221e49febe652f1cdd7e31a3db9eb180c4fb6b8	build:-	capture:-	role:concept.notes
+review/env.annex.atrium_lower/g1/FUNCTIONAL_THREE_QUARTER.png	681694	3c5f8052ffa4c0948fb1fafde8b6085468aae76632791bfe18429443008cd8a9	build:-	capture:g1.env.annex.atrium_lower.functional_three_quarter	role:concept.functional_three_quarter
+review/env.annex.atrium_lower/g1/NATIVE_READABILITY_320x240.png	117988	c8d3f6558720e92acab5036be9a271b2e1f0aa24bfa3f505582e1965b0429231	build:-	capture:g1.env.annex.atrium_lower.native_320x240	role:concept.native_readability
+review/env.annex.atrium_lower/g1/PLAN_VIEW.png	484833	02f71b1a4f7916fde3a5cd5a1e280bd4f6305254eeb60d2519884432d46456da	build:-	capture:g1.env.annex.atrium_lower.plan	role:concept.plan_view
+review/env.annex.atrium_lower/g1/PROVENANCE.md	699	15ce99967f9774fe36be2be2ebc5067ef7d27a68139857f819904b2d42019e4e	build:-	capture:-	role:provenance.record
+review/env.annex.atrium_lower/g1/SCALE_LINEUP.png	453290	446d011f4bce727cdf5eae8ba2c5863c8774def89cba3c12c1dee3595f5e6027	build:-	capture:g1.env.annex.atrium_lower.scale	role:concept.scale_lineup

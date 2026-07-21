@@ -33,26 +33,26 @@ typedef struct {
  * overlaps are the only paths between the four large room rectangles.
  */
 static const AnnexRegion ANNEX_REGIONS[] = {
-    { Q8(-28), Q8(28), Q8(-44), Q8(32), N64GAME_ANNEX_ATRIUM, true },
-    { Q8(-76), Q8(-36), Q8(-28), Q8(20), N64GAME_ANNEX_SIMULATION, true },
-    { Q8(-38), Q8(-24), Q8(-8), Q8(8), N64GAME_ANNEX_SIMULATION, false },
-    { Q8(36), Q8(68), Q8(-16), Q8(30), N64GAME_ANNEX_WORKSHOP, true },
-    { Q8(24), Q8(38), Q8(8), Q8(20), N64GAME_ANNEX_WORKSHOP, false },
-    { Q8(60), Q8(92), Q8(36), Q8(64), N64GAME_ANNEX_OVERLOOK, true },
-    { Q8(56), Q8(68), Q8(24), Q8(38), N64GAME_ANNEX_OVERLOOK, false },
+    { Q8(-44), Q8(20), Q8(-40), Q8(24), N64GAME_ANNEX_ATRIUM, true },
+    { Q8(-116), Q8(-52), Q8(-40), Q8(24), N64GAME_ANNEX_SIMULATION, true },
+    { Q8(-54), Q8(-42), Q8(-20), Q8(20), N64GAME_ANNEX_SIMULATION, false },
+    { Q8(28), Q8(92), Q8(-20), Q8(44), N64GAME_ANNEX_WORKSHOP, true },
+    { Q8(18), Q8(30), Q8(0), Q8(24), N64GAME_ANNEX_WORKSHOP, false },
+    { Q8(84), Q8(148), Q8(36), Q8(100), N64GAME_ANNEX_OVERLOOK, true },
+    { Q8(82), Q8(94), Q8(34), Q8(56), N64GAME_ANNEX_OVERLOOK, false },
 };
 
 static const AnnexPoint SAFE_ANCHORS[N64GAME_ANNEX_SECTOR_COUNT] = {
     [N64GAME_ANNEX_ATRIUM] = { Q8(-12), Q8(-8) },
-    [N64GAME_ANNEX_SIMULATION] = { Q8(-52), Q8(-8) },
-    [N64GAME_ANNEX_WORKSHOP] = { Q8(44), Q8(12) },
-    [N64GAME_ANNEX_OVERLOOK] = { Q8(68), Q8(42) },
+    [N64GAME_ANNEX_SIMULATION] = { Q8(-84), Q8(-8) },
+    [N64GAME_ANNEX_WORKSHOP] = { Q8(60), Q8(12) },
+    [N64GAME_ANNEX_OVERLOOK] = { Q8(116), Q8(68) },
 };
 
 static const AnnexInteractionDef INTERACTIONS[] = {
     {
         N64GAME_ANNEX_INTERACTION_SERA,
-        { Q8(-38), Q8(-8) },
+        { Q8(-32), Q8(4) },
         "TALK TO SERA",
     },
     {
@@ -62,12 +62,12 @@ static const AnnexInteractionDef INTERACTIONS[] = {
     },
     {
         N64GAME_ANNEX_INTERACTION_TAVI,
-        { Q8(5), Q8(-34) },
+        { Q8(4), Q8(-22) },
         "TALK TO TAVI",
     },
     {
         N64GAME_ANNEX_INTERACTION_BEACON,
-        { Q8(74), Q8(40) },
+        { Q8(100), Q8(50) },
         "OVERLOOK BEACON",
     },
     {

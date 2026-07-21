@@ -267,6 +267,186 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "runtime-candidates/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.png",
             "rom:/echo/echo.quarrune/tex_quarrune_blob_shadow_ia8_32x32.sprite",
         ),
+        (
+            "candidate.env.annex.atrium_lower.threshold_kit",
+            "model_glb",
+            "runtime-candidates/env/env.annex.threshold_kit/annex_threshold_kit.glb",
+            "rom:/env/env.annex.threshold_kit/annex_threshold_kit.t3dm",
+        ),
+        (
+            "candidate.env.annex.atrium_lower.architecture",
+            "texture_png",
+            "runtime-candidates/env/env.annex.threshold_kit/tex_annex_architecture_ci4_64x64.png",
+            "rom:/env/env.annex.threshold_kit/tex_annex_architecture_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.env.annex.atrium_lower.trim_resonance",
+            "texture_png",
+            "runtime-candidates/env/env.annex.threshold_kit/tex_annex_trim_resonance_ci4_64x32.png",
+            "rom:/env/env.annex.threshold_kit/tex_annex_trim_resonance_ci4_64x32.sprite",
+        ),
+        (
+            "candidate.env.annex.atrium_lower.resonance_mask",
+            "texture_png",
+            "runtime-candidates/env/env.annex.threshold_kit/tex_annex_resonance_mask_ia8_32x32.png",
+            "rom:/env/env.annex.threshold_kit/tex_annex_resonance_mask_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.chr.player.ari.hero",
+            "model_glb",
+            "runtime-candidates/chr/chr.player.ari/player_ari.glb",
+            "rom:/chr/chr.player.ari/player_ari.t3dm",
+        ),
+        (
+            "candidate.chr.player.ari.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.player.ari/tex_player_ari_body_ci8_64x64.png",
+            "rom:/chr/chr.player.ari/tex_player_ari_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.chr.player.ari.face",
+            "texture_png",
+            "runtime-candidates/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.png",
+            "rom:/chr/chr.player.ari/tex_player_ari_face_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.ayselor/ayselor_distance.glb",
+            "rom:/echo/echo.ayselor/ayselor_distance.t3dm",
+        ),
+        (
+            "candidate.echo.ayselor.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.ayselor.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.ayselor/tex_ayselor_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.ayselor/tex_ayselor_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.gyreclast/gyreclast_distance.glb",
+            "rom:/echo/echo.gyreclast/gyreclast_distance.t3dm",
+        ),
+        (
+            "candidate.echo.gyreclast.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.gyreclast.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.gyreclast/tex_gyreclast_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.gyreclast/tex_gyreclast_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.distance",
+            "model_glb",
+            "runtime-candidates/echo/echo.kivarrax/kivarrax_distance.glb",
+            "rom:/echo/echo.kivarrax/kivarrax_distance.t3dm",
+        ),
+        (
+            "candidate.echo.kivarrax.body",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_body_ci8_64x64.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.accent",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_accent_ci4_32x32.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.echo.kivarrax.shadow",
+            "texture_png",
+            "runtime-candidates/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.png",
+            "rom:/echo/echo.kivarrax/tex_kivarrax_blob_shadow_ia8_32x32.sprite",
+        ),
+        (
+            "candidate.chr.sera_venn.distance",
+            "model_glb",
+            "runtime-candidates/chr/chr.sera_venn/sera_venn_distance.glb",
+            "rom:/chr/chr.sera_venn/sera_venn_distance.t3dm",
+        ),
+        (
+            "candidate.chr.sera_venn.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_body_ci4_64x64.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.chr.sera_venn.face",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_face_ci4_32x32.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_face_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.chr.sera_venn.accent",
+            "texture_png",
+            "runtime-candidates/chr/chr.sera_venn/tex_sera_venn_accent_ci4_32x32.png",
+            "rom:/chr/chr.sera_venn/tex_sera_venn_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.chr.tavi.distance",
+            "model_glb",
+            "runtime-candidates/chr/chr.tavi/tavi_distance.glb",
+            "rom:/chr/chr.tavi/tavi_distance.t3dm",
+        ),
+        (
+            "candidate.chr.tavi.body",
+            "texture_png",
+            "runtime-candidates/chr/chr.tavi/tex_tavi_body_ci4_64x64.png",
+            "rom:/chr/chr.tavi/tex_tavi_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.chr.tavi.face_accent",
+            "texture_png",
+            "runtime-candidates/chr/chr.tavi/tex_tavi_face_accent_ci4_32x32.png",
+            "rom:/chr/chr.tavi/tex_tavi_face_accent_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.model",
+            "model_glb",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/annex_beacon_decoder.glb",
+            "rom:/prop/prop.annex.beacon_decoder/annex_beacon_decoder.t3dm",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.body",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_body_ci4_64x64.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_body_ci4_64x64.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.signal",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_signal_ci4_32x32.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_signal_ci4_32x32.sprite",
+        ),
+        (
+            "candidate.prop.annex.beacon_decoder.shadow",
+            "texture_png",
+            "runtime-candidates/prop/prop.annex.beacon_decoder/tex_annex_beacon_shadow_ia8_32x32.png",
+            "rom:/prop/prop.annex.beacon_decoder/tex_annex_beacon_shadow_ia8_32x32.sprite",
+        ),
     )
     rows: list[dict[str, str]] = []
     observed_identity: list[tuple[str, str, str, str]] = []
@@ -307,13 +487,20 @@ def validate_runtime_candidates() -> dict[str, Any]:
             }
         )
     if tuple(observed_identity) != expected:
-        raise ContractError("runtime candidate identity/path census is not the exact Quarrune proof set")
+        raise ContractError(
+            "runtime candidate identity/path census is not the exact Quarrune, Annex, Ari, "
+            "Ayselor, Gyreclast, Kivarrax, Sera, Tavi, and beacon proof set"
+        )
     return {
         "manifest": RUNTIME_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
         "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
-        "scope": "Quarrune static in-engine proof only; not Gate evidence or production approval",
+        "scope": (
+            "Quarrune, Annex, Ari, Ayselor, Gyreclast, Kivarrax, Sera, Tavi, and beacon "
+            "in-engine proof only; "
+            "not Gate evidence or production approval"
+        ),
         "entries": rows,
     }
 
@@ -424,7 +611,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Quarrune static proof; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} ({candidates['scope']})\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

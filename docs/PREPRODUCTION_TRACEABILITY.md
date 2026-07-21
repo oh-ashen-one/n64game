@@ -2,6 +2,8 @@
 
 This document is the exit audit for production Gate 2. It does not replace the master specification. A checked item means the cited production document contains an implementation-ready decision that has been reconciled with every other Gate 2 document.
 
+Reduced-release note: the public one-week master specification replaced the former 18-25 minute, two-destination Gate 2 plan. Historical Gate 2 approval evidence remains useful as preproduction provenance, but the locked chapter envelope and active cross-document checks below now describe only the retained 6-8 minute Meridian Annex chapter.
+
 ## Authority and change control
 
 - The authority order is: explicit user change, `docs/N64GAME_MASTER_SPEC.md`, then the supporting documents named below.
@@ -31,18 +33,18 @@ These values come directly from the master specification and must agree across e
 | Item | Locked value |
 |---|---|
 | Measured chapter | Cold boot through stable closing Fracture hook |
-| Normal first-time runtime | 18–25 minutes, excluding idle time |
-| Minimum player-controlled time | At least 15 minutes in every qualifying first-playthrough certification run; never a median-only test |
+| Normal first-time runtime | Two qualifying runs each land between 6 and 10 minutes, with a 6-8 minute median, excluding intentional idle time |
+| Minimum player-controlled time | At least 4 minutes in every qualifying first-playthrough certification run; never a median-only test |
 | Temporary cinematic | Final-styled, skippable `INSERT CUTSCENE HERE` slate; three-second hold and no more than five seconds total |
-| Destinations | Meridian Research Annex and Veyra Observatory Estate, plus an interactive world map |
-| Battles | One complete interactive simulation 2v2 and one complete real 2v2 against Rusk |
-| Battle roster | Eight distinct polished battle-capable Echoforms: two real starters, two simulation loaners, two simulation opponents, two estate opponents |
-| Annex spaces | Simulation room, central atrium, director's lab, player room, clinic/creature bay, workshop, elevator, and exterior threshold |
-| Estate spaces | Courtyard/exterior, foyer/gallery, invention hall, and observatory study |
-| Companion flow | Tavi discovered, joins visibly, follows safely through the return transition, and resolves the objective at the Annex |
+| Destinations | One finished Meridian Research Annex environment; no world map or Estate in this release |
+| Battles | One complete 2v2 Resonance battle: Quarrune and Ayselor versus Gyreclast and Kivarrax |
+| Battle roster | Four distinct polished battle-capable Echoforms: Quarrune, Ayselor, Gyreclast, and Kivarrax |
+| Annex spaces | Simulation chamber, central research atrium, compact workshop/relay station, and exterior beacon overlook |
+| Estate spaces | Cut from this release; future-reference only |
+| Companion flow | Tavi is staged in the Annex and participates in the beacon-hook reaction; no follower-return system in this release |
 | Closing hook | Field Relay receives the Solace beacon signature; a Resonance monitor reacts to an unknown Fractured Echoform; progress saves into a stable post-chapter state |
 | Hardware | Standard 4 MB N64, no Expansion Pak, 320×240, 16-bit, triple-buffered, target 30 FPS |
-| Resource targets | ROM under 16 MiB target, peak free heap at least 512 KiB, no persistent loss over 20 complete transition loops |
+| Resource targets | ROM under 16 MiB target, peak free heap at least 512 KiB, no persistent loss over 10 complete title/Annex/battle transition loops |
 | Save medium | EEPROM4K with explicit versioning, checksums, safe writes, fallback, and migration policy |
 | Intentionally temporary final content | The cinematic slate only |
 
@@ -54,18 +56,18 @@ These values come directly from the master specification and must agree across e
 - [x] Every segment includes expected time, active-control time, critical path, optional content, and anti-padding intent.
 - [x] The exact slate insertion point and one idempotent watched/skipped handoff are defined.
 - [x] Name entry handles default/custom input, length bounds, backspace, confirmation, and cancel protection.
-- [x] Both 2v2 battles identify participants, encounter intent, tutorial or AI behavior, win/loss state, retry behavior, and reward idempotency.
-- [x] The Annex and Estate have critical-path and optional interactions with readable objective guidance.
-- [x] World-map travel preserves and saves the correct state in both directions.
-- [x] Tavi's discovery, follower recovery, transitions, return, and objective resolution are state-complete.
+- [x] The retained 2v2 battle identifies participants, encounter intent, AI behavior, win/loss state, retry behavior, and reward idempotency.
+- [x] The Annex has critical-path and optional interactions with readable objective guidance across the four retained sectors.
+- [x] Field Relay pages expose Party, Messages, Resonance, and Save without promising a disabled world map.
+- [x] Tavi's Annex staging and closing-hook reaction are state-complete; follower recovery is outside the reduced release.
 - [x] Dialogue skipping, rapid input, controller loss, invalid save, revisit, and repeated-objective cases have explicit outcomes.
-- [x] Three eventual timing captures can be compared against named segment markers without manual interpretation.
+- [x] Two eventual timing captures can be compared against named segment markers without manual interpretation.
 
 ### Technical and data design
 
 - [x] Scene ownership includes synchronized exit, arena/registry accounting, partial-load rollback, and transition safety.
 - [x] Update, fixed simulation, rendering, UI, audio, loading, and final display submission have an explicit frame order.
-- [x] Exploration, dialogue, battle, world map, cutscene slate, save, and post-chapter systems have defined interfaces and ownership.
+- [x] Exploration, dialogue, battle, Field Relay, cutscene slate, save, and post-chapter systems have defined interfaces and ownership.
 - [x] Future FMV playback can replace the slate without changing the completion callback or story flags.
 - [x] Immutable content definitions are separate from runtime actor/state objects and asset paths are not scattered through gameplay logic.
 - [x] Save serialization uses exact byte offsets and endianness rather than native C struct layout, and every serialized ID/bit domain is bound to the immutable reviewed-commit registry with append/tombstone-only history checks.
@@ -80,7 +82,7 @@ These values come directly from the master specification and must agree across e
 - [x] Palette values, texture formats/sizes, vertex-color behavior, material counts, geometry/rig limits, scale, naming, and export conventions are numeric where practical.
 - [x] The art bible rejects generic generated shapes, primitives as final art, default materials, empty rooms, flat lighting, baked-light mistakes, stiff animation, malformed anatomy, and identity drift.
 - [x] Gameplay-camera and native 320×240 readability drive silhouettes, poses, contrast, and interface sizing.
-- [x] The asset inventory contains all eight Echoforms, all required humanoids, both complete destinations, world map, at least 25 purposeful props, every collision/export unit, all UI, all implemented move VFX/audio, all required animations, the loading/slate presentation, and every storyboard/review deliverable.
+- [x] The active retained-release inventory contains four Echoforms, the required humanoids, one complete Annex destination, at least 12 purposeful props, every retained collision/export unit, all retained UI, all implemented move VFX/audio, required animations, loading/slate presentation, and every storyboard/review deliverable.
 - [x] Each inventory item has a unique stable ID, scope/budget, dependency, production priority, and required evidence.
 - [x] Every major asset must pass the seven review gates and receive two deliberate polish passes after its first in-engine appearance.
 - [x] The visual benchmark is a representative integrated scene, not isolated attractive renders.
@@ -89,8 +91,8 @@ These values come directly from the master specification and must agree across e
 ### Cross-document consistency and public hygiene
 
 - [x] All named characters, Echoforms, moves, locations, scene IDs, story flags, encounter IDs, and asset IDs agree across the document set.
-- [x] Roster and asset counts reconcile exactly; reuse is explicit and does not disguise a missing distinct Echoform.
-- [x] The three total durations have an 18–25 minute median, and every qualifying run independently contains at least 15 minutes of active control.
+- [x] Roster and asset counts reconcile exactly with `docs/RETAINED_RELEASE.tsv`; reuse is explicit and does not disguise a missing distinct Echoform.
+- [x] The two total durations must each land between 6 and 10 minutes, their median must land between 6 and 8 minutes, and every qualifying run independently contains at least 4 minutes of active control.
 - [x] Art budgets fit the architecture's memory/render assumptions and are marked for Gate 4 measurement rather than presented as already proven.
 - [x] Save flags and transition states cover every story precondition/postcondition named in the script.
 - [x] No production content uses a Pokémon or Pandemonium name, asset, protected design, dialogue, layout, UI expression, or closely paraphrased code; clean-room audit mentions are explicitly non-production constraints.

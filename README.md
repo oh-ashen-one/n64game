@@ -27,6 +27,38 @@ This screenshot is the small Gate 3 diagnostic—not gameplay or representative 
 - `Start` or `Z`: open or close Pause
 - `C-down`: open or close the Field Relay after it is unlocked
 
+When launched through `scripts/run-ares` on the pinned macOS Ares v148 build, the wrapper repairs the isolated Ares `settings.bml` before launch and supplies a deterministic keyboard map. Arrow keys and `WASD` drive the N64 D-pad plus the nested control-stick X/Y axes, so the same keys work in menus and during movement. Keyboard `Z` is N64 `A`, keyboard `X` is N64 `B`, keyboard `C` is N64 C-down, `Space` is N64 `Z`, and `Return` is N64 `Start`.
+
+On macOS, add the signed Ares app (`dev.ares.ares`) under **System Settings → Privacy & Security → Input Monitoring**, then restart Ares. Ares v148 polls keyboard state through Quartz; without this permission all keyboard mappings can appear dead. Click the game window once after relaunching.
+
+If arrows, `WASD`, or `Z` still do nothing, launch from this repo instead of opening Ares manually:
+
+```sh
+scripts/run-ares --homebrew-mode
+```
+
+For input smoke evidence, launch through the fail-closed capture helper. It records the wrapper preamble plus emulator log, then validates the observed edges after Ares exits:
+
+```sh
+scripts/capture-input-smoke
+```
+
+During the run, click the Ares game window and press Arrow/WASD directions, `Z`, `X`, `C`, `Space`, and `Return` in visible game contexts. To validate an already captured log without launching Ares:
+
+```sh
+scripts/capture-input-smoke --validate-only \
+  --log build/certification/input-smoke.log \
+  --rom build/game/n64game-gate3.z64
+```
+
+This returns `INPUT_LOG_PASS` only for a ROM-bound log with real `N64G_INPUT` edge records for every keyboard-mapped logical input. It is input evidence, not release certification.
+
+To jump straight to the macOS permission pane for the pinned Ares app:
+
+```sh
+scripts/run-ares --homebrew-mode --open-input-monitoring
+```
+
 ## Creative direction
 
 The game uses an original retro desert-science-fiction setting:

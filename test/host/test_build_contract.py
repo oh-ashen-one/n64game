@@ -35,6 +35,15 @@ class BuildContractTests(unittest.TestCase):
         self.assertEqual(sys.flags.no_user_site, 1)
         self.assertEqual(sys.flags.dont_write_bytecode, 1)
 
+    def test_release_sources_have_no_native_visual_autopilot(self) -> None:
+        for relative_path in (
+            "mk/rom.mk",
+            "src/n64game_core.c",
+            "src/n64game_render.c",
+        ):
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn("N64GAME_NATIVE_VISUAL_AUTOPILOT", source)
+
     @staticmethod
     def pinned_rom_fixture() -> bytearray:
         ipl3_source = (ROOT / "vendor" / "libdragon" / "tools" / "ipl3.h").read_text(encoding="utf-8")
@@ -64,13 +73,23 @@ class BuildContractTests(unittest.TestCase):
         report = build.validate_runtime_assets()
         self.assertEqual(report["runtime_asset_count"], 0)
 
-    def test_quarrune_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
+    def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 4)
+        self.assertEqual(report["runtime_candidate_count"], 34)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
-            ["model_glb", "texture_png", "texture_png", "texture_png"],
+            [
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png",
+                "model_glb", "texture_png", "texture_png", "texture_png",
+            ],
         )
         self.assertTrue(all(
             entry["status"] == "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE"
@@ -154,6 +173,8 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("display_set_fps_limit(30.0f)", source)
         self.assertIn("t3d_init", source)
         self.assertIn("dfs_init(DFS_DEFAULT_LOCATION)", source)
+        self.assertIn("n64game_audio_init();", source)
+        self.assertIn("play_input_feedback(input);", source)
         self.assertIn("n64game_core_update", source)
         self.assertIn("n64game_renderer_draw", source)
         self.assertIn("n64game_renderer_init_bootstrap", source)
@@ -162,6 +183,8 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("N64GAME_LOADING_ANNEX_ASSETS", source)
         self.assertIn("N64GAME_LOADING_SAVE_DATA", source)
         self.assertIn("N64GAME_LOADING_READY", source)
+        self.assertIn("LOADING_STAGE_HOLD_MS = 180UL", source)
+        self.assertEqual(source.count("wait_ms(LOADING_STAGE_HOLD_MS);"), 4)
         self.assertLess(
             source.index("n64game_renderer_init_bootstrap"),
             source.index("t3d_init((T3DInitParams){})"),
@@ -181,17 +204,64 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("SAVE_WRITE_BODY", source)
         self.assertIn("SAVE_WRITE_FOOTER", source)
         self.assertIn("eeprom_write_bytes", source)
+        self.assertIn("save_writer_retry_faulted_attempt", source)
+        retry_edge = source.index("const bool explicit_final_save_retry")
+        retry_reset = source.index(
+            "save_writer_retry_faulted_attempt(&save_writer);", retry_edge
+        )
+        writer_gate = source.index(
+            "if (save_available && !save_writer.faulted)", retry_reset
+        )
+        self.assertLess(retry_edge, retry_reset)
+        self.assertLess(retry_reset, writer_gate)
+        self.assertIn(
+            "final_save_before_update == N64GAME_FINAL_SAVE_FAILED",
+            source[retry_edge:retry_reset],
+        )
+        self.assertIn(
+            "game.final_save_state == N64GAME_FINAL_SAVE_PENDING",
+            source[retry_edge:retry_reset],
+        )
+        self.assertIn("game.save_requested", source[retry_edge:retry_reset])
         self.assertIn("joypad_is_connected(JOYPAD_PORT_1)", source)
         self.assertIn("n64game_core_update_controller", source)
+        self.assertEqual(source.count("sys_get_heap_stats(&heap_stats);"), 2)
+        self.assertRegex(
+            source,
+            r"if \(heap_sample_due\) \{\s+sys_get_heap_stats\(&heap_stats\);",
+        )
+        self.assertIn("N64GAME_TELEMETRY_HEAP_SAMPLE_FRAMES", source)
+        self.assertIn("TICKS_READ()", source)
+        self.assertIn("N64G_TELEM schema=1", source)
+        self.assertIn("status=INSTRUMENTATION_ONLY", source)
+        self.assertIn("n64game_telemetry_record_frame", source)
+        self.assertIn("n64game_telemetry_record_transition", source)
 
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for object_name in (
             "n64game_annex.o",
+            "n64game_audio.o",
             "n64game_core.o",
             "n64game_render.o",
             "n64game_save.o",
+            "n64game_telemetry.o",
+            "player_render_assets.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
+
+    def test_opening_cutscene_slot_and_loading_treatment_stay_spec_exact(self) -> None:
+        render_source = (ROOT / "src" / "n64game_render.c").read_text(encoding="utf-8")
+        self.assertIn('"INSERT CUTSCENE HERE"', render_source)
+        self.assertIn('"A OR START TO BEGIN"', render_source)
+        self.assertIn('"STORYBOARD PACKAGE INCLUDED"', render_source)
+        self.assertIn('"PLAYBACK WINDOW / 4:3 / 54.5 SEC"', render_source)
+        self.assertIn('"SOLACE INTERCEPTION"', render_source)
+        self.assertIn('"LOADING MERIDIAN ANNEX"', render_source)
+        self.assertIn('"SIGNAL PATH READY"', render_source)
+        self.assertLess(
+            render_source.index('"PLAYBACK WINDOW / 4:3 / 54.5 SEC"'),
+            render_source.index('"INSERT CUTSCENE HERE"'),
+        )
 
     def test_quarrune_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
@@ -202,7 +272,8 @@ class BuildContractTests(unittest.TestCase):
                 f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
                 makefile,
             )
-        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs: $(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
+        self.assertIn("$(BUILD_DIR)/$(ROM_NAME).dfs:", makefile)
+        self.assertIn("$(QUARRUNE_RUNTIME_CANDIDATES)", makefile)
         self.assertIn("$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs", makefile)
         self.assertNotIn("mkasset", makefile)
 
@@ -212,6 +283,50 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("quarrune_render_assets_dynamic_texture_cb", renderer)
         self.assertIn("rspq_block_run(renderer->quarrune_draw_block)", renderer)
         self.assertIn("n64game_renderer_destroy", renderer)
+
+    def test_annex_candidate_uses_exact_raw_conversion_and_dfs_path(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("ANNEX_KIT_SOURCE_DIR := runtime-candidates/env/env.annex.threshold_kit", makefile)
+        self.assertIn("ANNEX_KIT_FILESYSTEM_DIR := filesystem/env/env.annex.threshold_kit", makefile)
+        self.assertIn("$(ANNEX_KIT_SOURCE_DIR)/annex_threshold_kit.glb", makefile)
+        self.assertIn('$(T3D_GLTF_TO_3D) "$<" "$@" --base-scale=64 --asset-path=runtime-candidates', makefile)
+        for format_name, tile_size in (("CI4", "64,64"), ("CI4", "64,32"), ("IA8", "32,32")):
+            self.assertIn(
+                f"--format {format_name} --tiles {tile_size} --mipmap NONE --dither NONE --compress 0",
+                makefile,
+            )
+        self.assertNotIn("tex_annex_architecture_ci8_64x64", makefile)
+        self.assertIn("$(ANNEX_KIT_RUNTIME_CANDIDATES)", makefile)
+        self.assertNotIn("mkasset", makefile)
+
+    def test_player_candidate_emits_exact_skinned_model_streams_and_sprites(self) -> None:
+        makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
+        self.assertIn("PLAYER_SOURCE_DIR := runtime-candidates/chr/chr.player.ari", makefile)
+        self.assertIn("PLAYER_FILESYSTEM_DIR := filesystem/chr/chr.player.ari", makefile)
+        for output in (
+            "player_ari.t3dm",
+            "player_ari.0.sdata",
+            "player_ari.1.sdata",
+            "player_ari.2.sdata",
+        ):
+            self.assertIn(output, makefile)
+        self.assertIn(
+            "$(PLAYER_MODEL) $(PLAYER_IDLE) $(PLAYER_WALK) $(PLAYER_RUN) &:",
+            makefile,
+        )
+        self.assertIn(
+            '$(T3D_GLTF_TO_3D) "$<" "$(PLAYER_MODEL)" --base-scale=64 --asset-path=runtime-candidates',
+            makefile,
+        )
+        self.assertIn(
+            "--format CI8 --tiles 64,64 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn(
+            "--format CI4 --tiles 32,32 --mipmap NONE --dither NONE --compress 0",
+            makefile,
+        )
+        self.assertIn("$(PLAYER_RUNTIME_CANDIDATES)", makefile)
 
     def test_rom_is_staged_at_the_contract_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
@@ -229,6 +344,15 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn(elf_rule, makefile)
         self.assertNotIn(duplicate_rule, makefile)
         self.assertIn("include $(T3D_ROOT)/t3d.mk", makefile)
+
+    def test_runtime_audio_is_procedural_and_asset_free(self) -> None:
+        source = (ROOT / "src" / "n64game_audio.c").read_text(encoding="utf-8")
+        self.assertIn("audio_init(", source)
+        self.assertIn("audio_set_buffer_callback(audio_fill);", source)
+        self.assertIn("N64GAME_AUDIO_SAMPLE_RATE 22050", source)
+        self.assertNotIn("wav64_load", source)
+        self.assertNotIn("xm64player", source)
+        self.assertNotIn("rom:/", source)
 
     def test_conversion_suppression_is_scoped_to_the_tiny3d_header(self) -> None:
         source = (ROOT / "src" / "n64game_render.h").read_text(encoding="utf-8")
@@ -260,7 +384,77 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn(digest, wrapper)
         self.assertIn("--setting General/HomebrewMode=true", wrapper)
         self.assertIn("--setting Nintendo64/ExpansionPak=false", wrapper)
+        self.assertIn("--setting Input/Driver=SDL", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
+        self.assertIn("--open-input-monitoring) OPEN_INPUT_MONITORING=1 ;;", wrapper)
+        self.assertIn("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent", wrapper)
+        self.assertIn("ares_bundle_id=dev.ares.ares", wrapper)
+        self.assertIn('if [[ ! -f "$SETTINGS_FILE" ]]; then', wrapper)
+        self.assertIn('"$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null', wrapper)
+        self.assertIn("perl -0pi -e", wrapper)
+        self.assertIn("s/(\\n  Defocus: )[^\\n]*/${1}Allow/;", wrapper)
+        self.assertIn("s/(\\n  ExpansionPak: )[^\\n]*/${1}false/;", wrapper)
+        expected_keyboard_bindings = {
+            "L-Up": ";;",
+            "L-Down": ";;",
+            "L-Left": ";;",
+            "L-Right": ";;",
+            "Up": "0x1/0/92;0x1/0/62;",
+            "Down": "0x1/0/93;0x1/0/58;",
+            "Left": "0x1/0/94;0x1/0/40;",
+            "Right": "0x1/0/95;0x1/0/43;",
+            "X-Axis/Lo": "0x1/0/94;0x1/0/40;",
+            "X-Axis/Hi": "0x1/0/95;0x1/0/43;",
+            "Y-Axis/Lo": "0x1/0/93;0x1/0/58;",
+            "Y-Axis/Hi": "0x1/0/92;0x1/0/62;",
+            "B": "0x1/0/63;;",
+            "A": "0x1/0/65;;",
+            "C-Down": "0x1/0/42;;",
+            "Z": "0x1/0/98;;",
+            "Start": "0x1/0/97;;",
+        }
+        for control, assignments in expected_keyboard_bindings.items():
+            setting = (
+                "Nintendo64/Input/Controller.Port.1/Gamepad/"
+                f"{control}={assignments}"
+            )
+            self.assertIn(setting, wrapper)
+            if "/" not in control:
+                escaped_assignments = assignments.replace("/", "\\/")
+                bml_assignments = (
+                    escaped_assignments
+                    if assignments.endswith(";;")
+                    else f"{escaped_assignments};"
+                )
+                self.assertIn(
+                    f"s/(\\n        {control}: )[^\\n]*/${{1}}{bml_assignments}/",
+                    wrapper,
+                )
+        self.assertIn("repair_ares_settings\nVERSION_RAW=", wrapper)
+        self.assertIn("repair_ares_settings\n/usr/bin/python3 - \"$SETTINGS_FILE\"", wrapper)
+        self.assertIn("Controller.Port.1\\n      Gamepad", wrapper)
+        self.assertIn("for binding in (", wrapper)
+        self.assertIn("Ares keyboard map repair did not persist binding", wrapper)
+        self.assertIn(
+            "s/(\\n        X-Axis\\n          Lo: )[^\\n]*/${1}0x1\\/0\\/94;0x1\\/0\\/40;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        X-Axis\\n          Lo: [^\\n]*\\n          Hi: )[^\\n]*/${1}0x1\\/0\\/95;0x1\\/0\\/43;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        Y-Axis\\n          Lo: )[^\\n]*/${1}0x1\\/0\\/93;0x1\\/0\\/58;;/",
+            wrapper,
+        )
+        self.assertIn(
+            "s/(\\n        Y-Axis\\n          Lo: [^\\n]*\\n          Hi: )[^\\n]*/${1}0x1\\/0\\/92;0x1\\/0\\/62;;/",
+            wrapper,
+        )
+        main_source = (ROOT / "src" / "main.c").read_text(encoding="utf-8")
+        self.assertIn("DIGITAL_STICK_THRESHOLD = 48", main_source)
+        self.assertIn("previous_direction_held", main_source)
+        self.assertIn("pressed |= (uint16_t)(direction_held & (uint16_t)~previous_direction_held);", main_source)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 
     def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:

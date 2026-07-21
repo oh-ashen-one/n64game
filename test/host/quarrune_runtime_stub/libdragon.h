@@ -8,6 +8,8 @@
 
 #define assertf(condition, ...) assert(condition)
 
+void debugf(const char *format, ...);
+
 typedef enum {
     FMT_CI8 = 1,
     FMT_IA8 = 2,

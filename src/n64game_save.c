@@ -31,6 +31,7 @@ enum {
     SAVE_FLAG_BATTLE = UINT8_C(1) << 2,
     SAVE_FLAG_REWARD = UINT8_C(1) << 3,
     SAVE_FLAG_COMPLETE = UINT8_C(1) << 4,
+    SAVE_FLAG_RELAY_ACQUIRED = UINT8_C(1) << 5,
 };
 
 static void put_u16(uint8_t *bytes, size_t offset, uint16_t value)
@@ -96,13 +97,19 @@ static bool valid_progress(const N64GameCore *game)
         (game->examine_flags & UINT8_C(0xF0)) != 0U ||
         (game->relay_pages_seen & UINT8_C(0xF0)) != 0U ||
         (game->settings_flags & UINT8_C(0xF8)) != 0U ||
-        (!game->relay_unlocked && game->relay_pages_seen != 0U)) {
+        (game->relay_unlocked && !game->relay_acquired) ||
+        (!game->relay_unlocked && game->relay_pages_seen != 0U) ||
+        (!game->slice_complete && game->final_save_state != N64GAME_FINAL_SAVE_NONE) ||
+        (game->slice_complete &&
+         game->final_save_state != N64GAME_FINAL_SAVE_PENDING &&
+         game->final_save_state != N64GAME_FINAL_SAVE_VERIFIED)) {
         return false;
     }
 
     const bool relay_checkpoint =
         game->scene == N64GAME_SCENE_ANNEX &&
-        game->quest == N64GAME_QUEST_RETURN_TO_SERA &&
+        game->quest == N64GAME_QUEST_READY_FOR_TRIAL &&
+        game->relay_acquired &&
         game->relay_unlocked &&
         !game->battle_won &&
         !game->battle_reward_claimed &&
@@ -110,6 +117,7 @@ static bool valid_progress(const N64GameCore *game)
     const bool victory_checkpoint =
         game->scene == N64GAME_SCENE_ANNEX &&
         game->quest == N64GAME_QUEST_BEACON_OVERLOOK &&
+        game->relay_acquired &&
         game->relay_unlocked &&
         game->battle_won &&
         game->battle_reward_claimed &&
@@ -117,6 +125,7 @@ static bool valid_progress(const N64GameCore *game)
     const bool complete_checkpoint =
         game->scene == N64GAME_SCENE_END_CHAPTER &&
         game->quest == N64GAME_QUEST_COMPLETE &&
+        game->relay_acquired &&
         game->relay_unlocked &&
         game->battle_won &&
         game->battle_reward_claimed &&
@@ -147,7 +156,8 @@ bool n64game_save_encode(
         (game->relay_unlocked ? SAVE_FLAG_RELAY : 0U) |
         (game->battle_won ? SAVE_FLAG_BATTLE : 0U) |
         (game->battle_reward_claimed ? SAVE_FLAG_REWARD : 0U) |
-        (game->slice_complete ? SAVE_FLAG_COMPLETE : 0U);
+        (game->slice_complete ? SAVE_FLAG_COMPLETE : 0U) |
+        (game->relay_acquired ? SAVE_FLAG_RELAY_ACQUIRED : 0U);
     put_u16(bytes, OFFSET_PLAYER_HP, (uint16_t)game->party_hp[0]);
     put_u16(bytes, OFFSET_PLAYER_HP + 2U, (uint16_t)game->party_hp[1]);
     bytes[OFFSET_RESONANCE] = game->battle.resonance;
@@ -207,10 +217,11 @@ bool n64game_save_decode(
     decoded.scene = (N64GameScene)bytes[OFFSET_SCENE];
     decoded.quest = (N64GameQuest)bytes[OFFSET_QUEST];
     const uint8_t flags = bytes[OFFSET_FLAGS];
-    if ((flags & UINT8_C(0xE0)) != 0U) {
+    if ((flags & UINT8_C(0xC0)) != 0U) {
         return false;
     }
     decoded.opening_cinematic_seen = (flags & SAVE_FLAG_OPENING) != 0U;
+    decoded.relay_acquired = (flags & SAVE_FLAG_RELAY_ACQUIRED) != 0U;
     decoded.relay_unlocked = (flags & SAVE_FLAG_RELAY) != 0U;
     decoded.battle_won = (flags & SAVE_FLAG_BATTLE) != 0U;
     decoded.battle_reward_claimed = (flags & SAVE_FLAG_REWARD) != 0U;
@@ -229,6 +240,8 @@ bool n64game_save_decode(
     decoded.play_ticks = get_u32(bytes, OFFSET_PLAY_TICKS);
     decoded.active_control_ticks = get_u32(bytes, OFFSET_ACTIVE_CONTROL_TICKS);
     decoded.settings_flags = bytes[OFFSET_SETTINGS];
+    decoded.final_save_state = decoded.scene == N64GAME_SCENE_END_CHAPTER ?
+        N64GAME_FINAL_SAVE_VERIFIED : N64GAME_FINAL_SAVE_NONE;
     n64game_annex_safe_anchor(
         decoded.annex_sector, &decoded.player_x_q8, &decoded.player_z_q8
     );
