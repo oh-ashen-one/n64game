@@ -81,3 +81,5 @@ jobs:
             build/reports/certification-tests.txt
             build/reports/final-acceptance-audit.json
             build/reports/final-acceptance-audit.md
+            build/reports/public-reproducibility.json
+            build/reports/public-reproducibility.md

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := rom
 
-.PHONY: clean assets test test-authoring test-certification authoring-check certification-check rom validate report
+.PHONY: clean assets test test-authoring test-certification authoring-check certification-check rom validate report public-reproducibility
 
 CERTIFICATION_MANIFEST ?= build/certification/evidence.json
 CERTIFICATION_ROM ?= build/game/n64game-gate3.z64
@@ -40,3 +40,6 @@ validate:
 report:
 	scripts/make-checksums
 	scripts/audit-final-acceptance
+
+public-reproducibility:
+	scripts/verify-public-reproducibility

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -80,15 +81,76 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         subprocess.run(["git", "commit", "-m", "fixture"], cwd=self.root, check=True, stdout=subprocess.PIPE)
 
+    def write_public_repro_report(self, *, head: str | None = None, mutate_artifact_sha: bool = False) -> None:
+        actual_head = head or subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+        rom = self.root / "build/game/n64game-gate3.z64"
+        data = rom.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        header_sha = hashlib.sha256(data[:64]).hexdigest()
+        artifact_sha = "0" * 64 if mutate_artifact_sha else sha
+        identity = {
+            "path": "build/game/n64game-gate3.z64",
+            "size": len(data),
+            "sha256": sha,
+            "header_sha256": header_sha,
+        }
+        payload = {
+            "schema": "n64game-public-reproducibility-v1",
+            "result": "PASS",
+            "repo": "oh-ashen-one/n64game",
+            "origin": "https://github.com/oh-ashen-one/n64game.git",
+            "head_sha": actual_head,
+            "workflow": {
+                "name": "Build ROM",
+                "run_id": 123456789,
+                "url": "https://github.com/oh-ashen-one/n64game/actions/runs/123456789",
+                "artifact_name": f"n64game-gate3-{actual_head}",
+            },
+            "local": {"rom": identity, "files": {}},
+            "fresh_public_clone": {"rom": identity, "files": {}, "clone_path": "discarded"},
+            "ci_artifact": {"rom": {**identity, "sha256": artifact_sha}, "files": {}},
+        }
+        self.write("build/reports/public-reproducibility.json", json.dumps(payload, sort_keys=True))
+
     def test_audit_is_incomplete_and_fail_closed_with_current_missing_gates(self) -> None:
         payload = audit_tool.audit(self.root)
         self.assertEqual(payload["schema"], "n64game-final-acceptance-audit-v1")
         self.assertEqual(payload["result"], "INCOMPLETE")
         by_id = {item["id"]: item for item in payload["items"]}
+        self.assertEqual(by_id["FAC-01"]["status"], "PARTIAL")
+        self.assertEqual(by_id["FAC-02"]["status"], "PARTIAL")
         self.assertEqual(by_id["FAC-11"]["status"], "PASS")
         self.assertEqual(by_id["FAC-09"]["status"], "MISSING")
         self.assertEqual(by_id["FAC-03"]["status"], "MISSING")
         self.assertLess(payload["pass_count"], payload["item_count"])
+
+    def test_exact_head_public_reproducibility_evidence_promotes_public_rows_only(self) -> None:
+        self.write_public_repro_report()
+        payload = audit_tool.audit(self.root)
+        by_id = {item["id"]: item for item in payload["items"]}
+        self.assertEqual(by_id["FAC-01"]["status"], "PASS")
+        self.assertEqual(by_id["FAC-02"]["status"], "PASS")
+        self.assertEqual(by_id["FAC-03"]["status"], "MISSING")
+        self.assertEqual(by_id["FAC-09"]["status"], "MISSING")
+        self.assertEqual(payload["result"], "INCOMPLETE")
+
+    def test_public_reproducibility_report_must_match_head_and_all_identities(self) -> None:
+        self.write_public_repro_report(head="0" * 40)
+        status, evidence, missing = audit_tool.public_reproducibility_state(self.root)
+        self.assertEqual(status, "MISSING")
+        self.assertIn("stale", missing[0])
+        self.assertIn("head=0000000000000000000000000000000000000000", evidence[0])
+
+        self.write_public_repro_report(mutate_artifact_sha=True)
+        status, _evidence, missing = audit_tool.public_reproducibility_state(self.root)
+        self.assertEqual(status, "MISSING")
+        self.assertIn("malformed", missing[0])
 
     def test_cli_writes_reports_and_require_complete_fails(self) -> None:
         json_out = self.root / "build/reports/final-acceptance-audit.json"

@@ -25,6 +25,7 @@ ROM = ROOT / "build" / "game" / "n64game-gate3.z64"
 N64_MAGIC = bytes.fromhex("80371240")
 STATUSES = {"PASS", "PARTIAL", "MISSING"}
 DECISION_LINE = re.compile(r"^Decision:\s+([A-Z_]+)\s*$", re.MULTILINE)
+PUBLIC_REPRO_SCHEMA = "n64game-public-reproducibility-v1"
 
 
 class AcceptanceAuditError(RuntimeError):
@@ -117,6 +118,40 @@ def file_evidence(root: Path, *paths: str) -> tuple[str, ...]:
     return tuple(evidence)
 
 
+def public_reproducibility_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    path = root / "build" / "reports" / "public-reproducibility.json"
+    if not path.is_file() or path.is_symlink():
+        return "MISSING", (), ("build/reports/public-reproducibility.json from scripts/verify-public-reproducibility",)
+    try:
+        payload = json.loads(read(path))
+    except json.JSONDecodeError:
+        return "MISSING", (str(path.relative_to(root)),), ("public reproducibility report is not valid JSON",)
+    head = git_output(root, "rev-parse", "HEAD")
+    local_rom = payload.get("local", {}).get("rom", {})
+    fresh_rom = payload.get("fresh_public_clone", {}).get("rom", {})
+    artifact_rom = payload.get("ci_artifact", {}).get("rom", {})
+    workflow = payload.get("workflow", {})
+    expected = (local_rom.get("size"), local_rom.get("sha256"), local_rom.get("header_sha256"))
+    if (
+        payload.get("schema") == PUBLIC_REPRO_SCHEMA
+        and payload.get("result") == "PASS"
+        and payload.get("repo") == "oh-ashen-one/n64game"
+        and payload.get("head_sha") == head
+        and expected == (fresh_rom.get("size"), fresh_rom.get("sha256"), fresh_rom.get("header_sha256"))
+        and expected == (artifact_rom.get("size"), artifact_rom.get("sha256"), artifact_rom.get("header_sha256"))
+        and isinstance(workflow.get("run_id"), int)
+        and str(workflow.get("url", "")).startswith("https://github.com/oh-ashen-one/n64game/actions/runs/")
+    ):
+        return "PASS", (
+            f"{path.relative_to(root)} head={head}",
+            f"public CI run={workflow['run_id']} artifact={workflow.get('artifact_name')}",
+            f"local=fresh-clone=ci-artifact sha256={local_rom.get('sha256')}",
+        ), ()
+    return "MISSING", (str(path.relative_to(root)) + f" head={payload.get('head_sha', 'MISSING')}",), (
+        "public reproducibility report is stale, malformed, or not bound to current HEAD",
+    )
+
+
 def certification_manifest_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     manifest = root / "build" / "certification" / "evidence.json"
     if not manifest.is_file():
@@ -191,6 +226,7 @@ def host_spine_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]
 
 
 def ci_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    repro_status, repro_evidence, repro_missing = public_reproducibility_state(root)
     rom_ok, rom_evidence = rom_info(root)
     reports = file_evidence(
         root,
@@ -201,6 +237,8 @@ def ci_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         "build/reports/host-tests.txt",
         "build/reports/certification-tests.txt",
     )
+    if rom_ok and len(reports) == 6 and repro_status == "PASS":
+        return "PASS", (*rom_evidence, *reports, *repro_evidence), ()
     if rom_ok and len(reports) == 6:
         return "PARTIAL", (*rom_evidence, *reports), ("fresh public clone build and downloaded public CI artifact equality must be verified for final release",)
     missing = []
@@ -216,6 +254,7 @@ def ci_state(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     ):
         if path not in reports:
             missing.append(path)
+    missing.extend(repro_missing)
     return "MISSING", (*rom_evidence, *reports), tuple(missing)
 
 
@@ -227,14 +266,16 @@ def build_items(root: Path) -> list[AuditItem]:
     hygiene_status, hygiene_evidence, hygiene_missing = public_hygiene_state(root)
     host_status, host_evidence, host_missing = host_spine_state(root)
     ci_status, ci_evidence, ci_missing = ci_state(root)
+    repro_status, repro_evidence, repro_missing = public_reproducibility_state(root)
     repo_evidence = (
         f"origin={git_output(root, 'remote', 'get-url', 'origin')}",
         f"HEAD={git_output(root, 'rev-parse', 'HEAD')}",
     )
-    repo_status = "PARTIAL" if remote_is_public_repo(root) else "MISSING"
-    repo_missing = (
+    repo_status = "PASS" if remote_is_public_repo(root) and repro_status == "PASS" else ("PARTIAL" if remote_is_public_repo(root) else "MISSING")
+    repo_evidence = (*repo_evidence, *repro_evidence)
+    repo_missing = () if repo_status == "PASS" else (
         "credential-free fresh clone reproducible build proof",
-    ) if repo_status == "PARTIAL" else ("canonical public GitHub origin",)
+    ) if remote_is_public_repo(root) else ("canonical public GitHub origin", *repro_missing)
 
     return [
         AuditItem("FAC-01", "The public repository exists and a fresh clone builds reproducibly.", repo_status, repo_evidence, repo_missing),
