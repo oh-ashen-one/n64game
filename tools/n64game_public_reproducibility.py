@@ -20,6 +20,10 @@ ROM_REL = Path("build/game/n64game-gate3.z64")
 SHA_REL = Path("build/game/n64game-gate3.z64.sha256")
 MAP_REL = Path("build/game/n64game-gate3.map")
 BUILD_REPORT_REL = Path("build/reports/validation-summary.md")
+ARTIFACT_ROM_REL = Path("game/n64game-gate3.z64")
+ARTIFACT_SHA_REL = Path("game/n64game-gate3.z64.sha256")
+ARTIFACT_MAP_REL = Path("game/n64game-gate3.map")
+ARTIFACT_BUILD_REPORT_REL = Path("reports/validation-summary.md")
 N64_MAGIC = bytes.fromhex("80371240")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ARTIFACT_NAME_PREFIX = "n64game-gate3-"
@@ -246,11 +250,11 @@ def download_ci_artifact(root: Path, repo: str, run_info: dict[str, Any], artifa
             str(out_dir),
             timeout=300,
         )
-        identity = rom_identity(out_dir, ROM_REL)
+        identity = rom_identity(out_dir, ARTIFACT_ROM_REL)
         files = {
-            SHA_REL.as_posix(): require_checksum_file(out_dir, SHA_REL, identity.sha256),
-            MAP_REL.as_posix(): require_file(out_dir, MAP_REL),
-            BUILD_REPORT_REL.as_posix(): require_file(out_dir, BUILD_REPORT_REL),
+            ARTIFACT_SHA_REL.as_posix(): require_checksum_file(out_dir, ARTIFACT_SHA_REL, identity.sha256),
+            ARTIFACT_MAP_REL.as_posix(): require_file(out_dir, ARTIFACT_MAP_REL),
+            ARTIFACT_BUILD_REPORT_REL.as_posix(): require_file(out_dir, ARTIFACT_BUILD_REPORT_REL),
         }
         return identity, files
 
