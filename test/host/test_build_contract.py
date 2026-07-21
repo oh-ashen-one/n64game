@@ -387,6 +387,28 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 
+    def test_ares_keyboard_wrapper_maps_arrows_and_wasd_to_dpad_and_stick(self) -> None:
+        wrapper = (ROOT / "scripts" / "run-ares").read_text(encoding="utf-8")
+        expected_bindings = {
+            "Up": "0x1/0/92;0x1/0/62;",
+            "Down": "0x1/0/93;0x1/0/58;",
+            "Left": "0x1/0/94;0x1/0/40;",
+            "Right": "0x1/0/95;0x1/0/43;",
+            "X-Axis/Lo": "0x1/0/94;0x1/0/40;",
+            "X-Axis/Hi": "0x1/0/95;0x1/0/43;",
+            "Y-Axis/Lo": "0x1/0/93;0x1/0/58;",
+            "Y-Axis/Hi": "0x1/0/92;0x1/0/62;",
+        }
+        for control, binding in expected_bindings.items():
+            self.assertIn(
+                f"--setting 'Nintendo64/Input/Controller.Port.1/Gamepad/{control}={binding}'",
+                wrapper,
+            )
+        self.assertIn("s/(\\n        L-Up: )[^\\n]*/${1};;/", wrapper)
+        self.assertIn("s/(\\n        L-Down: )[^\\n]*/${1};;/", wrapper)
+        self.assertIn("s/(\\n        L-Left: )[^\\n]*/${1};;/", wrapper)
+        self.assertIn("s/(\\n        L-Right: )[^\\n]*/${1};;/", wrapper)
+
     def test_gate3_boot_captures_match_the_evidence_manifest(self) -> None:
         capture_root = ROOT / "captures" / "gate3"
         evidence = json.loads((capture_root / "evidence.json").read_text(encoding="utf-8"))
