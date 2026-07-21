@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Validate N64GAME Ares certification evidence, fail-closed.
+
+This script is intentionally conservative. A valid `NOT_CLAIMED` manifest is
+allowed so the final-acceptance audit can record an honest partial evidence
+packet without pretending the release is certified. A `COMPLETE` manifest must
+bind real ROM identity, Ares identity, timing runs, transition soak,
+performance, and QA matrix data before it validates.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import statistics
+import sys
+from pathlib import Path
+from typing import Any
+
+
+SCHEMA = "n64game-certification-evidence-v1"
+PINNED_ARES_SHA256 = "7a49f00f96a691458461d7c9cf453d95c0f5c054389bbd87c253987b8b6fa345"
+MIN_HEAP_BYTES = 524_288
+MIN_ACTIVE_SECONDS = 240
+RUN_MIN_SECONDS = 360
+RUN_MAX_SECONDS = 600
+MEDIAN_MIN_SECONDS = 360
+MEDIAN_MAX_SECONDS = 480
+REQUIRED_QA = (
+    "cold_boot_default_name",
+    "cold_boot_custom_name",
+    "slate_watched",
+    "slate_skipped",
+    "required_annex_route",
+    "optional_examines",
+    "save_reboot_resume",
+    "battle_alternate_inputs",
+    "battle_victory",
+    "battle_defeat_retry",
+    "battle_defeat_return",
+    "horizon_break_legal",
+    "horizon_break_illegal",
+    "dialogue_rapid_confirm_cancel",
+    "controller_disconnect_reconnect",
+    "corrupted_eeprom_fallback",
+    "completed_sector_reentry",
+    "stable_post_chapter_state",
+)
+
+
+class CertificationEvidenceError(RuntimeError):
+    pass
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def require_mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CertificationEvidenceError(f"{label} must be an object")
+    return value
+
+
+def require_number(value: Any, label: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise CertificationEvidenceError(f"{label} must be numeric")
+    return float(value)
+
+
+def require_int(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise CertificationEvidenceError(f"{label} must be an integer")
+    return value
+
+
+def validate_rom(payload: dict[str, Any], rom: Path) -> dict[str, Any]:
+    if not rom.is_file() or rom.is_symlink():
+        raise CertificationEvidenceError("ROM path must be a regular file")
+    rom_payload = require_mapping(payload.get("rom"), "rom")
+    actual_sha = sha256(rom)
+    if rom_payload.get("sha256") != actual_sha:
+        raise CertificationEvidenceError("rom.sha256 does not match the supplied ROM")
+    if rom_payload.get("size") != rom.stat().st_size:
+        raise CertificationEvidenceError("rom.size does not match the supplied ROM")
+    return {"path": str(rom), "sha256": actual_sha, "size": rom.stat().st_size}
+
+
+def validate_ares(payload: dict[str, Any]) -> None:
+    ares = require_mapping(payload.get("ares"), "ares")
+    if ares.get("version") not in ("v148", "148"):
+        raise CertificationEvidenceError("ares.version must be v148")
+    if ares.get("executable_sha256") != PINNED_ARES_SHA256:
+        raise CertificationEvidenceError("ares.executable_sha256 does not match the pinned Ares 148 binary")
+    if ares.get("homebrew_mode") is not True:
+        raise CertificationEvidenceError("ares.homebrew_mode must be true")
+    if ares.get("expansion_pak") is not False:
+        raise CertificationEvidenceError("ares.expansion_pak must be false")
+
+
+def validate_timed_runs(payload: dict[str, Any]) -> dict[str, Any]:
+    runs = payload.get("timed_runs")
+    if not isinstance(runs, list) or len(runs) < 2:
+        raise CertificationEvidenceError("timed_runs must contain at least two runs")
+    durations: list[float] = []
+    for index, run in enumerate(runs, 1):
+        row = require_mapping(run, f"timed_runs[{index}]")
+        duration = require_number(row.get("duration_seconds"), f"timed_runs[{index}].duration_seconds")
+        active = require_number(row.get("active_control_seconds"), f"timed_runs[{index}].active_control_seconds")
+        if not RUN_MIN_SECONDS <= duration <= RUN_MAX_SECONDS:
+            raise CertificationEvidenceError(f"timed run {index} is outside 6-10 minutes")
+        if active < MIN_ACTIVE_SECONDS:
+            raise CertificationEvidenceError(f"timed run {index} has too little active control")
+        if row.get("route_result") != "STABLE_BEACON_HOOK":
+            raise CertificationEvidenceError(f"timed run {index} did not reach the stable beacon hook")
+        durations.append(duration)
+    median = statistics.median(durations)
+    if not MEDIAN_MIN_SECONDS <= median <= MEDIAN_MAX_SECONDS:
+        raise CertificationEvidenceError("timed run median is outside 6-8 minutes")
+    return {"count": len(runs), "median_seconds": median}
+
+
+def validate_soak(payload: dict[str, Any]) -> None:
+    soak = require_mapping(payload.get("transition_soak"), "transition_soak")
+    if require_int(soak.get("loops"), "transition_soak.loops") < 10:
+        raise CertificationEvidenceError("transition_soak.loops must be at least 10")
+    if require_int(soak.get("heap_delta_bytes"), "transition_soak.heap_delta_bytes") != 0:
+        raise CertificationEvidenceError("transition_soak.heap_delta_bytes must be zero")
+    if require_int(soak.get("resource_delta_count"), "transition_soak.resource_delta_count") != 0:
+        raise CertificationEvidenceError("transition_soak.resource_delta_count must be zero")
+    if require_int(soak.get("peak_free_heap_bytes"), "transition_soak.peak_free_heap_bytes") < MIN_HEAP_BYTES:
+        raise CertificationEvidenceError("transition_soak.peak_free_heap_bytes is below 512 KiB")
+
+
+def validate_performance(payload: dict[str, Any]) -> None:
+    performance = require_mapping(payload.get("performance"), "performance")
+    if require_number(performance.get("fps_min"), "performance.fps_min") < 30:
+        raise CertificationEvidenceError("performance.fps_min is below 30")
+    if require_int(performance.get("free_heap_min_bytes"), "performance.free_heap_min_bytes") < MIN_HEAP_BYTES:
+        raise CertificationEvidenceError("performance.free_heap_min_bytes is below 512 KiB")
+    if require_int(performance.get("sustained_sub30_windows"), "performance.sustained_sub30_windows") != 0:
+        raise CertificationEvidenceError("performance.sustained_sub30_windows must be zero")
+
+
+def validate_qa(payload: dict[str, Any]) -> None:
+    matrix = require_mapping(payload.get("qa_matrix"), "qa_matrix")
+    missing = [name for name in REQUIRED_QA if matrix.get(name) != "PASS"]
+    if missing:
+        raise CertificationEvidenceError("qa_matrix missing PASS rows: " + ", ".join(missing))
+
+
+def validate_not_claimed(payload: dict[str, Any], rom: Path) -> dict[str, Any]:
+    rom_info = validate_rom(payload, rom)
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list) or not blockers or any(not isinstance(item, str) or not item for item in blockers):
+        raise CertificationEvidenceError("NOT_CLAIMED manifests require nonempty string blockers")
+    return {
+        "schema": SCHEMA,
+        "result": "PASS",
+        "certification": "NOT_CLAIMED",
+        "rom": rom_info,
+        "blocker_count": len(blockers),
+    }
+
+
+def validate_complete(payload: dict[str, Any], rom: Path) -> dict[str, Any]:
+    rom_info = validate_rom(payload, rom)
+    validate_ares(payload)
+    timing = validate_timed_runs(payload)
+    validate_soak(payload)
+    validate_performance(payload)
+    validate_qa(payload)
+    return {
+        "schema": SCHEMA,
+        "result": "PASS",
+        "certification": "COMPLETE",
+        "rom": rom_info,
+        "timed_run_count": timing["count"],
+        "timed_run_median_seconds": timing["median_seconds"],
+    }
+
+
+def validate(payload: dict[str, Any], rom: Path) -> dict[str, Any]:
+    if payload.get("schema") != SCHEMA:
+        raise CertificationEvidenceError("unsupported certification evidence schema")
+    certification = payload.get("certification")
+    if certification == "NOT_CLAIMED":
+        return validate_not_claimed(payload, rom)
+    if certification == "COMPLETE":
+        return validate_complete(payload, rom)
+    raise CertificationEvidenceError("certification must be NOT_CLAIMED or COMPLETE")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--rom", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        payload = json.loads(args.manifest.read_text(encoding="utf-8"))
+        result = validate(payload, args.rom)
+    except (OSError, json.JSONDecodeError, CertificationEvidenceError) as exc:
+        print(f"CERTIFICATION_EVIDENCE_ERROR: {exc}")
+        return 1
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

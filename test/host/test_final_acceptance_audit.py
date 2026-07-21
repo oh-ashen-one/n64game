@@ -139,6 +139,34 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
         self.assertEqual(by_id["FAC-09"]["status"], "MISSING")
         self.assertEqual(payload["result"], "INCOMPLETE")
 
+    def test_not_claimed_certification_evidence_remains_partial(self) -> None:
+        rom = self.root / "build/game/n64game-gate3.z64"
+        self.write(
+            "build/certification/evidence.json",
+            json.dumps(
+                {
+                    "schema": "n64game-certification-evidence-v1",
+                    "certification": "NOT_CLAIMED",
+                    "rom": {
+                        "sha256": hashlib.sha256(rom.read_bytes()).hexdigest(),
+                        "size": rom.stat().st_size,
+                    },
+                    "blockers": ["real Ares playthrough logs have not been captured"],
+                },
+                sort_keys=True,
+            ),
+        )
+        self.make_executable(
+            "scripts/validate-certification-evidence",
+            (ROOT / "scripts" / "validate-certification-evidence").read_text(encoding="utf-8"),
+        )
+        payload = audit_tool.audit(self.root)
+        by_id = {item["id"]: item for item in payload["items"]}
+        self.assertEqual(by_id["FAC-03"]["status"], "PARTIAL")
+        self.assertIn("certification=NOT_CLAIMED", by_id["FAC-03"]["evidence"][0])
+        self.assertIn("final visual/audio/controller/release checks still required", by_id["FAC-03"]["missing"][0])
+        self.assertEqual(payload["result"], "INCOMPLETE")
+
     def test_public_reproducibility_report_must_match_head_and_all_identities(self) -> None:
         self.write_public_repro_report(head="0" * 40)
         status, evidence, missing = audit_tool.public_reproducibility_state(self.root)

@@ -159,7 +159,16 @@ def certification_manifest_state(root: Path) -> tuple[str, tuple[str, ...], tupl
     manifest = root / "build" / "certification" / "evidence.json"
     if not manifest.is_file():
         return "MISSING", (), ("build/certification/evidence.json with real captured Ares logs",)
-    result = run([str(root / "scripts" / "validate-certification-evidence"), "--manifest", str(manifest), "--rom", str(ROM)], root=root)
+    result = run(
+        [
+            str(root / "scripts" / "validate-certification-evidence"),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(root / "build" / "game" / "n64game-gate3.z64"),
+        ],
+        root=root,
+    )
     if result.returncode != 0:
         return "MISSING", (str(manifest.relative_to(root)),), (result.stdout.strip() or "certification evidence did not validate",)
     try:
