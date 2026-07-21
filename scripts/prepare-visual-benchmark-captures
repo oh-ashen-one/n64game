@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PACKET="$ROOT/build/visual-benchmark/capture-packet.json"
+REPORT="$ROOT/build/reports/visual-capture-evidence.json"
+FORCE=0
+
+for argument in "$@"; do
+    case "$argument" in
+        --force) FORCE=1 ;;
+        --packet=*) PACKET="${argument#*=}" ;;
+        --report=*) REPORT="${argument#*=}" ;;
+        --*) printf 'unsupported argument: %s\n' "$argument" >&2; exit 64 ;;
+        *) printf 'unexpected positional argument: %s\n' "$argument" >&2; exit 64 ;;
+    esac
+done
+
+if [[ "$PACKET" != /* ]]; then
+    PACKET="$ROOT/$PACKET"
+fi
+if [[ "$REPORT" != /* ]]; then
+    REPORT="$ROOT/$REPORT"
+fi
+
+"$ROOT/scripts/audit-visual-benchmark-readiness" >/dev/null
+
+if [[ -e "$PACKET" && "$FORCE" -ne 1 ]]; then
+    printf 'visual benchmark capture packet already exists: %s\n' "$PACKET"
+else
+    if [[ -e "$PACKET" && "$FORCE" -eq 1 ]]; then
+        printf 'replacing visual benchmark capture packet template: %s\n' "$PACKET"
+    fi
+    "$ROOT/scripts/assemble-visual-benchmark-captures" \
+        --init-template \
+        --packet "$PACKET"
+fi
+
+cat <<EOF
+next_visual_capture_steps:
+  packet: $PACKET
+  report: $REPORT
+  required_native_frames:
+    - exploration
+    - dialogue
+    - target_selection
+    - attack_anticipation
+    - impact
+    - support
+  fill_packet: replace every placeholder native_path, frame_index, capture locator, and notes with real Ares/gameplay evidence
+  generate_and_validate: scripts/assemble-visual-benchmark-captures --packet "$PACKET" --report "$REPORT" --generate-enlarged
+  readiness: scripts/audit-visual-benchmark-readiness
+EOF

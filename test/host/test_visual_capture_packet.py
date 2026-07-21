@@ -34,6 +34,29 @@ class VisualCapturePacketTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_prepare_wrapper_initializes_packet_without_visual_approval(self) -> None:
+        packet = self.root / "prepared-packet.json"
+        report = self.root / "prepared-report.json"
+        result = subprocess.run(
+            [
+                str(ROOT / "scripts/prepare-visual-benchmark-captures"),
+                f"--packet={packet}",
+                f"--report={report}",
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("next_visual_capture_steps:", result.stdout)
+        payload = json.loads(packet.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema"], "n64game-visual-capture-packet-v1")
+        self.assertEqual(payload["capture_request"], "COMPLETE")
+        self.assertEqual(set(payload["captures"]), set(CAPTURE_NAMES))
+        self.assertFalse(report.exists())
+
     def write_png_rgba(self, path: Path, width: int, height: int, rgba: bytes) -> None:
         def chunk(kind: bytes, payload: bytes) -> bytes:
             return (

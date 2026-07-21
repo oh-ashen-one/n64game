@@ -17,6 +17,17 @@ scripts/assemble-visual-benchmark-captures --init-template \
   --packet build/visual-benchmark/capture-packet.json
 ```
 
+Or use the guarded preparation helper, which first writes the current readiness
+report, creates the default packet only when it is missing, and prints the exact
+next capture/validation commands:
+
+```sh
+scripts/prepare-visual-benchmark-captures
+```
+
+Pass `--force` only when intentionally replacing the default template before it
+contains real capture paths or observations.
+
 Replace every placeholder with real repository-relative files and observations.
 The six required capture names are exact:
 
