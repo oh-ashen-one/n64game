@@ -35,6 +35,62 @@ typedef struct {
     bool pending;
 } SaveWriter;
 
+typedef struct {
+    N64GameCertificationTelemetry public_state;
+    uint64_t last_frame_us;
+} RuntimeTelemetry;
+
+static uint16_t fps_to_x10(float fps)
+{
+    if (fps <= 0.0f) {
+        return 0U;
+    }
+    const float clamped = fps > 999.9f ? 999.9f : fps;
+    return (uint16_t)(clamped * 10.0f + 0.5f);
+}
+
+static void runtime_telemetry_sample(
+    RuntimeTelemetry *telemetry,
+    const N64GameRenderer *renderer
+)
+{
+    if (telemetry == NULL) {
+        return;
+    }
+
+    heap_stats_t heap_stats;
+    sys_get_heap_stats(&heap_stats);
+
+    const uint64_t now_us = get_ticks_us();
+    const uint32_t frame_us = telemetry->last_frame_us == 0U ? 0U :
+        (uint32_t)(now_us - telemetry->last_frame_us);
+    telemetry->last_frame_us = now_us;
+
+    const uint32_t free_heap = heap_stats.free > 0 ? (uint32_t)heap_stats.free : 0U;
+    const uint16_t fps_x10 = fps_to_x10(display_get_fps());
+    N64GameCertificationTelemetry *const state = &telemetry->public_state;
+    if (!state->valid) {
+        state->free_heap_min_bytes = free_heap;
+        state->heap_baseline_bytes = free_heap;
+        state->fps_min_x10 = fps_x10;
+    } else {
+        if (free_heap < state->free_heap_min_bytes) {
+            state->free_heap_min_bytes = free_heap;
+        }
+        if (fps_x10 != 0U &&
+            (state->fps_min_x10 == 0U || fps_x10 < state->fps_min_x10)) {
+            state->fps_min_x10 = fps_x10;
+        }
+    }
+
+    state->frame_index++;
+    state->frame_us = frame_us;
+    state->free_heap_bytes = free_heap;
+    state->fps_x10 = fps_x10;
+    state->resource_count = n64game_renderer_resource_count(renderer);
+    state->valid = true;
+}
+
 static N64GameInput read_game_input(void)
 {
     static uint16_t previous_direction_held = 0U;
@@ -282,6 +338,7 @@ int main(void)
     N64GameCore continue_game;
     n64game_core_init(&game);
     n64game_core_init(&continue_game);
+    RuntimeTelemetry telemetry = {0};
 
     n64game_renderer_draw_loading(&renderer, N64GAME_LOADING_SAVE_DATA);
     const eeprom_type_t save_type = eeprom_present();
@@ -350,9 +407,11 @@ int main(void)
         const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE ||
             save_writer.pending || eeprom_is_busy();
         const bool save_usable = save_available && !save_writer.faulted;
+        runtime_telemetry_sample(&telemetry, &renderer);
         n64game_renderer_draw(
             &renderer,
             &game,
+            &telemetry.public_state,
             save_busy,
             save_usable,
             continue_available,

@@ -612,6 +612,34 @@ static void test_certification_summary_uses_live_route_state(void)
     assert(strcmp(coverage, "EXAM 4/4 RELAY 4/4 HOOK") == 0);
 }
 
+static void test_performance_summary_uses_runtime_telemetry(void)
+{
+    const N64GameCertificationTelemetry telemetry = {
+        .frame_index = 187U,
+        .frame_us = 33312U,
+        .free_heap_bytes = 734003U,
+        .free_heap_min_bytes = 700001U,
+        .heap_baseline_bytes = 786432U,
+        .resource_count = 14U,
+        .fps_x10 = 300U,
+        .fps_min_x10 = 299U,
+        .valid = true,
+    };
+
+    char fps[48];
+    char heap[64];
+    char resources[48];
+    n64game_core_performance_summary(
+        &telemetry,
+        fps, sizeof(fps),
+        heap, sizeof(heap),
+        resources, sizeof(resources)
+    );
+    assert(strcmp(fps, "FPS 30.0 MIN 29.9") == 0);
+    assert(strcmp(heap, "HEAP 717K MIN 684K BASE 768K") == 0);
+    assert(strcmp(resources, "FRAME 33312US / RES 14") == 0);
+}
+
 static void test_battle_legality_order_retarget_and_retry(void)
 {
     N64GameBattle battle;
@@ -944,6 +972,7 @@ int main(void)
     test_name_editing_movement_pause_and_optional_dialogue();
     test_controller_disconnect_freezes_and_reconnect_clears_edges();
     test_certification_summary_uses_live_route_state();
+    test_performance_summary_uses_runtime_telemetry();
     test_battle_legality_order_retarget_and_retry();
     test_battle_controller_selection_and_presentation_cadence();
     test_trial_entry_selects_a_living_player_or_defeats();

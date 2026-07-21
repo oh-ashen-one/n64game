@@ -1195,29 +1195,43 @@ static void draw_resonance_page(const N64GameCore *game)
     text_at(44.0f, 196.0f, STYLE_MUTED, 232.0f, "A OR B  BACK");
 }
 
-static void draw_save_page(const N64GameCore *game)
+static void draw_save_page(
+    const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry
+)
 {
     char timing[48];
     char state[48];
     char coverage[48];
+    char fps[48];
+    char heap[64];
+    char resources[48];
     n64game_core_certification_summary(
         game,
         timing, sizeof(timing),
         state, sizeof(state),
         coverage, sizeof(coverage)
     );
+    n64game_core_performance_summary(
+        telemetry,
+        fps, sizeof(fps),
+        heap, sizeof(heap),
+        resources, sizeof(resources)
+    );
 
-    panel(38, 48, 282, 204);
+    panel(30, 36, 290, 220);
     centered(58.0f, STYLE_ACCENT, "SAVE RESONANCE FILE");
     text_at(
-        54.0f, 84.0f, STYLE_TEXT, 212.0f,
-        "Record your safe Annex checkpoint, objectives, and Field Relay discoveries."
+        46.0f, 80.0f, STYLE_TEXT, 228.0f,
+        "Record your checkpoint and capture route/performance evidence."
     );
-    text_at(54.0f, 121.0f, STYLE_ACCENT, 212.0f, timing);
-    text_at(54.0f, 137.0f, STYLE_MUTED, 212.0f, state);
-    text_at(54.0f, 153.0f, STYLE_MUTED, 212.0f, coverage);
-    text_at(54.0f, 174.0f, STYLE_WARNING, 212.0f, "A  SAVE");
-    text_at(54.0f, 188.0f, STYLE_MUTED, 212.0f, "B  BACK");
+    text_at(46.0f, 111.0f, STYLE_ACCENT, 228.0f, timing);
+    text_at(46.0f, 126.0f, STYLE_MUTED, 228.0f, state);
+    text_at(46.0f, 141.0f, STYLE_MUTED, 228.0f, coverage);
+    text_at(46.0f, 158.0f, STYLE_TEXT, 228.0f, fps);
+    text_at(46.0f, 173.0f, STYLE_TEXT, 228.0f, heap);
+    text_at(46.0f, 188.0f, STYLE_MUTED, 228.0f, resources);
+    text_at(46.0f, 204.0f, STYLE_WARNING, 228.0f, "A SAVE / B BACK");
 }
 
 static void draw_help_page(void)
@@ -1243,7 +1257,10 @@ static void draw_post_chapter_root(const N64GameCore *game)
     text_at(202.0f, 207.0f, resonance_style, 88.0f, "RESONANCE");
 }
 
-static void draw_annex_menu(const N64GameCore *game)
+static void draw_annex_menu(
+    const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry
+)
 {
     switch (game->menu) {
     case N64GAME_MENU_CLOSED:
@@ -1264,7 +1281,7 @@ static void draw_annex_menu(const N64GameCore *game)
         draw_resonance_page(game);
         break;
     case N64GAME_MENU_SAVE:
-        draw_save_page(game);
+        draw_save_page(game, telemetry);
         break;
     case N64GAME_MENU_HELP:
         draw_help_page();
@@ -1275,7 +1292,11 @@ static void draw_annex_menu(const N64GameCore *game)
     }
 }
 
-static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
+static void draw_annex(
+    N64GameRenderer *renderer,
+    const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry
+)
 {
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
@@ -1303,7 +1324,7 @@ static void draw_annex(N64GameRenderer *renderer, const N64GameCore *game)
         text_at(84.0f, 149.0f, STYLE_TEXT, 156.0f, prompt);
     }
     if (game->menu != N64GAME_MENU_CLOSED) {
-        draw_annex_menu(game);
+        draw_annex_menu(game, telemetry);
     } else if (game->dialogue != N64GAME_DIALOGUE_NONE) {
         draw_dialogue(game);
     }
@@ -1550,7 +1571,12 @@ static void draw_opening(const N64GameCore *game, bool continue_available)
     }
 }
 
-static void draw_ending(const N64GameCore *game, bool save_busy, bool save_available)
+static void draw_ending(
+    const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry,
+    bool save_busy,
+    bool save_available
+)
 {
     clear_2d(RGBA32(7, 13, 24, 255));
     fill_rect(0, 0, 320, 8, RGBA32(170, 61, 145, 255));
@@ -1565,13 +1591,37 @@ static void draw_ending(const N64GameCore *game, bool save_busy, bool save_avail
     centered(151.0f, STYLE_MUTED, player_line);
     centered(165.0f, STYLE_TEXT, "THE STORM IS ANSWERING.");
     if (game->menu != N64GAME_MENU_CLOSED) {
-        draw_annex_menu(game);
+        draw_annex_menu(game, telemetry);
     }
+}
+
+uint32_t n64game_renderer_resource_count(const N64GameRenderer *renderer)
+{
+    if (renderer == NULL) {
+        return 0U;
+    }
+    uint32_t count = 0U;
+    count += renderer->font_registered ? 1U : 0U;
+    count += renderer->floor_vertices != NULL ? 1U : 0U;
+    count += renderer->actor_vertices != NULL ? 1U : 0U;
+    count += renderer->actor_matrices != NULL ? 1U : 0U;
+    count += renderer->viewport._matFP != NULL ? 1U : 0U;
+    count += renderer->annex_model != NULL ? 1U : 0U;
+    count += renderer->annex_draw_block != NULL ? 1U : 0U;
+    count += renderer->ari_model != NULL ? 1U : 0U;
+    count += renderer->ari_draw_block != NULL ? 1U : 0U;
+    count += renderer->ari_ready ? 1U : 0U;
+    count += renderer->quarrune.ready ? 1U : 0U;
+    count += renderer->ayselor.ready ? 1U : 0U;
+    count += renderer->gyreclast.ready ? 1U : 0U;
+    count += renderer->kivarrax.ready ? 1U : 0U;
+    return count;
 }
 
 void n64game_renderer_draw(
     N64GameRenderer *renderer,
     const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry,
     bool save_busy,
     bool save_available,
     bool continue_available,
@@ -1591,13 +1641,13 @@ void n64game_renderer_draw(
         draw_name_entry(game);
         break;
     case N64GAME_SCENE_ANNEX:
-        draw_annex(renderer, game);
+        draw_annex(renderer, game, telemetry);
         break;
     case N64GAME_SCENE_BATTLE:
         draw_battle(renderer, game);
         break;
     case N64GAME_SCENE_END_CHAPTER:
-        draw_ending(game, save_busy, save_available);
+        draw_ending(game, telemetry, save_busy, save_available);
         break;
     }
     if (save_busy) {

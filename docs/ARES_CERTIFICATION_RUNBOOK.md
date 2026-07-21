@@ -56,6 +56,12 @@ Record wall-clock start at cold boot and stop at the stable post-chapter menu af
     `TIME mm:ss / CTRL mm:ss`, `STATE <scene> / <quest>`, and
     `EXAM n/4 RELAY n/4 <OPEN|HOOK>`. These values are derived from live ROM
     state and are suitable screenshot evidence for timing and route coverage.
+    It also prints live certification telemetry: `FPS current/min`,
+    `HEAP current/min/baseline`, and `FRAME microseconds / RES count`. These
+    values come from libdragon `display_get_fps()`, `sys_get_heap_stats()`,
+    hardware ticks, and the renderer's tracked resource owners. Capture this
+    page during busy Annex traversal and after the battle so performance/heap
+    evidence is tied to visible route state instead of operator prose.
 13. Trigger a manual save from the Relay Save page.
 14. Return to Sera and begin the trial.
 15. Complete the Quarrune/Ayselor versus Gyreclast/Kivarrax 2v2 battle through legal commands.
@@ -97,7 +103,11 @@ Run ten complete title/Annex/battle/end-card loops in Ares v148 Homebrew Mode. R
 - minimum FPS across required scenes, which must be at least 30;
 - any sustained sub-30 windows, which must be zero.
 
-If the ROM cannot yet expose FPS/heap counters during an Ares run, do not invent them. Add or enable a real telemetry display/log first, then repeat the capture.
+The ROM exposes live FPS, free-heap, frame-time, and tracked-resource counters
+on the Relay Save page. These on-screen counters are capture aids, not a
+certification claim by themselves; the final manifest still needs the measured
+two-run timing, ten-loop soak, QA matrix, and validator-accepted `COMPLETE`
+evidence.
 
 ## Manifest workflow
 

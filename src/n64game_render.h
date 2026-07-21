@@ -71,6 +71,7 @@ bool n64game_renderer_init_bootstrap(N64GameRenderer *renderer);
 bool n64game_renderer_finish_init(N64GameRenderer *renderer);
 bool n64game_renderer_init(N64GameRenderer *renderer);
 void n64game_renderer_destroy(N64GameRenderer *renderer);
+uint32_t n64game_renderer_resource_count(const N64GameRenderer *renderer);
 void n64game_renderer_draw_loading(
     const N64GameRenderer *renderer,
     N64GameLoadingStage stage
@@ -78,6 +79,7 @@ void n64game_renderer_draw_loading(
 void n64game_renderer_draw(
     N64GameRenderer *renderer,
     const N64GameCore *game,
+    const N64GameCertificationTelemetry *telemetry,
     bool save_busy,
     bool save_available,
     bool continue_available,

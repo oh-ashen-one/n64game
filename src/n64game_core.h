@@ -68,6 +68,18 @@ typedef struct {
     int8_t stick_y;
 } N64GameInput;
 
+typedef struct {
+    uint32_t frame_index;
+    uint32_t frame_us;
+    uint32_t free_heap_bytes;
+    uint32_t free_heap_min_bytes;
+    uint32_t heap_baseline_bytes;
+    uint32_t resource_count;
+    uint16_t fps_x10;
+    uint16_t fps_min_x10;
+    bool valid;
+} N64GameCertificationTelemetry;
+
 typedef enum {
     N64GAME_MENU_CLOSED = 0,
     N64GAME_MENU_PAUSE_ROOT,
@@ -246,6 +258,15 @@ void n64game_core_certification_summary(
     size_t state_size,
     char *coverage,
     size_t coverage_size
+);
+void n64game_core_performance_summary(
+    const N64GameCertificationTelemetry *telemetry,
+    char *fps,
+    size_t fps_size,
+    char *heap,
+    size_t heap_size,
+    char *resources,
+    size_t resources_size
 );
 
 const N64GameMoveDef *n64game_move_def(N64GameEchoform actor, uint8_t move);

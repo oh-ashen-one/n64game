@@ -930,6 +930,67 @@ void n64game_core_certification_summary(
     }
 }
 
+static void clear_buffer(char *buffer, size_t size)
+{
+    if (buffer != NULL && size > 0U) {
+        buffer[0] = '\0';
+    }
+}
+
+static unsigned kib_rounded(uint32_t bytes)
+{
+    return (unsigned)((bytes + UINT32_C(512)) / UINT32_C(1024));
+}
+
+void n64game_core_performance_summary(
+    const N64GameCertificationTelemetry *telemetry,
+    char *fps,
+    size_t fps_size,
+    char *heap,
+    size_t heap_size,
+    char *resources,
+    size_t resources_size
+)
+{
+    if (telemetry == NULL || !telemetry->valid) {
+        clear_buffer(fps, fps_size);
+        clear_buffer(heap, heap_size);
+        clear_buffer(resources, resources_size);
+        return;
+    }
+
+    if (fps != NULL && fps_size > 0U) {
+        (void)snprintf(
+            fps,
+            fps_size,
+            "FPS %02u.%u MIN %02u.%u",
+            (unsigned)(telemetry->fps_x10 / UINT16_C(10)),
+            (unsigned)(telemetry->fps_x10 % UINT16_C(10)),
+            (unsigned)(telemetry->fps_min_x10 / UINT16_C(10)),
+            (unsigned)(telemetry->fps_min_x10 % UINT16_C(10))
+        );
+    }
+    if (heap != NULL && heap_size > 0U) {
+        (void)snprintf(
+            heap,
+            heap_size,
+            "HEAP %uK MIN %uK BASE %uK",
+            kib_rounded(telemetry->free_heap_bytes),
+            kib_rounded(telemetry->free_heap_min_bytes),
+            kib_rounded(telemetry->heap_baseline_bytes)
+        );
+    }
+    if (resources != NULL && resources_size > 0U) {
+        (void)snprintf(
+            resources,
+            resources_size,
+            "FRAME %uUS / RES %u",
+            (unsigned)telemetry->frame_us,
+            (unsigned)telemetry->resource_count
+        );
+    }
+}
+
 static N64GameBattleActor make_actor(
     N64GameEchoform id,
     N64GameAffinity affinity,
