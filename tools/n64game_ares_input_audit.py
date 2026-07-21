@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +152,67 @@ def process_audit(snapshot: Path | None) -> dict[str, Any]:
     }
 
 
+def process_id_from_snapshot_line(line: str) -> int | None:
+    fields = line.strip().split(maxsplit=1)
+    if not fields:
+        return None
+    try:
+        return int(fields[0])
+    except ValueError:
+        return None
+
+
+def terminate_stale_processes(
+    root: Path,
+    state_root: Path,
+    process_snapshot: Path | None,
+    *,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    if process_snapshot is not None:
+        before = audit(root, state_root, process_snapshot)
+        return {
+            "attempted": False,
+            "reason": "--terminate-stale is only available against live process state, not --process-snapshot fixtures",
+            "terminated_pids": [],
+            "before": before,
+            "after": before,
+        }
+
+    before = audit(root, state_root, None)
+    stale_lines = before["processes"].get("stale_processes", [])
+    stale_pids = [
+        pid for pid in (process_id_from_snapshot_line(line) for line in stale_lines)
+        if pid is not None and pid != os.getpid()
+    ]
+    terminated: list[int] = []
+    errors: list[str] = []
+    for pid in stale_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            terminated.append(pid)
+        except ProcessLookupError:
+            continue
+        except PermissionError as exc:
+            errors.append(f"{pid}: {exc}")
+        except OSError as exc:
+            errors.append(f"{pid}: {exc}")
+
+    deadline = time.monotonic() + timeout_seconds
+    after = audit(root, state_root, None)
+    while after["processes"]["result"] == "STALE_RUNNING_PROCESS" and time.monotonic() < deadline:
+        time.sleep(0.1)
+        after = audit(root, state_root, None)
+
+    return {
+        "attempted": True,
+        "terminated_pids": terminated,
+        "errors": errors,
+        "before": before,
+        "after": after,
+    }
+
+
 def audit(root: Path, state_root: Path, process_snapshot: Path | None) -> dict[str, Any]:
     wrapper = wrapper_audit(root / "scripts" / "run-ares")
     settings = settings_audit(state_root / "settings.bml")
@@ -186,15 +250,25 @@ def main() -> int:
     parser.add_argument("--process-snapshot", type=Path)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--strict", action="store_true", help="return nonzero on stale-process warnings as well as failures")
+    parser.add_argument(
+        "--terminate-stale",
+        action="store_true",
+        help="send SIGTERM to live Ares processes launched with legacy n64game key bindings before reporting",
+    )
     args = parser.parse_args()
 
-    payload = audit(args.root.resolve(), args.state_root, args.process_snapshot)
+    if args.terminate_stale:
+        payload = terminate_stale_processes(args.root.resolve(), args.state_root, args.process_snapshot)
+        result_payload = payload["after"]
+    else:
+        payload = audit(args.root.resolve(), args.state_root, args.process_snapshot)
+        result_payload = payload
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(text, encoding="utf-8")
     print(text, end="")
-    if payload["result"] == "FAIL" or (args.strict and payload["result"] != "PASS"):
+    if result_payload["result"] == "FAIL" or (args.strict and result_payload["result"] != "PASS"):
         return 1
     return 0
 

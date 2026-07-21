@@ -34,6 +34,19 @@ through `scripts/run-ares` before attempting a timed route. Use
 `scripts/audit-ares-input --strict` when preparing certification so stale input
 state fails the preflight instead of becoming a soft warning.
 
+For the common “arrows/WASD do nothing because an older Ares process is still
+open” case, run the explicit repair helper:
+
+```sh
+scripts/fix-ares-input
+```
+
+It repairs the isolated settings file, terminates only live Ares processes that
+the audit identifies as launched with legacy n64game bindings, and then reruns
+the strict audit. `scripts/run-ares` also performs this strict audit immediately
+before launching a playable session, so stale input state blocks launch instead
+of silently producing another broken certification attempt.
+
 ## Launch command
 
 ```sh

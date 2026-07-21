@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROM="${1:-$ROOT/build/game/n64game-gate3.z64}"
+
+"$ROOT/scripts/run-ares" --check-only "$ROM" >/dev/null
+"$ROOT/scripts/audit-ares-input" --terminate-stale --strict

@@ -81,6 +81,25 @@ Nintendo64
         self.assertEqual(payload["processes"]["result"], "STALE_RUNNING_PROCESS")
         self.assertEqual(len(payload["processes"]["stale_processes"]), 1)
 
+    def test_process_id_is_extracted_from_ps_line(self) -> None:
+        self.assertEqual(
+            audit.process_id_from_snapshot_line("80660 /Applications/ares --setting ..."),
+            80660,
+        )
+        self.assertIsNone(audit.process_id_from_snapshot_line("PID COMMAND"))
+        self.assertIsNone(audit.process_id_from_snapshot_line(""))
+
+    def test_terminate_stale_is_disabled_for_fixture_snapshots(self) -> None:
+        snapshot = self.root / "ps.txt"
+        snapshot.write_text(
+            "123 ares --setting Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;\n",
+            encoding="utf-8",
+        )
+        payload = audit.terminate_stale_processes(self.root, self.state, snapshot)
+        self.assertFalse(payload["attempted"])
+        self.assertEqual(payload["terminated_pids"], [])
+        self.assertEqual(payload["after"]["result"], "WARN_STALE_ARES_PROCESS")
+
     def test_cli_writes_json_and_strict_returns_nonzero_for_stale_process(self) -> None:
         snapshot = self.root / "ps.txt"
         snapshot.write_text(

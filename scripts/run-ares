@@ -83,6 +83,16 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
     exit 0
 fi
 
+AUDIT_JSON="$(mktemp -t n64game-ares-input-audit.XXXXXX.json)"
+if ! "$ROOT/scripts/audit-ares-input" --strict >"$AUDIT_JSON"; then
+    printf 'Ares input launch blocked: stale or invalid keyboard binding state detected.\n' >&2
+    printf 'Run scripts/fix-ares-input, then launch again through scripts/run-ares.\n' >&2
+    cat "$AUDIT_JSON" >&2
+    rm -f "$AUDIT_JSON"
+    exit 1
+fi
+rm -f "$AUDIT_JSON"
+
 exec "$ARES" \
     --settings-file "$STATE_ROOT/settings.bml" \
     --setting General/HomebrewMode=true \
