@@ -62,6 +62,7 @@ repair_ares_settings() {
     s/(\n        C-Down: )[^\n]*/${1}0x1\/0\/44;;/;
     s/(\n        Z: )[^\n]*/${1}0x1\/0\/225;;/;
     s/(\n        Start: )[^\n]*/${1}0x1\/0\/40;;/;
+    s/(\n  CaptureScreenshot: )[^\n]*/${1}0x1\/0\/19;;/;
     s/(\n        X-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/80;0x1\/0\/4;;/;
     s/(\n        X-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/79;0x1\/0\/7;;/;
     s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/81;0x1\/0\/22;;/;
@@ -120,6 +121,7 @@ exec "$ARES" \
     --setting "Paths/Saves=$STATE_ROOT/Saves/" \
     --setting "Paths/Screenshots=$STATE_ROOT/Screenshots/" \
     --setting "Paths/Debugging=$STATE_ROOT/Debugging/" \
+    --setting 'Hotkey/CaptureScreenshot=0x1/0/19;;' \
     --system "Nintendo 64" \
     --kiosk \
     "$ROM"

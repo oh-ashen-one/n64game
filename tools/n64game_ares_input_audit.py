@@ -40,6 +40,10 @@ EXPECTED_BINDINGS = {
     "Start": "0x1/0/40;;",
 }
 
+EXPECTED_HOTKEY_BINDINGS = {
+    "CaptureScreenshot": "0x1/0/19;;",
+}
+
 LEGACY_BINDING_FRAGMENTS = (
     "0x1/0/92;0x1/0/62",
     "0x1/0/93;0x1/0/58",
@@ -71,6 +75,10 @@ def wrapper_audit(wrapper: Path) -> dict[str, Any]:
         expected = f"Nintendo64/Input/Controller.Port.1/Gamepad/{control}=;;"
         if expected not in text and f"s/(\\n        {control}: )" not in text:
             missing.append(expected)
+    for hotkey, binding in EXPECTED_HOTKEY_BINDINGS.items():
+        expected = f"Hotkey/{hotkey}={binding}"
+        if expected not in text and f"s/(\\n  {hotkey}: )" not in text:
+            missing.append(expected)
     return {
         "path": display_path(wrapper, wrapper.parents[1]),
         "result": "PASS" if not missing else "FAIL",
@@ -92,6 +100,9 @@ def settings_audit(settings_file: Path) -> dict[str, Any]:
     for control, binding in EXPECTED_BINDINGS.items():
         if binding not in text:
             missing.append(control)
+    for hotkey, binding in EXPECTED_HOTKEY_BINDINGS.items():
+        if f"{hotkey}: {binding}" not in text:
+            missing.append(f"Hotkey/{hotkey}")
     for fragment in LEGACY_BINDING_FRAGMENTS:
         if fragment in text:
             legacy.append(fragment)
@@ -235,6 +246,7 @@ def audit(root: Path, state_root: Path, process_snapshot: Path | None) -> dict[s
         "settings": settings,
         "processes": processes,
         "expected_bindings": EXPECTED_BINDINGS,
+        "expected_hotkey_bindings": EXPECTED_HOTKEY_BINDINGS,
         "remediation": [
             "quit any running Ares process that reports stale bindings",
             "run scripts/run-ares --check-only to repair the isolated settings file",

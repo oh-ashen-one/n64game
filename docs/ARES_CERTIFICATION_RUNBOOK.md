@@ -60,6 +60,19 @@ If it reports `ARES_EXITED_DURING_PROBE` or produces no screenshot/capture files
 do not fill visual benchmark packet rows from desktop screenshots or prose.
 Resolve the interactive emulator visibility/capture problem first.
 
+The isolated wrapper also binds Ares `Capture Screenshot` to `P`
+(`Hotkey/CaptureScreenshot=0x1/0/19;;`) and sends screenshots to:
+
+```text
+~/Library/Application Support/ares-v148-n64game/Screenshots/
+```
+
+Treat the hotkey binding as readiness only. A capture attempt is evidence only
+after a new image file actually appears in that isolated screenshot directory
+and can be tied to the visible route state. If macOS automation or a menu/hotkey
+attempt produces no file, leave the evidence row empty and record the blocker
+instead of substituting a desktop/window screenshot.
+
 ## Launch command
 
 ```sh
@@ -76,6 +89,7 @@ Keyboard mapping supplied by `scripts/run-ares`:
 - `Space`: N64 `C-down` / Field Relay
 - `Left Shift`: N64 `Z`
 - `Return`: N64 `Start`
+- `P`: Ares native screenshot hotkey, when the Ares process/window receives it
 
 The wrapper uses SDL scancodes, not macOS virtual key codes: Up/Down/Left/Right
 are `82/81/80/79`, and W/A/S/D are `26/4/22/7`.
