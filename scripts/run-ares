@@ -84,7 +84,8 @@ SETTINGS_FILE="$STATE_ROOT/settings.bml"
 if [[ ! -f "$SETTINGS_FILE" ]]; then
     "$ARES" --settings-file "$SETTINGS_FILE" --version >/dev/null
 fi
-perl -0pi -e '
+repair_ares_settings() {
+    perl -0pi -e '
     s/(\n  Defocus: )[^\n]*/${1}Allow/;
     s/(\n  ExpansionPak: )[^\n]*/${1}false/;
     s/(\n        L-Up: )[^\n]*/${1};;/;
@@ -105,11 +106,48 @@ perl -0pi -e '
     s/(\n        Y-Axis\n          Lo: )[^\n]*/${1}0x1\/0\/93;0x1\/0\/58;;/;
     s/(\n        Y-Axis\n          Lo: [^\n]*\n          Hi: )[^\n]*/${1}0x1\/0\/92;0x1\/0\/62;;/;
 ' "$SETTINGS_FILE"
+}
+repair_ares_settings
 VERSION_RAW="$($ARES --settings-file "$STATE_ROOT/settings.bml" --version)"
 if [[ ! "$VERSION_RAW" =~ ^[[:space:]]*v148[[:space:]]*$ ]]; then
     printf 'unexpected Ares version output: %q\n' "$VERSION_RAW" >&2
     exit 1
 fi
+repair_ares_settings
+/usr/bin/python3 - "$SETTINGS_FILE" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+settings = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = settings.find("\nNintendo64\n")
+if start < 0:
+    raise SystemExit("Ares settings are missing the Nintendo64 block")
+port = settings.find("\n    Controller.Port.1\n      Gamepad\n", start)
+if port < 0:
+    raise SystemExit("Ares settings are missing Nintendo64 Controller.Port.1 Gamepad")
+end = settings.find("\n      Mouse\n", port)
+if end < 0:
+    raise SystemExit("Ares settings are missing the Controller.Port.1 Gamepad terminator")
+block = settings[port:end]
+for binding in (
+    "        L-Up: ;;",
+    "        L-Down: ;;",
+    "        L-Left: ;;",
+    "        L-Right: ;;",
+    "        Up: 0x1/0/92;0x1/0/62;",
+    "        Down: 0x1/0/93;0x1/0/58;",
+    "        Left: 0x1/0/94;0x1/0/40;",
+    "        Right: 0x1/0/95;0x1/0/43;",
+    "          Lo: 0x1/0/94;0x1/0/40;",
+    "          Hi: 0x1/0/95;0x1/0/43;",
+    "          Lo: 0x1/0/93;0x1/0/58;",
+    "          Hi: 0x1/0/92;0x1/0/62;",
+):
+    if binding not in block:
+        raise SystemExit(f"Ares keyboard map repair did not persist binding: {binding}")
+PY
 VERSION_CANONICAL="ares version v148"
 
 printf 'ares_version=%s\nares_sha256=%s\nrom_sha256=%s\nhomebrew_mode=true\nexpansion_pak=false\ndefocus=allow\n' \
@@ -151,6 +189,10 @@ exec "$ARES" \
     --setting Nintendo64/ExpansionPak=false \
     --setting Input/Driver=SDL \
     --setting Input/Defocus=Allow \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Left=;;' \
+    --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Right=;;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Up=0x1/0/92;0x1/0/62;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Down=0x1/0/93;0x1/0/58;' \
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/Left=0x1/0/94;0x1/0/40;' \

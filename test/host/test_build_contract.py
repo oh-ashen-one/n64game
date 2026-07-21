@@ -395,6 +395,10 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("s/(\\n  Defocus: )[^\\n]*/${1}Allow/;", wrapper)
         self.assertIn("s/(\\n  ExpansionPak: )[^\\n]*/${1}false/;", wrapper)
         expected_keyboard_bindings = {
+            "L-Up": ";;",
+            "L-Down": ";;",
+            "L-Left": ";;",
+            "L-Right": ";;",
             "Up": "0x1/0/92;0x1/0/62;",
             "Down": "0x1/0/93;0x1/0/58;",
             "Left": "0x1/0/94;0x1/0/40;",
@@ -426,15 +430,11 @@ class BuildContractTests(unittest.TestCase):
                     f"s/(\\n        {control}: )[^\\n]*/${{1}}{bml_assignments}/",
                     wrapper,
                 )
-        for legacy_control in ("L-Up", "L-Down", "L-Left", "L-Right"):
-            self.assertNotIn(
-                f"Nintendo64/Input/Controller.Port.1/Gamepad/{legacy_control}=",
-                wrapper,
-            )
-            self.assertIn(
-                f"s/(\\n        {legacy_control}: )[^\\n]*/${{1}};;/;",
-                wrapper,
-            )
+        self.assertIn("repair_ares_settings\nVERSION_RAW=", wrapper)
+        self.assertIn("repair_ares_settings\n/usr/bin/python3 - \"$SETTINGS_FILE\"", wrapper)
+        self.assertIn("Controller.Port.1\\n      Gamepad", wrapper)
+        self.assertIn("for binding in (", wrapper)
+        self.assertIn("Ares keyboard map repair did not persist binding", wrapper)
         self.assertIn(
             "s/(\\n        X-Axis\\n          Lo: )[^\\n]*/${1}0x1\\/0\\/94;0x1\\/0\\/40;;/",
             wrapper,
