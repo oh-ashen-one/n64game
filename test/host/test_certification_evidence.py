@@ -51,6 +51,16 @@ class CertificationEvidenceTests(unittest.TestCase):
             "schema": "n64game-certification-evidence-v1",
             "certification": "NOT_CLAIMED",
             "rom": {"sha256": self.rom_sha, "size": self.rom.stat().st_size},
+            "observed_current_state": {
+                "check_only": "PASS",
+                "ares_input_audit": {
+                    "result": "PASS",
+                    "wrapper": {"result": "PASS"},
+                    "settings": {"result": "PASS"},
+                    "processes": {"result": "PASS"},
+                    "warnings": [],
+                },
+            },
             "blockers": ["real Ares playthrough logs have not been captured"],
         }
 
@@ -70,6 +80,31 @@ class CertificationEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["result"], "PASS")
         self.assertEqual(payload["certification"], "NOT_CLAIMED")
         self.assertEqual(payload["blocker_count"], 1)
+
+    def test_not_claimed_manifest_requires_clean_ares_input_audit(self) -> None:
+        payload = self.base_payload()
+        payload["observed_current_state"] = {
+            "check_only": "PASS",
+            "ares_input_audit": {
+                "result": "WARN_STALE_ARES_PROCESS",
+                "wrapper": {"result": "PASS"},
+                "settings": {"result": "STALE"},
+                "processes": {"result": "PASS"},
+                "warnings": ["isolated Ares settings file still contains stale or incomplete bindings"],
+            },
+        }
+        manifest = self.write_manifest(payload)
+        result = self.run_command([
+            str(VALIDATOR),
+            "--manifest",
+            str(manifest),
+            "--rom",
+            str(self.rom),
+            "--artifact-root",
+            str(self.root),
+        ])
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Ares input audit must be PASS", result.stdout)
 
     def test_rom_identity_must_match_manifest(self) -> None:
         payload = self.base_payload()

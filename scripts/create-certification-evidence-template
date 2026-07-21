@@ -115,14 +115,14 @@ def main() -> int:
             "check_only": "PASS",
             "keyboard_wrapper": "Quartz input driver; arrows/WASD map to D-pad and stick; X=A, Z=B, Space=C-down, Left Shift=Z, Return=Start",
             "ares_input_audit": input_audit,
-            "codex_computer_use_input": "NOT_ACCEPTED_BY_ARES_ON_NAME_ENTRY",
+            "codex_computer_use_input": "OLD_SDL_DRIVER_ATTEMPT_FAILED; CURRENT_QUARTZ_WRAPPER_AND_SETTINGS_AUDIT_REQUIRED_BEFORE_CERTIFICATION",
         },
         "blockers": [
             "No two human-observed first-playthrough-style Ares timing captures have been recorded.",
             "No captured Ares transition soak proves ten complete title/Annex/battle/end-card loops.",
             "No captured Ares FPS and free-heap report proves 30 FPS and the 512 KiB heap floor.",
             "No completed visual/audio/controller QA matrix has been captured from the emulator.",
-            "Codex Computer Use key injection did not move the Ares name-entry cursor under the old SDL-driver wrapper; rerun the certification route through the current Quartz-driver wrapper with Ares Input Monitoring enabled or with a physical/gamepad input source.",
+            "Certification has not yet been rerun through the current PASSing Quartz keyboard wrapper/settings state with human-visible Ares input confirmation.",
         ],
         "next_required_artifacts": [
             "build/certification/timed-run-01.md",

@@ -229,6 +229,24 @@ def validate_qa(payload: dict[str, Any]) -> None:
 
 def validate_not_claimed(payload: dict[str, Any], rom: Path) -> dict[str, Any]:
     rom_info = validate_rom(payload, rom)
+    observed = require_mapping(payload.get("observed_current_state"), "observed_current_state")
+    if observed.get("check_only") != "PASS":
+        raise CertificationEvidenceError("NOT_CLAIMED observed_current_state.check_only must be PASS")
+    input_audit = require_mapping(observed.get("ares_input_audit"), "observed_current_state.ares_input_audit")
+    if input_audit.get("result") != "PASS":
+        raise CertificationEvidenceError("NOT_CLAIMED Ares input audit must be PASS")
+    wrapper = require_mapping(input_audit.get("wrapper"), "observed_current_state.ares_input_audit.wrapper")
+    if wrapper.get("result") != "PASS":
+        raise CertificationEvidenceError("NOT_CLAIMED Ares input wrapper must be PASS")
+    settings = require_mapping(input_audit.get("settings"), "observed_current_state.ares_input_audit.settings")
+    if settings.get("result") != "PASS":
+        raise CertificationEvidenceError("NOT_CLAIMED Ares input settings must be PASS")
+    processes = require_mapping(input_audit.get("processes"), "observed_current_state.ares_input_audit.processes")
+    if processes.get("result") != "PASS":
+        raise CertificationEvidenceError("NOT_CLAIMED Ares input process audit must be PASS")
+    warnings = input_audit.get("warnings", [])
+    if warnings:
+        raise CertificationEvidenceError("NOT_CLAIMED Ares input audit warnings must be empty")
     blockers = payload.get("blockers")
     if not isinstance(blockers, list) or not blockers or any(not isinstance(item, str) or not item for item in blockers):
         raise CertificationEvidenceError("NOT_CLAIMED manifests require nonempty string blockers")

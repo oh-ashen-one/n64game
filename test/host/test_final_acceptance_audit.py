@@ -162,6 +162,16 @@ class FinalAcceptanceAuditTests(unittest.TestCase):
                         "sha256": hashlib.sha256(rom.read_bytes()).hexdigest(),
                         "size": rom.stat().st_size,
                     },
+                    "observed_current_state": {
+                        "check_only": "PASS",
+                        "ares_input_audit": {
+                            "result": "PASS",
+                            "wrapper": {"result": "PASS"},
+                            "settings": {"result": "PASS"},
+                            "processes": {"result": "PASS"},
+                            "warnings": [],
+                        },
+                    },
                     "blockers": ["real Ares playthrough logs have not been captured"],
                 },
                 sort_keys=True,
