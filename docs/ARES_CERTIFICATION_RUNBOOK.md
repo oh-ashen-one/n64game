@@ -123,8 +123,9 @@ Keyboard mapping supplied by `scripts/run-ares`:
 - `Return`: N64 `Start`
 - `P`: Ares native screenshot hotkey, when the Ares process/window receives it
 
-The wrapper uses SDL scancodes, not macOS virtual key codes: Up/Down/Left/Right
-are `82/81/80/79`, and W/A/S/D are `26/4/22/7`.
+The wrapper forces Ares' native Quartz input driver and uses Ares keyboard
+scancodes, not macOS virtual key codes: Up/Down/Left/Right are `82/81/80/79`,
+and W/A/S/D are `26/4/22/7`.
 
 ## Required route for each timed playthrough
 

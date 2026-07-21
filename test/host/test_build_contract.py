@@ -384,6 +384,7 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn(digest, wrapper)
         self.assertIn("--setting General/HomebrewMode=true", wrapper)
         self.assertIn("--setting Nintendo64/ExpansionPak=false", wrapper)
+        self.assertIn("--setting Input/Driver=Quartz", wrapper)
         self.assertIn("--setting Input/Defocus=Allow", wrapper)
         self.assertIn(digest, (ROOT / "scripts" / "validate-asset-contract").read_text(encoding="utf-8"))
 

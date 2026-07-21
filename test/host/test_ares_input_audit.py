@@ -139,8 +139,49 @@ Hotkey
 """
         )
         payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
+        self.assertEqual(payload["result"], "WARN_STALE_ARES_PROCESS")
+        self.assertEqual(payload["settings"]["result"], "STALE")
+        self.assertIn("Input/Driver", payload["settings"]["missing_controls"])
+
+    def test_repaired_settings_pass_with_native_keyboard_driver(self) -> None:
+        self.write_settings(
+            """
+Input
+  Driver: Quartz
+  Defocus: Allow
+Nintendo64
+  Input
+    Controller.Port.1
+      Gamepad
+        L-Up: ;;
+        L-Down: ;;
+        L-Left: ;;
+        L-Right: ;;
+        Up: 0x1/0/82;0x1/0/26;;
+        Down: 0x1/0/81;0x1/0/22;;
+        Left: 0x1/0/80;0x1/0/4;;
+        Right: 0x1/0/79;0x1/0/7;;
+        B: 0x1/0/29;;
+        A: 0x1/0/27;;
+        C-Down: 0x1/0/44;;
+        Z: 0x1/0/225;;
+        Start: 0x1/0/40;;
+        X-Axis
+          Lo: 0x1/0/80;0x1/0/4;;
+          Hi: 0x1/0/79;0x1/0/7;;
+        Y-Axis
+          Lo: 0x1/0/81;0x1/0/22;;
+          Hi: 0x1/0/82;0x1/0/26;;
+      Mouse
+        X: ;;
+Hotkey
+  CaptureScreenshot: 0x1/0/19;;
+"""
+        )
+        payload = audit.audit(self.root, self.state, self.empty_process_snapshot)
         self.assertEqual(payload["result"], "PASS")
         self.assertEqual(payload["settings"]["result"], "PASS")
+        self.assertEqual(payload["settings"]["input_driver"], "Quartz")
         self.assertEqual(payload["settings"]["port1_gamepad_bindings"]["L-Up"], ";;")
 
     def test_running_legacy_process_is_reported_without_failing_wrapper(self) -> None:

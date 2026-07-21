@@ -45,6 +45,8 @@ EXPECTED_HOTKEY_BINDINGS = {
     "CaptureScreenshot": "0x1/0/19;;",
 }
 
+EXPECTED_INPUT_DRIVER = "Quartz"
+
 EXPECTED_EMPTY_GAMEPAD_BINDINGS = {
     "L-Up": ";;",
     "L-Down": ";;",
@@ -108,6 +110,9 @@ def display_path(path: Path, root: Path) -> str:
 def wrapper_audit(wrapper: Path) -> dict[str, Any]:
     text = wrapper.read_text(encoding="utf-8")
     missing = []
+    expected_driver_setting = f"--setting Input/Driver={EXPECTED_INPUT_DRIVER}"
+    if expected_driver_setting not in text:
+        missing.append(expected_driver_setting)
     for control, binding in EXPECTED_BINDINGS.items():
         expected = f"Nintendo64/Input/Controller.Port.1/Gamepad/{control}={binding}"
         if expected not in text:
@@ -138,6 +143,10 @@ def settings_audit(settings_file: Path) -> dict[str, Any]:
     text = settings_file.read_text(encoding="utf-8", errors="replace")
     missing = []
     legacy = []
+    driver_match = re.search(r"(?m)^Input\n  Driver: (?P<driver>[^\n]+)$", text)
+    input_driver = driver_match.group("driver") if driver_match is not None else None
+    if input_driver != EXPECTED_INPUT_DRIVER:
+        missing.append("Input/Driver")
     port1_bindings = extract_port1_gamepad_bindings(text)
     if port1_bindings:
         for control, binding in EXPECTED_BINDINGS.items():
@@ -165,6 +174,8 @@ def settings_audit(settings_file: Path) -> dict[str, Any]:
         "result": "PASS" if not missing and not legacy else "STALE",
         "missing_controls": missing,
         "legacy_fragments": legacy,
+        "input_driver": input_driver,
+        "expected_input_driver": EXPECTED_INPUT_DRIVER,
         "port1_gamepad_bindings": port1_bindings,
     }
 
@@ -285,7 +296,7 @@ def audit(root: Path, state_root: Path, process_snapshot: Path | None) -> dict[s
     failures = []
     warnings = []
     if wrapper["result"] != "PASS":
-        failures.append("scripts/run-ares is missing required SDL scancode bindings")
+        failures.append("scripts/run-ares is missing required Ares keyboard bindings")
     if settings["result"] == "STALE":
         warnings.append("isolated Ares settings file still contains stale or incomplete bindings")
     if processes["result"] == "STALE_RUNNING_PROCESS":
@@ -302,6 +313,7 @@ def audit(root: Path, state_root: Path, process_snapshot: Path | None) -> dict[s
         "expected_bindings": EXPECTED_BINDINGS,
         "expected_empty_gamepad_bindings": EXPECTED_EMPTY_GAMEPAD_BINDINGS,
         "expected_hotkey_bindings": EXPECTED_HOTKEY_BINDINGS,
+        "expected_input_driver": EXPECTED_INPUT_DRIVER,
         "remediation": [
             "quit any running Ares process that reports stale bindings",
             "run scripts/run-ares --check-only to repair the isolated settings file",

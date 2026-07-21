@@ -49,6 +49,7 @@ if [[ ! -f "$SETTINGS_FILE" ]]; then
 fi
 repair_ares_settings() {
     perl -0pi -e '
+    s/(\nInput\n  Driver: )[^\n]*/${1}Quartz/;
     s/(\n  Defocus: )[^\n]*/${1}Allow/;
     s/(\n  ExpansionPak: )[^\n]*/${1}false/;
     s/(\n        L-Up: )[^\n]*/${1};;/;
@@ -100,7 +101,7 @@ ARES_ARGS=(
     --settings-file "$STATE_ROOT/settings.bml"
     --setting General/HomebrewMode=true
     --setting Nintendo64/ExpansionPak=false
-    --setting Input/Driver=SDL
+    --setting Input/Driver=Quartz
     --setting Input/Defocus=Allow
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Up=;;'
     --setting 'Nintendo64/Input/Controller.Port.1/Gamepad/L-Down=;;'
