@@ -137,11 +137,61 @@ static void fill_rect(int x0, int y0, int x1, int y1, color_t color)
     rdpq_fill_rectangle(x0, y0, x1, y1);
 }
 
+static void bolt(int x, int y)
+{
+    fill_rect(x, y, x + 2, y + 2, RGBA32(45, 53, 54, 255));
+    fill_rect(x, y, x + 1, y + 1, RGBA32(240, 184, 90, 255));
+}
+
 static void panel(int x0, int y0, int x1, int y1)
 {
-    fill_rect(x0, y0, x1, y1, RGBA32(7, 18, 27, 255));
-    fill_rect(x0, y0, x1, y0 + 2, RGBA32(78, 210, 190, 255));
-    fill_rect(x0, y1 - 2, x1, y1, RGBA32(29, 67, 76, 255));
+    fill_rect(x0 + 3, y0 + 4, x1 + 3, y1 + 4, RGBA32(2, 7, 12, 255));
+    fill_rect(x0, y0, x1, y1, RGBA32(136, 119, 86, 255));
+    fill_rect(x0 + 2, y0 + 2, x1 - 2, y1 - 2, RGBA32(23, 65, 68, 255));
+    fill_rect(x0 + 4, y0 + 4, x1 - 4, y1 - 4, RGBA32(8, 19, 31, 255));
+    fill_rect(x0 + 4, y0 + 4, x1 - 4, y0 + 6, RGBA32(94, 207, 194, 255));
+    fill_rect(x0 + 4, y1 - 6, x1 - 4, y1 - 4, RGBA32(41, 73, 77, 255));
+    fill_rect(x0, y0, x0 + 7, y0 + 3, RGBA32(225, 205, 163, 255));
+    fill_rect(x1 - 7, y1 - 3, x1, y1, RGBA32(91, 71, 49, 255));
+    bolt(x0 + 7, y0 + 8);
+    bolt(x1 - 9, y0 + 8);
+}
+
+static void draw_resonance_mark(int x, int y, color_t color)
+{
+    fill_rect(x - 3, y - 3, x + 3, y + 3, color);
+    fill_rect(x - 13, y - 5, x - 7, y + 1, color);
+    fill_rect(x + 7, y - 5, x + 13, y + 1, color);
+    fill_rect(x - 3, y + 7, x + 3, y + 13, color);
+    fill_rect(x - 9, y + 2, x - 5, y + 6, RGBA32(181, 150, 91, 255));
+    fill_rect(x + 5, y + 2, x + 9, y + 6, RGBA32(181, 150, 91, 255));
+}
+
+static void draw_signal_trace(
+    int x,
+    int y,
+    int width,
+    uint32_t phase,
+    color_t color
+)
+{
+    fill_rect(x, y + 5, x + width, y + 6, RGBA32(28, 72, 77, 255));
+    const int head = x + (int)(phase % (uint32_t)(width > 0 ? width : 1));
+    fill_rect(head - 13, y + 4, head - 8, y + 6, color);
+    fill_rect(head - 8, y + 1, head - 5, y + 9, color);
+    fill_rect(head - 5, y + 4, head, y + 6, color);
+    fill_rect(head, y + 2, head + 3, y + 8, color);
+    fill_rect(head + 3, y + 4, head + 9, y + 6, color);
+}
+
+static void draw_right_interference(uint32_t ticks)
+{
+    for (int index = 0; index < 9; ++index) {
+        const int y = 42 + index * 18 +
+            (int)((ticks + (uint32_t)(index * 7)) % 5U);
+        const int width = 2 + (index * 3) % 8;
+        fill_rect(316 - width, y, 319, y + 2, RGBA32(185, 73, 157, 255));
+    }
 }
 
 static void clear_2d(color_t color)
@@ -954,24 +1004,36 @@ static void draw_annex_sector_model(
 static void begin_world_render(
     N64GameRenderer *renderer,
     const fm_vec3_t *camera,
-    const fm_vec3_t *target
+    const fm_vec3_t *target,
+    bool battle
 )
 {
     const fm_vec3_t up = {{0.0f, 1.0f, 0.0f}};
-    const uint8_t ambient[4] = {54, 48, 57, 255};
-    const uint8_t sun[4] = {255, 224, 177, 255};
-    const fm_vec3_t direction = {{-0.45f, 0.72f, 0.6f}};
+    const uint8_t ambient_annex[4] = {42, 66, 67, 255};
+    const uint8_t ambient_battle[4] = {35, 49, 67, 255};
+    const uint8_t warm_key[4] = {255, 203, 137, 255};
+    const uint8_t cyan_fill[4] = {83, 180, 185, 255};
+    const fm_vec3_t key_direction = {{-0.48f, 0.72f, 0.52f}};
+    const fm_vec3_t fill_direction = {{0.72f, 0.32f, -0.54f}};
     renderer->frame_index = (renderer->frame_index + 1U) % renderer->buffer_count;
     t3d_frame_start();
-    t3d_viewport_set_projection(&renderer->viewport, T3D_DEG_TO_RAD(68.0f), 8.0f, 300.0f);
+    t3d_viewport_set_projection(
+        &renderer->viewport,
+        T3D_DEG_TO_RAD(battle ? 56.0f : 58.0f),
+        8.0f,
+        300.0f
+    );
     t3d_viewport_look_at(&renderer->viewport, camera, target, &up);
     t3d_viewport_attach(&renderer->viewport);
-    t3d_screen_clear_color(RGBA32(19, 31, 42, 255));
+    t3d_screen_clear_color(
+        battle ? RGBA32(9, 20, 34, 255) : RGBA32(14, 31, 38, 255)
+    );
     t3d_screen_clear_depth();
     rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
-    t3d_light_set_ambient(ambient);
-    t3d_light_set_directional(0, sun, &direction);
-    t3d_light_set_count(1);
+    t3d_light_set_ambient(battle ? ambient_battle : ambient_annex);
+    t3d_light_set_directional(0, warm_key, &key_direction);
+    t3d_light_set_directional(1, cyan_fill, &fill_direction);
+    t3d_light_set_count(2);
     t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
     draw_floor(renderer);
 }
@@ -1069,12 +1131,42 @@ static const char *dialogue_text(const N64GameCore *game)
     return "";
 }
 
+static void draw_dialogue_portrait(N64GameDialogue dialogue)
+{
+    const bool relay = dialogue == N64GAME_DIALOGUE_RELAY;
+    const bool tavi = dialogue == N64GAME_DIALOGUE_TAVI_OPTIONAL;
+    fill_rect(14, 176, 66, 228, RGBA32(28, 57, 66, 255));
+    fill_rect(17, 179, 63, 225, RGBA32(181, 151, 96, 255));
+    fill_rect(20, 182, 60, 222, RGBA32(20, 42, 55, 255));
+    if (relay) {
+        draw_resonance_mark(40, 194, RGBA32(92, 225, 204, 255));
+        draw_signal_trace(24, 209, 32, 17U, RGBA32(240, 184, 90, 255));
+        return;
+    }
+    const color_t coat = tavi ?
+        RGBA32(71, 81, 127, 255) : RGBA32(213, 195, 151, 255);
+    const color_t accent = tavi ?
+        RGBA32(202, 105, 75, 255) : RGBA32(226, 166, 78, 255);
+    fill_rect(33, 188, 47, 201, RGBA32(151, 96, 70, 255));
+    fill_rect(29, 201, 51, 220, coat);
+    fill_rect(tavi ? 24 : 47, 202, tavi ? 32 : 54, 219, accent);
+    fill_rect(31, 185, 49, 190, RGBA32(42, 33, 31, 255));
+    fill_rect(36, 193, 39, 195, RGBA32(238, 211, 163, 255));
+    fill_rect(44, 193, 47, 195, RGBA32(238, 211, 163, 255));
+}
+
 static void draw_dialogue(const N64GameCore *game)
 {
-    panel(8, 172, 312, 234);
-    text_at(18.0f, 179.0f, STYLE_ACCENT, 280.0f, dialogue_speaker(game->dialogue));
-    text_at(18.0f, 193.0f, STYLE_TEXT, 276.0f, dialogue_text(game));
-    text_at(286.0f, 219.0f, STYLE_MUTED, 20.0f, "A");
+    panel(7, 168, 313, 235);
+    draw_dialogue_portrait(game->dialogue);
+    fill_rect(72, 178, 298, 180, RGBA32(47, 95, 97, 255));
+    text_at(
+        75.0f, 176.0f, STYLE_ACCENT, 218.0f,
+        dialogue_speaker(game->dialogue)
+    );
+    text_at(75.0f, 193.0f, STYLE_TEXT, 220.0f, dialogue_text(game));
+    fill_rect(287, 216, 303, 230, RGBA32(83, 205, 187, 255));
+    text_at(292.0f, 219.0f, STYLE_SELECTED, 14.0f, "A");
 }
 
 static const char *annex_sector_name(N64GameAnnexSector sector)
@@ -1091,7 +1183,15 @@ static const char *annex_sector_name(N64GameAnnexSector sector)
 
 static void draw_menu_item(float y, const char *label, bool selected)
 {
-    text_at(82.0f, y, selected ? STYLE_WARNING : STYLE_TEXT, 170.0f, label);
+    if (selected) {
+        const int row_y = (int)y - 3;
+        fill_rect(74, row_y, 246, row_y + 17, RGBA32(82, 207, 190, 255));
+        fill_rect(74, row_y, 79, row_y + 17, RGBA32(240, 184, 90, 255));
+        text_at(84.0f, y, STYLE_SELECTED, 156.0f, label);
+    } else {
+        fill_rect(76, (int)y + 11, 238, (int)y + 12, RGBA32(24, 50, 59, 255));
+        text_at(84.0f, y, STYLE_TEXT, 156.0f, label);
+    }
 }
 
 static void draw_pause_root(const N64GameCore *game)
@@ -1300,13 +1400,13 @@ static void draw_annex(
 {
     const float player_x = (float)game->player_x_q8 / 256.0f;
     const float player_z = (float)game->player_z_q8 / 256.0f;
-    const fm_vec3_t camera = {{player_x, 62.0f, player_z + 88.0f}};
-    const fm_vec3_t target = {{player_x, -4.0f, player_z - 6.0f}};
-    begin_world_render(renderer, &camera, &target);
+    const fm_vec3_t camera = {{player_x + 5.0f, 40.0f, player_z + 61.0f}};
+    const fm_vec3_t target = {{player_x, -7.0f, player_z - 12.0f}};
+    begin_world_render(renderer, &camera, &target, false);
     draw_annex_sector_model(renderer, game->annex_sector);
     update_ari_pose(renderer, game);
     const float angle = (float)game->scene_ticks * 0.018f;
-    draw_ari(renderer, 0U, player_x, -18.0f, player_z, 0.27f);
+    draw_ari(renderer, 0U, player_x, -18.0f, player_z, 0.33f);
     draw_actor(renderer, 1U, 5U, -38.0f, -1.0f, -8.0f, 0.88f, 0.3f);
     draw_actor(renderer, 2U, 7U, 5.0f, -2.0f, -34.0f, 0.68f, -0.4f);
     update_battle_echo_idle_pose(&renderer->quarrune);
@@ -1316,13 +1416,28 @@ static void draw_annex(
     );
     draw_actor(renderer, 4U, 6U, 74.0f, -6.0f, 40.0f, 0.72f, -angle);
 
-    panel(8, 8, 250, 31);
-    text_at(16.0f, 15.0f, STYLE_ACCENT, 228.0f, objective_text(game->quest));
+    panel(7, 7, 264, 34);
+    draw_resonance_mark(22, 17, RGBA32(93, 221, 201, 255));
+    text_at(40.0f, 13.0f, STYLE_ACCENT, 214.0f, objective_text(game->quest));
+    draw_signal_trace(
+        42, 27, 206, game->scene_ticks * UINT32_C(2),
+        RGBA32(240, 184, 90, 255)
+    );
+    panel(270, 7, 314, 34);
+    text_at(
+        277.0f, 13.0f, STYLE_MUTED, 32.0f,
+        game->annex_sector == N64GAME_ANNEX_ATRIUM ? "A1" :
+        game->annex_sector == N64GAME_ANNEX_SIMULATION ? "S2" :
+        game->annex_sector == N64GAME_ANNEX_WORKSHOP ? "W3" : "O4"
+    );
     const char *const prompt = n64game_core_interaction_label(game);
     if (prompt != NULL) {
-        panel(74, 142, 246, 164);
-        text_at(84.0f, 149.0f, STYLE_TEXT, 156.0f, prompt);
+        panel(68, 139, 252, 166);
+        fill_rect(76, 146, 90, 159, RGBA32(83, 205, 187, 255));
+        text_at(80.0f, 149.0f, STYLE_SELECTED, 14.0f, "A");
+        text_at(98.0f, 147.0f, STYLE_TEXT, 144.0f, prompt);
     }
+    draw_right_interference(game->scene_ticks);
     if (game->menu != N64GAME_MENU_CLOSED) {
         draw_annex_menu(game, telemetry);
     } else if (game->dialogue != N64GAME_DIALOGUE_NONE) {
@@ -1339,6 +1454,9 @@ static const char *echo_name(uint8_t actor)
 static void draw_battle_status(const N64GameCore *game)
 {
     const N64GameBattle *const battle = &game->battle;
+    static const int TARGET_POINTS[4][2] = {
+        {78, 112}, {156, 103}, {113, 63}, {207, 65}
+    };
     for (uint8_t actor = 0U; actor < 4U; ++actor) {
         const bool player = actor < 2U;
         const int x = player ? 8 + (int)actor * 112 : 96 + ((int)actor - 2) * 108;
@@ -1347,8 +1465,55 @@ static void draw_battle_status(const N64GameCore *game)
         text_at((float)(x + 5), (float)(y + 5), STYLE_TEXT, 94.0f, echo_name(actor));
         hp_bar(x + 5, y + 18, 92, battle->actors[actor].hp, battle->actors[actor].max_hp);
         if (game->battle_selecting_target && game->battle_target_cursor == actor) {
-            fill_rect(x, y, x + 4, y + 29, RGBA32(221, 97, 163, 255));
+            const int tx = TARGET_POINTS[actor][0];
+            const int ty = TARGET_POINTS[actor][1];
+            const int pulse = (int)(game->scene_ticks % 4U);
+            fill_rect(x, y, x + 4, y + 29, RGBA32(240, 184, 90, 255));
+            fill_rect(tx - 15 - pulse, ty - 12, tx - 5, ty - 9, RGBA32(95, 226, 204, 255));
+            fill_rect(tx + 5, ty - 12, tx + 15 + pulse, ty - 9, RGBA32(95, 226, 204, 255));
+            fill_rect(tx - 15 - pulse, ty + 9, tx - 5, ty + 12, RGBA32(95, 226, 204, 255));
+            fill_rect(tx + 5, ty + 9, tx + 15 + pulse, ty + 12, RGBA32(95, 226, 204, 255));
         }
+    }
+}
+
+static void draw_battle_fx(const N64GameCore *game)
+{
+    static const int TARGET_POINTS[4][2] = {
+        {78, 112}, {156, 103}, {113, 63}, {207, 65}
+    };
+    const N64GameBattle *const battle = &game->battle;
+    if (battle->phase != N64GAME_BATTLE_PRESENT ||
+        !battle->last_event.happened ||
+        battle->last_event.skipped ||
+        battle->last_event.target >= N64GAME_BATTLE_ACTOR_COUNT) {
+        return;
+    }
+
+    const N64GameBattleEvent *const event = &battle->last_event;
+    const int x = TARGET_POINTS[event->target][0];
+    const int y = TARGET_POINTS[event->target][1];
+    const int age = (int)game->battle_present_delay;
+    const int spread = 6 + age;
+    const color_t impact = event->affinity_advantage ?
+        RGBA32(226, 105, 75, 255) : RGBA32(95, 226, 204, 255);
+    const color_t core = event->move == N64GAME_MOVE_FINISHER ?
+        RGBA32(255, 211, 106, 255) : RGBA32(241, 227, 194, 255);
+
+    fill_rect(x - 3, y - 3, x + 3, y + 3, core);
+    fill_rect(x - spread, y - 1, x - 6, y + 1, impact);
+    fill_rect(x + 6, y - 1, x + spread, y + 1, impact);
+    fill_rect(x - 1, y - spread, x + 1, y - 6, impact);
+    fill_rect(x - 1, y + 6, x + 1, y + spread, impact);
+    fill_rect(x - spread + 4, y - spread + 4, x - spread + 8, y - spread + 8, impact);
+    fill_rect(x + spread - 8, y - spread + 4, x + spread - 4, y - spread + 8, impact);
+    fill_rect(x - spread + 4, y + spread - 8, x - spread + 8, y + spread - 4, impact);
+    fill_rect(x + spread - 8, y + spread - 8, x + spread - 4, y + spread - 4, impact);
+
+    if (event->move == N64GAME_MOVE_FINISHER) {
+        fill_rect(0, 40 + age, 320, 43 + age, RGBA32(84, 213, 193, 255));
+        fill_rect(0, 128 - age, 320, 131 - age, RGBA32(211, 90, 168, 255));
+        draw_resonance_mark(160, 88, RGBA32(255, 211, 106, 255));
     }
 }
 
@@ -1420,9 +1585,9 @@ static void draw_battle_menu(const N64GameCore *game)
 
 static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
 {
-    const fm_vec3_t camera = {{0.0f, 56.0f, 112.0f}};
-    const fm_vec3_t target = {{0.0f, -4.0f, 0.0f}};
-    begin_world_render(renderer, &camera, &target);
+    const fm_vec3_t camera = {{4.0f, 39.0f, 76.0f}};
+    const fm_vec3_t target = {{0.0f, -8.0f, -49.0f}};
+    begin_world_render(renderer, &camera, &target, true);
     draw_annex_model(renderer, 0.0f, -18.0f, -52.0f, 0.09f, 0.0f);
     static const float POSITIONS[4][3] = {
         {-31.0f, -2.0f, -34.0f}, {26.0f, 0.0f, -30.0f},
@@ -1464,21 +1629,65 @@ static void draw_battle(N64GameRenderer *renderer, const N64GameCore *game)
             0.46f, 0.08f
         );
     }
+    draw_battle_fx(game);
     draw_battle_status(game);
     draw_battle_menu(game);
+    draw_right_interference(game->scene_ticks + UINT32_C(11));
 }
 
 static void draw_name_entry(const N64GameCore *game)
 {
-    clear_2d(RGBA32(10, 25, 35, 255));
-    centered(18.0f, STYLE_ACCENT, "RESONANCE IDENTITY");
-    panel(56, 42, 264, 72);
-    centered(51.0f, STYLE_TEXT, game->name_length > 0U ? game->player_name : "ARI");
+    clear_2d(RGBA32(6, 15, 25, 255));
+    fill_rect(0, 0, 320, 5, RGBA32(187, 162, 111, 255));
+    fill_rect(0, 235, 320, 240, RGBA32(28, 74, 76, 255));
+    draw_right_interference(game->scene_ticks);
+
+    panel(8, 8, 312, 36);
+    draw_resonance_mark(27, 17, RGBA32(240, 184, 90, 255));
+    text_at(50.0f, 14.0f, STYLE_ACCENT, 180.0f, "RESONANCE IDENTITY");
+    text_at(239.0f, 14.0f, STYLE_MUTED, 65.0f, "MERIDIAN / 01");
+
+    panel(8, 42, 105, 198);
+    fill_rect(15, 49, 98, 191, RGBA32(34, 55, 66, 255));
+    fill_rect(18, 52, 95, 92, RGBA32(48, 82, 91, 255));
+    fill_rect(18, 92, 95, 191, RGBA32(153, 104, 62, 255));
+    fill_rect(22, 85, 91, 98, RGBA32(218, 178, 107, 255));
+    fill_rect(28, 78, 35, 98, RGBA32(26, 49, 55, 255));
+    fill_rect(80, 66, 85, 98, RGBA32(26, 49, 55, 255));
+    fill_rect(36, 72, 42, 98, RGBA32(38, 67, 72, 255));
+    fill_rect(51, 98, 72, 117, RGBA32(151, 96, 70, 255));
+    fill_rect(43, 113, 79, 180, RGBA32(38, 55, 80, 255));
+    fill_rect(37, 126, 47, 176, RGBA32(28, 73, 74, 255));
+    fill_rect(75, 120, 84, 180, RGBA32(173, 118, 57, 255));
+    fill_rect(54, 105, 58, 108, RGBA32(240, 219, 175, 255));
+    fill_rect(65, 105, 69, 108, RGBA32(240, 219, 175, 255));
+    fill_rect(46, 96, 77, 101, RGBA32(31, 29, 31, 255));
+    panel(15, 163, 98, 191);
+    draw_signal_trace(
+        24, 172, 64, game->scene_ticks * UINT32_C(3),
+        RGBA32(91, 226, 204, 255)
+    );
+    text_at(24.0f, 181.0f, STYLE_MUTED, 64.0f, "RELAY MR-A7");
+
+    panel(113, 42, 312, 78);
+    fill_rect(121, 50, 304, 70, RGBA32(220, 204, 165, 255));
+    fill_rect(125, 54, 300, 66, RGBA32(45, 61, 65, 255));
+    text_at(
+        135.0f, 55.0f, STYLE_ACCENT, 154.0f,
+        game->name_length > 0U ? game->player_name : "ARI"
+    );
+    fill_rect(
+        291, 56, 296, 64,
+        game->scene_ticks % 20U < 10U ?
+            RGBA32(91, 226, 204, 255) : RGBA32(32, 69, 73, 255)
+    );
+
+    panel(113, 84, 312, 198);
     for (uint8_t slot = 0U; slot < 28U; ++slot) {
         const int column = slot % 7U;
         const int row = slot / 7U;
-        const float x = 41.0f + (float)column * 36.0f;
-        const float y = 92.0f + (float)row * 27.0f;
+        const int x = 120 + column * 27;
+        const int y = 91 + row * 25;
         char label[5] = {0};
         if (slot < 26U) {
             label[0] = (char)('A' + slot);
@@ -1487,9 +1696,28 @@ static void draw_name_entry(const N64GameCore *game)
         } else {
             (void)snprintf(label, sizeof(label), "OK");
         }
-        text_at(x, y, game->name_cursor == slot ? STYLE_WARNING : STYLE_TEXT, 32.0f, label);
+        const bool selected = game->name_cursor == slot;
+        if (selected) {
+            fill_rect(x - 3, y - 2, x + 20, y + 16, RGBA32(83, 205, 187, 255));
+            fill_rect(x - 3, y - 2, x, y + 16, RGBA32(240, 184, 90, 255));
+        }
+        text_at(
+            (float)(x + 4), (float)y,
+            selected ? STYLE_SELECTED : STYLE_TEXT,
+            20.0f, label
+        );
     }
-    centered(214.0f, STYLE_MUTED, "D-PAD SELECT / A ENTER / B ERASE");
+    panel(8, 204, 312, 234);
+    fill_rect(18, 212, 30, 225, RGBA32(65, 91, 119, 255));
+    fill_rect(23, 214, 26, 223, RGBA32(241, 227, 194, 255));
+    fill_rect(20, 217, 29, 220, RGBA32(241, 227, 194, 255));
+    text_at(36.0f, 214.0f, STYLE_MUTED, 57.0f, "SELECT");
+    fill_rect(106, 212, 119, 225, RGBA32(93, 181, 101, 255));
+    text_at(110.0f, 214.0f, STYLE_TEXT, 14.0f, "A");
+    text_at(125.0f, 214.0f, STYLE_MUTED, 65.0f, "CONFIRM");
+    fill_rect(211, 212, 224, 225, RGBA32(64, 112, 167, 255));
+    text_at(215.0f, 214.0f, STYLE_TEXT, 14.0f, "B");
+    text_at(230.0f, 214.0f, STYLE_MUTED, 60.0f, "ERASE");
 }
 
 void n64game_renderer_draw_loading(
@@ -1510,29 +1738,27 @@ void n64game_renderer_draw_loading(
 
     rdpq_attach(display_get(), display_get_zbuf());
     clear_2d(RGBA32(4, 11, 19, 255));
-    fill_rect(0, 0, 320, 5, RGBA32(184, 67, 151, 255));
-    fill_rect(0, 235, 320, 240, RGBA32(24, 82, 91, 255));
-    centered(24.0f, STYLE_ACCENT, "N64GAME");
-    centered(43.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
+    fill_rect(0, 0, 320, 6, RGBA32(184, 151, 91, 255));
+    fill_rect(0, 234, 320, 240, RGBA32(27, 77, 82, 255));
+    panel(18, 16, 302, 224);
+    draw_resonance_mark(160, 52, RGBA32(240, 184, 90, 255));
+    centered(75.0f, STYLE_ACCENT, "MERIDIAN SIGNAL LAB");
+    centered(91.0f, STYLE_TEXT, "FIELD RELAY BOOT SEQUENCE");
+    draw_signal_trace(
+        58, 111, 204, (uint32_t)stage * UINT32_C(47),
+        RGBA32(91, 226, 204, 255)
+    );
 
-    /* A small relay beacon reads clearly at native 320x240 without a texture. */
-    fill_rect(156, 72, 164, 108, RGBA32(34, 91, 101, 255));
-    fill_rect(151, 78, 169, 102, RGBA32(12, 31, 41, 255));
-    fill_rect(156, 83, 164, 97, RGBA32(91, 231, 204, 255));
-    fill_rect(146, 88, 151, 92, RGBA32(57, 147, 151, 255));
-    fill_rect(169, 88, 174, 92, RGBA32(57, 147, 151, 255));
-    fill_rect(137, 86, 142, 94, RGBA32(29, 82, 93, 255));
-    fill_rect(178, 86, 183, 94, RGBA32(29, 82, 93, 255));
-
-    panel(42, 126, 278, 187);
-    centered(139.0f, STYLE_MUTED, STATUS[(size_t)stage]);
+    panel(42, 128, 278, 190);
+    centered(141.0f, STYLE_MUTED, STATUS[(size_t)stage]);
     for (int segment = 0; segment < 4; ++segment) {
         const int x0 = 68 + segment * 47;
         const color_t color = segment <= (int)stage ?
-            RGBA32(87, 226, 203, 255) : RGBA32(24, 53, 63, 255);
-        fill_rect(x0, 162, x0 + 39, 169, color);
+            RGBA32(87, 226, 203, 255) : RGBA32(23, 49, 59, 255);
+        fill_rect(x0, 163, x0 + 39, 172, RGBA32(12, 26, 35, 255));
+        fill_rect(x0 + 2, 165, x0 + 37, 170, color);
     }
-    centered(203.0f, STYLE_MUTED, "RESONANCE LINK / ORIGINAL N64 BUILD");
+    centered(202.0f, STYLE_MUTED, "ORIGINAL N64 BUILD / LINK 01");
     rdpq_detach_show();
 }
 
@@ -1540,21 +1766,44 @@ static void draw_opening(const N64GameCore *game, bool continue_available)
 {
     clear_2d(RGBA32(6, 15, 24, 255));
     if (game->scene == N64GAME_SCENE_BOOT) {
-        centered(72.0f, STYLE_ACCENT, "N64GAME");
-        centered(96.0f, STYLE_TEXT, "MERIDIAN SIGNAL LAB");
+        fill_rect(0, 0, 320, 6, RGBA32(180, 150, 92, 255));
+        fill_rect(0, 234, 320, 240, RGBA32(31, 78, 81, 255));
+        panel(20, 20, 300, 220);
+        draw_resonance_mark(160, 66, RGBA32(240, 184, 90, 255));
+        centered(94.0f, STYLE_ACCENT, "MERIDIAN SIGNAL LAB");
+        centered(111.0f, STYLE_TEXT, "RESONANCE FIELD FILE 01");
         const int phase = (int)(game->scene_ticks % 20U);
         const int pulse = phase <= 10 ? phase : 20 - phase;
-        fill_rect(154, 126, 166, 138, RGBA32(87, 226, 203, 255));
-        fill_rect(136 - pulse, 130, 148 - pulse, 134, RGBA32(45, 126, 132, 255));
-        fill_rect(172 + pulse, 130, 184 + pulse, 134, RGBA32(45, 126, 132, 255));
-        centered(150.0f, STYLE_MUTED, "AN ORIGINAL N64 CHAPTER");
+        fill_rect(154, 134, 166, 146, RGBA32(87, 226, 203, 255));
+        fill_rect(136 - pulse, 138, 148 - pulse, 142, RGBA32(45, 126, 132, 255));
+        fill_rect(172 + pulse, 138, 184 + pulse, 142, RGBA32(45, 126, 132, 255));
+        draw_signal_trace(
+            66, 164, 188, game->scene_ticks * UINT32_C(3),
+            RGBA32(91, 226, 204, 255)
+        );
+        centered(190.0f, STYLE_MUTED, "AN ORIGINAL N64 CHAPTER");
     } else {
-        fill_rect(18, 18, 302, 222, RGBA32(22, 32, 44, 255));
-        fill_rect(18, 18, 302, 22, RGBA32(183, 72, 154, 255));
-        centered(84.0f, STYLE_WARNING, "INSERT CUTSCENE HERE");
-        centered(110.0f, STYLE_TEXT, "SOLACE INTERCEPTION / 4:3 PLAYBACK SLOT");
+        fill_rect(0, 0, 320, 240, RGBA32(14, 20, 32, 255));
+        panel(12, 12, 308, 228);
+        fill_rect(20, 20, 300, 166, RGBA32(39, 44, 58, 255));
+        fill_rect(20, 20, 300, 58, RGBA32(184, 126, 67, 255));
+        fill_rect(20, 58, 300, 102, RGBA32(91, 58, 92, 255));
+        fill_rect(20, 102, 300, 166, RGBA32(20, 31, 45, 255));
+        fill_rect(42, 119, 278, 123, RGBA32(70, 84, 97, 255));
+        fill_rect(71, 107, 113, 119, RGBA32(211, 190, 145, 255));
+        fill_rect(113, 111, 204, 119, RGBA32(211, 190, 145, 255));
+        fill_rect(204, 104, 246, 119, RGBA32(211, 190, 145, 255));
+        fill_rect(134, 77, 187, 83, RGBA32(29, 24, 34, 255));
+        fill_rect(149, 69, 172, 91, RGBA32(29, 24, 34, 255));
+        draw_right_interference(game->scene_ticks);
+        centered(32.0f, STYLE_WARNING, "INSERT CUTSCENE HERE");
+        centered(143.0f, STYLE_TEXT, "SOLACE INTERCEPTION / 4:3 SLOT");
+        draw_signal_trace(
+            52, 171, 216, game->scene_ticks * UINT32_C(4),
+            RGBA32(204, 79, 167, 255)
+        );
         centered(
-            178.0f,
+            196.0f,
             STYLE_MUTED,
             continue_available ? "START CONTINUE / A NEW FILE" : "A OR START TO BEGIN"
         );

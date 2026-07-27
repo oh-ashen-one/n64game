@@ -78,13 +78,18 @@ Implemented:
 - Beacon corruption hook and stable post-chapter archive
 - Twelve-panel opening storyboard package
 - Reproducible public ROM build and corrected Ares keyboard profile
+- Meridian presentation pass for boot, cutscene placeholder, identity entry,
+  loading, dialogue, menus, Annex HUD/camera/lighting, and battle targeting/VFX
+- Generated identity-screen art-direction target at
+  `docs/visual-targets/meridian_identity_target.png` with its prompt and digest
 
 Not yet certified or approved:
 
 - Real timed cold-boot 6–8 minute Ares playthrough evidence
 - Complete visual-benchmark capture and independent approval
 - Production approval of the reviewed 3D and texture candidates
-- Final audio, VFX, lighting, camera staging, and pacing pass
+- Final audio and authored cutscene production
+- Independent visual review and any camera/VFX/pacing revisions it identifies
 - Performance, soak, repeated-transition, and physical Nintendo 64 evidence
 
 Run these to see the live acceptance state:
