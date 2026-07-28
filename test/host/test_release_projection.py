@@ -12,6 +12,14 @@ VALIDATOR = ROOT / "scripts" / "validate-release-projection"
 
 
 class ReleaseProjectionTests(unittest.TestCase):
+    def copy_projection_fixture(self, destination: Path) -> None:
+        """Copy only the release-projection package exercised by these tests."""
+        shutil.copytree(
+            ROOT / "storyboard" / "opening",
+            destination / "storyboard" / "opening",
+            symlinks=True,
+        )
+
     def run_validator(self, root: Path = ROOT) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [str(VALIDATOR), "--root", str(root)],
@@ -34,7 +42,7 @@ class ReleaseProjectionTests(unittest.TestCase):
     def test_projection_rejects_missing_panel(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"
-            shutil.copytree(ROOT, clone, symlinks=True, ignore=shutil.ignore_patterns(".git", "build"))
+            self.copy_projection_fixture(clone)
             (clone / "storyboard" / "opening" / "panels" / "12.png").unlink()
             result = self.run_validator(clone)
             self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -43,7 +51,7 @@ class ReleaseProjectionTests(unittest.TestCase):
     def test_projection_rejects_stale_manifest_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"
-            shutil.copytree(ROOT, clone, symlinks=True, ignore=shutil.ignore_patterns(".git", "build"))
+            self.copy_projection_fixture(clone)
             manifest = clone / "storyboard" / "opening" / "DELIVERY_MANIFEST.md"
             text = manifest.read_text(encoding="utf-8")
             with manifest.open("w", encoding="utf-8", newline="\n") as handle:
@@ -55,7 +63,7 @@ class ReleaseProjectionTests(unittest.TestCase):
     def test_projection_rejects_timing_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"
-            shutil.copytree(ROOT, clone, symlinks=True, ignore=shutil.ignore_patterns(".git", "build"))
+            self.copy_projection_fixture(clone)
             shot_list = clone / "storyboard" / "opening" / "SHOT_LIST.md"
             text = shot_list.read_text(encoding="utf-8")
             with shot_list.open("w", encoding="utf-8", newline="\n") as handle:

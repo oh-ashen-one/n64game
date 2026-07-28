@@ -217,11 +217,11 @@ static void test_input_only_release_route(void)
     route_press(&game, N64GAME_INPUT_START, &sectors_seen);
     assert(game.opening_cinematic_seen);
     assert(game.scene == N64GAME_SCENE_NAME_ENTRY);
-
-    route_press(&game, N64GAME_INPUT_LEFT, &sectors_seen);
-    route_press(&game, N64GAME_INPUT_UP, &sectors_seen);
     assert(game.name_cursor == 27U);
-    route_press(&game, N64GAME_INPUT_CONFIRM, &sectors_seen);
+    assert(game.name_default_selected);
+    assert(game.name_length == 3U);
+    assert(strcmp(game.player_name, "ARI") == 0);
+    route_press(&game, N64GAME_INPUT_START, &sectors_seen);
     assert(game.scene == N64GAME_SCENE_ANNEX);
     assert(game.name_length == 3U);
     assert(strcmp(game.player_name, "ARI") == 0);
@@ -534,6 +534,7 @@ static void test_name_editing_movement_pause_and_optional_dialogue(void)
     game.name_cursor = 1U;
     update_pressed(&game, N64GAME_INPUT_CONFIRM);
     assert(strcmp(game.player_name, "B") == 0);
+    assert(!game.name_default_selected);
     update_pressed(&game, N64GAME_INPUT_CANCEL);
     assert(game.name_length == 0U);
     game.name_cursor = 0U;
@@ -736,6 +737,11 @@ static void test_battle_controller_selection_and_presentation_cadence(void)
     assert(game.battle.queue_cursor == 0U);
     n64game_core_update(&game, (N64GameInput){0});
     assert(game.battle.queue_cursor == 1U);
+    assert(game.battle.phase == N64GAME_BATTLE_PRESENT);
+    game.battle_present_delay = 4U;
+    update_pressed(&game, N64GAME_INPUT_CONFIRM);
+    assert(game.battle_present_delay == 0U);
+    assert(game.battle.queue_cursor == 2U);
 }
 
 static void test_trial_entry_selects_a_living_player_or_defeats(void)

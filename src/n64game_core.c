@@ -203,20 +203,42 @@ static void update_name_entry(N64GameCore *game, N64GameInput input)
     game->name_cursor = (uint8_t)(next_row * NAME_COLUMNS + next_column);
 
     if (pressed(input, N64GAME_INPUT_CANCEL) && game->name_length > 0U) {
-        --game->name_length;
+        if (game->name_default_selected) {
+            game->name_length = 0U;
+            game->name_default_selected = false;
+        } else {
+            --game->name_length;
+        }
         game->player_name[game->name_length] = '\0';
+    }
+    if (pressed(input, N64GAME_INPUT_START) && game->name_length > 0U) {
+        game->name_default_selected = false;
+        game->quest = N64GAME_QUEST_MEET_SERA;
+        game->player_x_q8 = -12 * 256;
+        game->player_z_q8 = -8 * 256;
+        set_scene(game, N64GAME_SCENE_ANNEX);
+        return;
     }
     if (!pressed(input, N64GAME_INPUT_CONFIRM)) {
         return;
     }
     if (game->name_cursor < NAME_SLOT_BACK) {
+        if (game->name_default_selected) {
+            game->name_length = 0U;
+            game->player_name[0] = '\0';
+            game->name_default_selected = false;
+        }
         if (game->name_length < N64GAME_NAME_CAPACITY) {
             game->player_name[game->name_length] = (char)('A' + game->name_cursor);
             ++game->name_length;
             game->player_name[game->name_length] = '\0';
         }
     } else if (game->name_cursor == NAME_SLOT_BACK) {
-        if (game->name_length > 0U) {
+        if (game->name_default_selected) {
+            game->name_length = 0U;
+            game->player_name[0] = '\0';
+            game->name_default_selected = false;
+        } else if (game->name_length > 0U) {
             --game->name_length;
             game->player_name[game->name_length] = '\0';
         }
@@ -225,6 +247,7 @@ static void update_name_entry(N64GameCore *game, N64GameInput input)
             memcpy(game->player_name, "ARI", 4U);
             game->name_length = 3U;
         }
+        game->name_default_selected = false;
         game->quest = N64GAME_QUEST_MEET_SERA;
         game->player_x_q8 = -12 * 256;
         game->player_z_q8 = -8 * 256;
@@ -647,6 +670,10 @@ void n64game_core_init(N64GameCore *game)
         .quest = N64GAME_QUEST_MEET_SERA,
         .party_hp = {N64GAME_QUARRUNE_MAX_HP, N64GAME_AYSELOR_MAX_HP},
         .annex_sector = N64GAME_ANNEX_ATRIUM,
+        .name_cursor = NAME_SLOT_CONFIRM,
+        .name_length = 3U,
+        .player_name = "ARI",
+        .name_default_selected = true,
     };
     n64game_annex_safe_anchor(
         game->annex_sector, &game->player_x_q8, &game->player_z_q8
@@ -707,7 +734,10 @@ void n64game_core_update(N64GameCore *game, N64GameInput input)
                 game->battle.phase = N64GAME_BATTLE_COMMAND;
             }
         } else if (game->battle.phase == N64GAME_BATTLE_PRESENT) {
-            if (++game->battle_present_delay >= 20U) {
+            ++game->battle_present_delay;
+            if (game->battle_present_delay >= 20U ||
+                (game->battle_present_delay >= 5U &&
+                 pressed(input, N64GAME_INPUT_CONFIRM))) {
                 game->battle_present_delay = 0U;
                 (void)n64game_battle_resolve_next(&game->battle);
                 if (game->battle.phase == N64GAME_BATTLE_COMMAND) {

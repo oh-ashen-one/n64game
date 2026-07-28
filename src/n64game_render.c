@@ -1051,6 +1051,95 @@ static const char *objective_text(N64GameQuest quest)
     return "";
 }
 
+static N64GameAnnexInteraction objective_interaction(N64GameQuest quest)
+{
+    switch (quest) {
+    case N64GAME_QUEST_MEET_SERA:
+    case N64GAME_QUEST_RETURN_TO_SERA:
+        return N64GAME_ANNEX_INTERACTION_SERA;
+    case N64GAME_QUEST_RETRIEVE_RELAY:
+        return N64GAME_ANNEX_INTERACTION_FIELD_RELAY;
+    case N64GAME_QUEST_BEACON_OVERLOOK:
+        return N64GAME_ANNEX_INTERACTION_BEACON;
+    case N64GAME_QUEST_RESONANCE_TRIAL:
+    case N64GAME_QUEST_COMPLETE:
+        return N64GAME_ANNEX_INTERACTION_NONE;
+    }
+    return N64GAME_ANNEX_INTERACTION_NONE;
+}
+
+static const char *bearing_label(int32_t dx_q8, int32_t dz_q8)
+{
+    const int32_t absolute_x = dx_q8 < 0 ? -dx_q8 : dx_q8;
+    const int32_t absolute_z = dz_q8 < 0 ? -dz_q8 : dz_q8;
+    if (absolute_x > absolute_z * 2) {
+        return dx_q8 < 0 ? "W" : "E";
+    }
+    if (absolute_z > absolute_x * 2) {
+        return dz_q8 < 0 ? "N" : "S";
+    }
+    if (dx_q8 < 0) {
+        return dz_q8 < 0 ? "NW" : "SW";
+    }
+    return dz_q8 < 0 ? "NE" : "SE";
+}
+
+static void draw_objective_locator(const N64GameCore *game)
+{
+    const N64GameAnnexInteraction interaction = objective_interaction(game->quest);
+    int32_t target_x_q8;
+    int32_t target_z_q8;
+    if (interaction == N64GAME_ANNEX_INTERACTION_NONE ||
+        !n64game_annex_interaction_point(
+            interaction, &target_x_q8, &target_z_q8)) {
+        return;
+    }
+
+    const int32_t dx_q8 = target_x_q8 - game->player_x_q8;
+    const int32_t dz_q8 = target_z_q8 - game->player_z_q8;
+    const float dx = (float)dx_q8 / 256.0f;
+    const float dz = (float)dz_q8 / 256.0f;
+    const int distance = (int)(sqrtf(dx * dx + dz * dz) + 0.5f);
+    char distance_text[8];
+    (void)snprintf(distance_text, sizeof(distance_text), "%dM", distance);
+
+    panel(270, 7, 314, 68);
+    text_at(
+        277.0f, 13.0f, STYLE_MUTED, 32.0f,
+        game->annex_sector == N64GAME_ANNEX_ATRIUM ? "A1" :
+        game->annex_sector == N64GAME_ANNEX_SIMULATION ? "S2" :
+        game->annex_sector == N64GAME_ANNEX_WORKSHOP ? "W3" : "O4"
+    );
+    fill_rect(278, 29, 306, 31, RGBA32(35, 81, 84, 255));
+    const int pulse = (int)(game->scene_ticks % 5U);
+    fill_rect(289 - pulse, 28, 295 + pulse, 32, RGBA32(240, 184, 90, 255));
+    text_at(277.0f, 36.0f, STYLE_ACCENT, 32.0f, bearing_label(dx_q8, dz_q8));
+    text_at(277.0f, 49.0f, STYLE_MUTED, 32.0f, distance_text);
+}
+
+static uint8_t count_record_bits(uint8_t value)
+{
+    uint8_t count = 0U;
+    while (value != 0U) {
+        count = (uint8_t)(count + (uint8_t)(value & UINT8_C(1)));
+        value = (uint8_t)(value >> 1);
+    }
+    return count;
+}
+
+static void draw_record_progress(const N64GameCore *game)
+{
+    char progress[20];
+    const uint8_t count = count_record_bits(game->examine_flags);
+    (void)snprintf(progress, sizeof(progress), "RECORDS %u/4", (unsigned)count);
+    panel(8, 214, 118, 234);
+    text_at(
+        16.0f, 221.0f,
+        count == 4U ? STYLE_ACCENT : STYLE_MUTED,
+        96.0f, progress
+    );
+}
+
 static const char *dialogue_speaker(N64GameDialogue dialogue)
 {
     switch (dialogue) {
@@ -1423,19 +1512,16 @@ static void draw_annex(
         42, 27, 206, game->scene_ticks * UINT32_C(2),
         RGBA32(240, 184, 90, 255)
     );
-    panel(270, 7, 314, 34);
-    text_at(
-        277.0f, 13.0f, STYLE_MUTED, 32.0f,
-        game->annex_sector == N64GAME_ANNEX_ATRIUM ? "A1" :
-        game->annex_sector == N64GAME_ANNEX_SIMULATION ? "S2" :
-        game->annex_sector == N64GAME_ANNEX_WORKSHOP ? "W3" : "O4"
-    );
+    draw_objective_locator(game);
     const char *const prompt = n64game_core_interaction_label(game);
     if (prompt != NULL) {
         panel(68, 139, 252, 166);
         fill_rect(76, 146, 90, 159, RGBA32(83, 205, 187, 255));
         text_at(80.0f, 149.0f, STYLE_SELECTED, 14.0f, "A");
         text_at(98.0f, 147.0f, STYLE_TEXT, 144.0f, prompt);
+    } else if (game->menu == N64GAME_MENU_CLOSED &&
+               game->dialogue == N64GAME_DIALOGUE_NONE) {
+        draw_record_progress(game);
     }
     draw_right_interference(game->scene_ticks);
     if (game->menu != N64GAME_MENU_CLOSED) {
@@ -1485,15 +1571,28 @@ static void draw_battle_fx(const N64GameCore *game)
     const N64GameBattle *const battle = &game->battle;
     if (battle->phase != N64GAME_BATTLE_PRESENT ||
         !battle->last_event.happened ||
-        battle->last_event.skipped ||
-        battle->last_event.target >= N64GAME_BATTLE_ACTOR_COUNT) {
+        battle->last_event.skipped) {
         return;
     }
 
     const N64GameBattleEvent *const event = &battle->last_event;
+    const int age = (int)game->battle_present_delay;
+    if (event->move == N64GAME_MOVE_FINISHER) {
+        const int width = 26 + age * 4;
+        fill_rect(160 - width, 79, 160 + width, 82, RGBA32(84, 213, 193, 255));
+        fill_rect(160 - width, 113, 160 + width, 116, RGBA32(211, 90, 168, 255));
+        fill_rect(0, 42 + age, 320, 45 + age, RGBA32(84, 213, 193, 255));
+        fill_rect(0, 134 - age, 320, 137 - age, RGBA32(211, 90, 168, 255));
+        draw_resonance_mark(160, 88, RGBA32(255, 211, 106, 255));
+        centered(101.0f, STYLE_WARNING, "HORIZON BREAK");
+        return;
+    }
+    if (event->target >= N64GAME_BATTLE_ACTOR_COUNT) {
+        return;
+    }
+
     const int x = TARGET_POINTS[event->target][0];
     const int y = TARGET_POINTS[event->target][1];
-    const int age = (int)game->battle_present_delay;
     const int spread = 6 + age;
     const color_t impact = event->affinity_advantage ?
         RGBA32(226, 105, 75, 255) : RGBA32(95, 226, 204, 255);
@@ -1510,11 +1609,61 @@ static void draw_battle_fx(const N64GameCore *game)
     fill_rect(x - spread + 4, y + spread - 8, x - spread + 8, y + spread - 4, impact);
     fill_rect(x + spread - 8, y + spread - 8, x + spread - 4, y + spread - 4, impact);
 
-    if (event->move == N64GAME_MOVE_FINISHER) {
-        fill_rect(0, 40 + age, 320, 43 + age, RGBA32(84, 213, 193, 255));
-        fill_rect(0, 128 - age, 320, 131 - age, RGBA32(211, 90, 168, 255));
-        draw_resonance_mark(160, 88, RGBA32(255, 211, 106, 255));
+    char value_text[24];
+    if (event->knockout) {
+        (void)snprintf(value_text, sizeof(value_text), "KNOCKOUT");
+    } else if (event->hp_delta < 0) {
+        (void)snprintf(
+            value_text, sizeof(value_text), "%d DAMAGE",
+            (int)-event->hp_delta
+        );
+    } else if (event->hp_delta > 0) {
+        (void)snprintf(
+            value_text, sizeof(value_text), "HEAL %d",
+            (int)event->hp_delta
+        );
+    } else {
+        (void)snprintf(value_text, sizeof(value_text), "LINK SHIFT");
     }
+    text_at(
+        (float)(x - 28), (float)(y - 24 - age / 3),
+        event->affinity_advantage ? STYLE_WARNING : STYLE_ACCENT,
+        72.0f, value_text
+    );
+}
+
+static const char *affinity_label(N64GameAffinity affinity)
+{
+    switch (affinity) {
+    case N64GAME_AFFINITY_STRATA: return "STRATA";
+    case N64GAME_AFFINITY_GALE: return "GALE";
+    case N64GAME_AFFINITY_CURRENT: return "CURRENT";
+    case N64GAME_AFFINITY_EMBER: return "EMBER";
+    }
+    return "";
+}
+
+static const char *effect_label(N64GameMoveEffect effect)
+{
+    switch (effect) {
+    case N64GAME_EFFECT_DAMAGE: return "DAMAGE";
+    case N64GAME_EFFECT_DAMAGE_STAGGER: return "STAGGER HIT";
+    case N64GAME_EFFECT_GUARD: return "GUARD UP";
+    case N64GAME_EFFECT_HEAL: return "RESTORE";
+    case N64GAME_EFFECT_FINISHER: return "DUO FINISHER";
+    }
+    return "";
+}
+
+static const char *target_rule_label(N64GameTargetRule rule)
+{
+    switch (rule) {
+    case N64GAME_TARGET_ONE_ENEMY: return "ONE ENEMY";
+    case N64GAME_TARGET_ALL_ENEMIES: return "ALL ENEMIES";
+    case N64GAME_TARGET_ONE_ALLY: return "ONE ALLY";
+    case N64GAME_TARGET_SELF: return "SELF";
+    }
+    return "";
 }
 
 static void draw_battle_menu(const N64GameCore *game)
@@ -1531,14 +1680,24 @@ static void draw_battle_menu(const N64GameCore *game)
             const N64GameMoveDef *const definition = n64game_move_def(
                 battle->actors[actor].id, move
             );
-            const uint8_t style = !game->battle_selecting_target &&
-                game->battle_move_cursor == move ? STYLE_WARNING : STYLE_TEXT;
+            const bool selected = !game->battle_selecting_target &&
+                game->battle_move_cursor == move;
+            const uint8_t style = selected ? STYLE_SELECTED : STYLE_TEXT;
+            if (selected) {
+                const int y = 165 + (int)move * 13;
+                fill_rect(14, y, 172, y + 12, RGBA32(49, 136, 132, 255));
+                fill_rect(14, y, 17, y + 12, RGBA32(240, 184, 90, 255));
+            }
             text_at(18.0f, 168.0f + (float)move * 13.0f, style, 150.0f, definition->name);
         }
         if (actor == 0U && battle->resonance == N64GAME_RESONANCE_MAX &&
             battle->actors[1].hp > 0) {
             const uint8_t style = game->battle_move_cursor == N64GAME_MOVE_FINISHER ?
-                STYLE_WARNING : STYLE_ACCENT;
+                STYLE_SELECTED : STYLE_ACCENT;
+            if (game->battle_move_cursor == N64GAME_MOVE_FINISHER) {
+                fill_rect(14, 217, 172, 229, RGBA32(128, 74, 116, 255));
+                fill_rect(14, 217, 17, 229, RGBA32(255, 211, 106, 255));
+            }
             text_at(18.0f, 220.0f, style, 150.0f, "HORIZON BREAK");
         }
     } else if (battle->phase == N64GAME_BATTLE_VICTORY) {
@@ -1578,6 +1737,33 @@ static void draw_battle_menu(const N64GameCore *game)
     if (game->battle_selecting_target) {
         text_at(192.0f, 194.0f, STYLE_WARNING, 110.0f, "SELECT TARGET");
         text_at(192.0f, 214.0f, STYLE_MUTED, 110.0f, "A CONFIRM / B BACK");
+    } else if (battle->phase == N64GAME_BATTLE_COMMAND) {
+        if (game->battle_move_cursor == N64GAME_MOVE_FINISHER) {
+            text_at(192.0f, 193.0f, STYLE_WARNING, 110.0f, "DUO FINISHER");
+            text_at(192.0f, 207.0f, STYLE_TEXT, 110.0f, "ALL ENEMIES");
+            text_at(192.0f, 221.0f, STYLE_MUTED, 110.0f, "100 RESONANCE");
+        } else {
+            const uint8_t actor = battle->command_actor;
+            const N64GameMoveDef *const move = n64game_move_def(
+                battle->actors[actor].id, game->battle_move_cursor
+            );
+            if (move != NULL) {
+                char power_line[32];
+                (void)snprintf(
+                    power_line, sizeof(power_line), "%s P%u",
+                    affinity_label(move->affinity), (unsigned)move->power
+                );
+                text_at(192.0f, 193.0f, STYLE_ACCENT, 110.0f, power_line);
+                text_at(192.0f, 207.0f, STYLE_TEXT, 110.0f, effect_label(move->effect));
+                text_at(
+                    192.0f, 221.0f, STYLE_MUTED, 110.0f,
+                    target_rule_label(move->target_rule)
+                );
+            }
+        }
+    } else if (battle->phase == N64GAME_BATTLE_PRESENT) {
+        text_at(192.0f, 194.0f, STYLE_ACCENT, 110.0f, "RESOLVING");
+        text_at(192.0f, 214.0f, STYLE_MUTED, 110.0f, "A  NEXT");
     } else {
         text_at(192.0f, 194.0f, STYLE_TEXT, 110.0f, "D-PAD  MOVE\nA  CHOOSE\nB  BACK");
     }
@@ -1645,7 +1831,7 @@ static void draw_name_entry(const N64GameCore *game)
     panel(8, 8, 312, 36);
     draw_resonance_mark(27, 17, RGBA32(240, 184, 90, 255));
     text_at(50.0f, 14.0f, STYLE_ACCENT, 180.0f, "RESONANCE IDENTITY");
-    text_at(239.0f, 14.0f, STYLE_MUTED, 65.0f, "MERIDIAN / 01");
+    text_at(239.0f, 14.0f, STYLE_MUTED, 65.0f, "MR / 01");
 
     panel(8, 42, 105, 198);
     fill_rect(15, 49, 98, 191, RGBA32(34, 55, 66, 255));
@@ -1672,10 +1858,17 @@ static void draw_name_entry(const N64GameCore *game)
     panel(113, 42, 312, 78);
     fill_rect(121, 50, 304, 70, RGBA32(220, 204, 165, 255));
     fill_rect(125, 54, 300, 66, RGBA32(45, 61, 65, 255));
+    if (game->name_default_selected) {
+        fill_rect(128, 55, 180, 65, RGBA32(56, 132, 129, 255));
+    }
     text_at(
-        135.0f, 55.0f, STYLE_ACCENT, 154.0f,
-        game->name_length > 0U ? game->player_name : "ARI"
+        135.0f, 55.0f,
+        game->name_default_selected ? STYLE_SELECTED : STYLE_ACCENT,
+        100.0f, game->name_length > 0U ? game->player_name : "ARI"
     );
+    if (game->name_default_selected) {
+        text_at(245.0f, 55.0f, STYLE_MUTED, 42.0f, "START");
+    }
     fill_rect(
         291, 56, 296, 64,
         game->scene_ticks % 20U < 10U ?

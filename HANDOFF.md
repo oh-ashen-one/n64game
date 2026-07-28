@@ -80,8 +80,13 @@ Implemented:
 - Reproducible public ROM build and corrected Ares keyboard profile
 - Meridian presentation pass for boot, cutscene placeholder, identity entry,
   loading, dialogue, menus, Annex HUD/camera/lighting, and battle targeting/VFX
+- Interaction/readability pass with a real selected `ARI` default, Start
+  confirmation, objective locator, optional-record counter, move information,
+  damage/healing readouts, skippable battle beats, and working finisher VFX
 - Generated identity-screen art-direction target at
   `docs/visual-targets/meridian_identity_target.png` with its prompt and digest
+- Suno-ready Annex music brief and runtime delivery checklist at
+  `docs/MUSIC_HANDOFF.md`
 
 Not yet certified or approved:
 

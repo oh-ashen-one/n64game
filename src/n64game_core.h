@@ -234,6 +234,7 @@ typedef struct {
     bool slice_complete;
     bool paused;
     bool battle_selecting_target;
+    bool name_default_selected;
     bool save_requested;
     bool manual_save_latched;
 } N64GameCore;
