@@ -61,7 +61,7 @@ class VisualBenchmarkReadinessTests(unittest.TestCase):
         self.assertEqual(counts["reviewer_rows"], 3)
         self.assertEqual(counts["reviewer_pass"], 0)
         self.assertEqual(counts["complete_concept_packets"], 1)
-        self.assertEqual(counts["runtime_candidate_rows"], 28)
+        self.assertEqual(counts["runtime_candidate_rows"], 30)
         self.assertEqual(counts["runtime_candidate_missing_files"], 0)
         self.assertEqual(counts["visual_capture_packet_present"], 0)
         self.assertEqual(counts["visual_capture_report_pass"], 0)

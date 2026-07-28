@@ -22,6 +22,9 @@ typedef enum {
 enum {
     SAVE_SETTLE_FRAMES = 2,
     DIGITAL_STICK_THRESHOLD = 48,
+    RUNTIME_AUDIO_FREQUENCY = 22050,
+    RUNTIME_AUDIO_CHANNEL_COUNT = 4,
+    ANNEX_MUSIC_CHANNEL = 0,
 };
 
 typedef struct {
@@ -39,6 +42,69 @@ typedef struct {
     N64GameCertificationTelemetry public_state;
     uint64_t last_frame_us;
 } RuntimeTelemetry;
+
+typedef struct {
+    wav64_t annex_music;
+    float volume;
+    bool playing;
+} RuntimeAudio;
+
+static float approach_volume(float current, float target)
+{
+    const float step = 0.025f;
+    if (current < target) {
+        const float next = current + step;
+        return next < target ? next : target;
+    }
+    if (current > target) {
+        const float next = current - step;
+        return next > target ? next : target;
+    }
+    return current;
+}
+
+static float annex_music_target_volume(N64GameScene scene)
+{
+    if (scene == N64GAME_SCENE_ANNEX) {
+        return 0.68f;
+    }
+    if (scene == N64GAME_SCENE_BATTLE) {
+        return 0.48f;
+    }
+    return 0.0f;
+}
+
+static void runtime_audio_init(RuntimeAudio *runtime)
+{
+    audio_init(RUNTIME_AUDIO_FREQUENCY, 4);
+    mixer_init(RUNTIME_AUDIO_CHANNEL_COUNT);
+    wav64_init_compression(3);
+    wav64_open(&runtime->annex_music, "rom:/audio/mus_annex_exploration.wav64");
+    wav64_set_loop(&runtime->annex_music, true);
+}
+
+static void runtime_audio_update(RuntimeAudio *runtime, N64GameScene scene)
+{
+    const float target = annex_music_target_volume(scene);
+    if (target > 0.0f &&
+        (!runtime->playing || !mixer_ch_playing(ANNEX_MUSIC_CHANNEL))) {
+        wav64_play(&runtime->annex_music, ANNEX_MUSIC_CHANNEL);
+        runtime->playing = true;
+        runtime->volume = 0.0f;
+    }
+    if (!runtime->playing) {
+        return;
+    }
+
+    runtime->volume = approach_volume(runtime->volume, target);
+    mixer_ch_set_vol(
+        ANNEX_MUSIC_CHANNEL, runtime->volume, runtime->volume
+    );
+    if (target == 0.0f && runtime->volume == 0.0f) {
+        mixer_ch_stop(ANNEX_MUSIC_CHANNEL);
+        runtime->playing = false;
+    }
+}
 
 static uint16_t fps_to_x10(float fps)
 {
@@ -333,6 +399,8 @@ int main(void)
         n64game_renderer_finish_init(&renderer),
         "N64GAME renderer allocation failed"
     );
+    RuntimeAudio runtime_audio = {0};
+    runtime_audio_init(&runtime_audio);
 
     N64GameCore game;
     N64GameCore continue_game;
@@ -407,6 +475,8 @@ int main(void)
         const bool save_busy = save_writer.phase != SAVE_WRITE_IDLE ||
             save_writer.pending || eeprom_is_busy();
         const bool save_usable = save_available && !save_writer.faulted;
+        runtime_audio_update(&runtime_audio, game.scene);
+        mixer_try_play();
         runtime_telemetry_sample(&telemetry, &renderer);
         n64game_renderer_draw(
             &renderer,
@@ -417,5 +487,6 @@ int main(void)
             continue_available,
             controller_connected
         );
+        mixer_try_play();
     }
 }

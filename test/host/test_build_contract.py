@@ -66,7 +66,7 @@ class BuildContractTests(unittest.TestCase):
 
     def test_runtime_candidates_are_hash_locked_and_not_approved(self) -> None:
         report = build.validate_runtime_candidates()
-        self.assertEqual(report["runtime_candidate_count"], 28)
+        self.assertEqual(report["runtime_candidate_count"], 30)
         self.assertEqual(report["status"], "SOURCE_CANDIDATE_NOT_GATE_EVIDENCE")
         self.assertEqual(
             [entry["kind"] for entry in report["entries"]],
@@ -78,6 +78,7 @@ class BuildContractTests(unittest.TestCase):
                 "animation_sdata", "animation_sdata", "animation_sdata",
                 "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png", "texture_png",
+                "audio_mp3", "audio_wav",
                 "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png",
                 "model_glb", "texture_png", "texture_png",
@@ -194,6 +195,10 @@ class BuildContractTests(unittest.TestCase):
         self.assertIn("eeprom_write_bytes", source)
         self.assertIn("joypad_is_connected(JOYPAD_PORT_1)", source)
         self.assertIn("n64game_core_update_controller", source)
+        self.assertIn("audio_init(RUNTIME_AUDIO_FREQUENCY, 4)", source)
+        self.assertIn('wav64_open(&runtime->annex_music, "rom:/audio/mus_annex_exploration.wav64")', source)
+        self.assertIn("wav64_set_loop(&runtime->annex_music, true)", source)
+        self.assertGreaterEqual(source.count("mixer_try_play()"), 2)
 
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")
         for object_name in (
@@ -203,6 +208,9 @@ class BuildContractTests(unittest.TestCase):
             "n64game_save.o",
         ):
             self.assertIn(f"$(BUILD_DIR)/{object_name}", makefile)
+        self.assertIn("$(ANNEX_MUSIC)", makefile)
+        self.assertIn("--wav-compress 3 --wav-loop true", makefile)
+        self.assertIn("ANNEX_MUSIC_RUNTIME_MAX_BYTES := 307200", makefile)
 
     def test_quarrune_candidate_uses_exact_reviewed_package_and_dfs_path(self) -> None:
         makefile = (ROOT / "mk" / "rom.mk").read_text(encoding="utf-8")

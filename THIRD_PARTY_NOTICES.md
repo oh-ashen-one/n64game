@@ -103,6 +103,22 @@ The Ares binary is installed outside the repository and is not redistributed wit
 - License: ImageMagick License
 - Use: external decoded-pixel comparison proving that enlarged review captures are exact 4x nearest-neighbor versions of their 320x240 sources; it is not linked into the game ROM
 
+### Suno
+
+- Service: https://suno.com/
+- Use: external generative-music service used to create the user-supplied
+  `Meridian Annex Drift` development candidate
+- Embedded generation ID: `e41f570b-e91d-465a-9dd6-a2200456e9c0`
+- Status: source and derived loop are retained as hash-bound runtime candidates,
+  not approved production audio
+
+The project owner explicitly authorized use of the supplied track in this
+project. Suno account and plan terms can affect downstream usage rights, so
+commercial distribution remains blocked until the owner confirms the terms
+applicable at the recorded generation time. The exact source metadata,
+transformations, and digests are recorded in
+`runtime-candidates/audio/mus.annex_exploration/PROVENANCE.md`.
+
 ## Reference-only projects
 
 Pandemonium and Pokémon XD: Gale of Darkness are reference material only. No code or assets from either project are licensed for inclusion through this notice, and none may be copied into `n64game` without a separately verified legal basis.

@@ -1,17 +1,26 @@
 # Meridian Music Handoff
 
-## First cue to produce
+## Integrated development candidate
 
-Start with `mus.annex_exploration`. It covers the largest uninterrupted stretch
-of the current opening and will improve the game more than a title sting or
-ending cue.
+`Meridian Annex Drift` is now integrated as the user-selected development
+candidate for `mus.annex_exploration`. It begins when the player enters the
+Annex, continues at a lower level during the Resonance battle, and fades out
+when leaving those scenes.
 
 - Intended use: Meridian Research Annex exploration and dialogue
-- Target source duration: 100–140 seconds
-- Runtime form: seamless looping mono asset, generally near 22.05 kHz
+- Supplied source: 85.520167-second stereo 48 kHz MP3
+- Derived loop: 68.080907-second mono 22.05 kHz PCM WAV
+- Runtime form: deterministic looping Opus WAV64
+- Runtime size: 295,040 bytes
 - Mix priority: leave room for UI chirps, dialogue advance sounds, creature
   vocals, and later battle effects
 - Runtime budget: 300 KiB maximum after conversion
+- Provenance and exact transformation record:
+  [`runtime-candidates/audio/mus.annex_exploration/PROVENANCE.md`](../runtime-candidates/audio/mus.annex_exploration/PROVENANCE.md)
+
+The source is a compressed MP3 rather than a lossless master and the finished
+loop is shorter than the eventual 100–140 second production target. Those are
+known candidate limitations, not silently upgraded production claims.
 
 ## Suno prompt
 
@@ -37,15 +46,13 @@ this as the style prompt:
 
 ## Delivery checklist
 
-1. Export or download the highest-quality lossless master available.
-2. Preserve that source outside the runtime directory and record its origin,
-   creation date, and applicable usage rights.
-3. Choose a musically stable 100–140 second section and make a sample-accurate
-   loop; do not merely fade out.
-4. Keep the master stereo, then derive the runtime mono version near 22.05 kHz.
-5. Document loop start/end samples and any removed head or tail silence.
-6. Test the converted asset beneath dialogue and battle/UI effects at native
-   volume before committing it.
+1. Obtain a lossless Suno master if the project owner's account exposes one.
+2. Confirm the generation account/plan grants the required commercial rights.
+3. Complete a native Ares listening pass through exploration, dialogue, and
+   battle at the committed fade levels.
+4. Confirm the seam after at least two uninterrupted loops on native playback.
+5. Revisit the mix when UI, creature, battle, and environmental SFX are added.
+6. Promote the candidate only through the repository's normal audio gates.
 
-Do not add a generated file to the ROM until its provenance, loop, conversion,
-and in-engine playback have been checked.
+The present integration is a hash-locked runtime candidate, not final audio
+approval.

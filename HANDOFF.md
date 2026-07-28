@@ -87,13 +87,17 @@ Implemented:
   `docs/visual-targets/meridian_identity_target.png` with its prompt and digest
 - Suno-ready Annex music brief and runtime delivery checklist at
   `docs/MUSIC_HANDOFF.md`
+- User-selected `Meridian Annex Drift` source preserved with Suno metadata,
+  converted into a seamless 68.08-second mono loop, compressed beneath the
+  300 KiB cap, and integrated with scene-aware exploration/battle fades
 
 Not yet certified or approved:
 
 - Real timed cold-boot 6–8 minute Ares playthrough evidence
 - Complete visual-benchmark capture and independent approval
 - Production approval of the reviewed 3D and texture candidates
-- Final audio and authored cutscene production
+- Remaining music/SFX, commercial-rights confirmation, final native mix
+  approval, and authored cutscene production
 - Independent visual review and any camera/VFX/pacing revisions it identifies
 - Performance, soak, repeated-transition, and physical Nintendo 64 evidence
 

@@ -358,6 +358,18 @@ def validate_runtime_candidates() -> dict[str, Any]:
             "rom:/env/annex/tex_annex_resonance_mask_ia8_32x32.sprite",
         ),
         (
+            "candidate.music.annex.source",
+            "audio_mp3",
+            "runtime-candidates/audio/mus.annex_exploration/meridian_annex_drift.mp3",
+            "source:/audio/mus.annex_exploration/meridian_annex_drift.mp3",
+        ),
+        (
+            "candidate.music.annex.loop",
+            "audio_wav",
+            "runtime-candidates/audio/mus.annex_exploration/mus_annex_exploration.wav",
+            "rom:/audio/mus_annex_exploration.wav64",
+        ),
+        (
             "candidate.chr.player_ari.hero",
             "model_glb",
             "runtime-candidates/chr/player_ari/intermediate/ari_bound.glb",
@@ -457,7 +469,7 @@ def validate_runtime_candidates() -> dict[str, Any]:
         "sha256": sha256_file(RUNTIME_CANDIDATE_PATH),
         "runtime_candidate_count": len(rows),
         "status": RUNTIME_CANDIDATE_STATUS,
-        "scope": "Annex, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates only; not Gate evidence or production approval",
+        "scope": "Annex, Annex music, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates only; not Gate evidence or production approval",
         "entries": rows,
     }
 
@@ -568,7 +580,7 @@ def write_reports(rom_path: Path = ROM_PATH) -> dict[str, Any]:
         f"- Host contract tests: {host_status}\n"
         f"- Ares boot: NOT RUN (separate visual evidence required)\n"
         f"- Runtime production assets: 0 (production approval remains locked)\n"
-        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Annex, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates; not Gate evidence)\n"
+        f"- Runtime candidate inputs: {candidates['runtime_candidate_count']} (Annex, Annex music, Ari, Quarrune, Ayselor, Gyreclast, and Kivarrax in-engine candidates; not Gate evidence)\n"
         f"- Source commit: `{source['commit']}`\n"
         f"- Dirty source tree: `{'yes' if source['dirty'] else 'no'}`\n",
         encoding="utf-8",

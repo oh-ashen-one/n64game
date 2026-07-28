@@ -49,6 +49,13 @@ ANNEX_RUNTIME_CANDIDATES := \
 	$(ANNEX_ARCHITECTURE) \
 	$(ANNEX_TRIM) \
 	$(ANNEX_RESONANCE_MASK)
+ANNEX_MUSIC_SOURCE_DIR := runtime-candidates/audio/mus.annex_exploration
+ANNEX_MUSIC_SOURCE := $(ANNEX_MUSIC_SOURCE_DIR)/mus_annex_exploration.wav
+ANNEX_MUSIC_FILESYSTEM_DIR := filesystem/audio
+ANNEX_MUSIC := $(ANNEX_MUSIC_FILESYSTEM_DIR)/mus_annex_exploration.wav64
+ANNEX_MUSIC_SOURCE_SHA256 := 866bb1856e31ee31ccdd1d62839ab424a0372906b006e2dddd71aa75bbc41239
+ANNEX_MUSIC_RUNTIME_SHA256 := 1e4def610d630060f77f167f0a20f22df525e76088f6a284fb24158838b29176
+ANNEX_MUSIC_RUNTIME_MAX_BYTES := 307200
 ARI_SOURCE_DIR := runtime-candidates/chr/player_ari
 ARI_FILESYSTEM_DIR := filesystem/chr/player_ari
 ARI_MODEL := $(ARI_FILESYSTEM_DIR)/ari.t3dm
@@ -219,6 +226,17 @@ $(ANNEX_RESONANCE_MASK): $(ANNEX_SOURCE_DIR)/filesystem/env/annex/tex_annex_reso
 	$(N64_MKSPRITE) --format IA8 --tiles 32,32 --mipmap NONE --dither NONE --compress 0 -o $(dir $@) "$<"
 	@test -f "$@"
 
+$(ANNEX_MUSIC): $(ANNEX_MUSIC_SOURCE)
+	@mkdir -p $(dir $@)
+	@echo "    [AUDIO-CANDIDATE] $@"
+	$(call VERIFY_REVIEWED_CANDIDATE,$<,$(ANNEX_MUSIC_SOURCE_SHA256))
+	$(N64_AUDIOCONV) --wav-mono --wav-resample 22050 --wav-compress 3 --wav-loop true -o $(ANNEX_MUSIC_FILESYSTEM_DIR) "$<"
+	@test -f "$@"
+	@echo "$(ANNEX_MUSIC_RUNTIME_SHA256)  $@" | sha256sum -c -
+	@actual_size=$$(stat -c %s "$@"); \
+		test "$$actual_size" -le "$(ANNEX_MUSIC_RUNTIME_MAX_BYTES)" || \
+		{ echo "$@: $$actual_size bytes exceeds $(ANNEX_MUSIC_RUNTIME_MAX_BYTES)" >&2; exit 1; }
+
 $(ARI_MODEL): $(ARI_SOURCE_DIR)/intermediate/ari_bound.glb | $(T3D_GLTF_TO_3D)
 	@mkdir -p $(dir $@)
 	@echo "    [T3D-CANDIDATE] $@"
@@ -286,6 +304,7 @@ $(BUILD_DIR)/$(ROM_NAME).dfs: \
 	$(QUARRUNE_RUNTIME_CANDIDATES) \
 	$(AYSELOR_RUNTIME_CANDIDATES) \
 	$(ANNEX_RUNTIME_CANDIDATES) \
+	$(ANNEX_MUSIC) \
 	$(ARI_RUNTIME_CANDIDATES) \
 	$(GYRECLAST_RUNTIME_CANDIDATES) \
 	$(KIVARRAX_RUNTIME_CANDIDATES)
