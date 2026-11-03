@@ -2,7 +2,7 @@ Create and pursue one persistent goal: deliver the complete public `oh-ashen-one
 
 Before planning, delegating, editing, generating assets, or claiming status, read this entire file:
 
-`/Users/midir/Documents/New project 8/docs/N64GAME_MASTER_SPEC.md`
+`docs/N64GAME_MASTER_SPEC.md`
 
 Public fallback:
 

@@ -11,7 +11,7 @@ Create a polished, original-IP Nintendo 64 game with a genuine 6–8 minute firs
 The public repository is:
 
 - GitHub: `https://github.com/oh-ashen-one/n64game`
-- Local checkout: `/Users/midir/Documents/New project 8`
+- Local checkout: `<repo-root>`
 - Default branch: `main`
 - Visibility: public
 
