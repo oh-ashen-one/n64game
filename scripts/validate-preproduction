@@ -1073,7 +1073,7 @@ end
 goal = read("docs/N64GAME_GOAL_PROMPT.md")
 goal_chars = goal.each_char.count
 error("goal prompt is #{goal_chars} characters; limit is 4000") unless goal_chars < 4000
-error("goal prompt omits local master-spec path") unless goal.include?("/Users/midir/Documents/New project 8/docs/N64GAME_MASTER_SPEC.md")
+error("goal prompt omits repository-relative master-spec path") unless goal.include?("`docs/N64GAME_MASTER_SPEC.md`")
 error("goal prompt omits public master-spec fallback") unless goal.include?("https://raw.githubusercontent.com/oh-ashen-one/n64game/main/docs/N64GAME_MASTER_SPEC.md")
 
 readme = read("README.md")

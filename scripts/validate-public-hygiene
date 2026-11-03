@@ -3,6 +3,7 @@
 
 require "digest"
 require "fileutils"
+gem "json", "2.19.2" if ENV["N64GAME_CI"] == "1"
 require "json"
 require "open3"
 require "pathname"
@@ -316,9 +317,21 @@ end
 
 def parse_toolchain_lock(bytes)
   text = strict_utf8_text(bytes, TOOLCHAIN_LOCK_PATH)
-  JSON.parse(text, object_class: DuplicateRejectingHash, create_additions: false)
+  version = Gem::Version.new(JSON::VERSION)
+  # GHSA-3m6g-2423-7cp3: affected native duplicate-key errors are unsafe.
+  if version >= Gem::Version.new("2.14.0") && version < Gem::Version.new("2.19.2") &&
+     !%w[2.15.2.1 2.17.1.2].include?(JSON::VERSION)
+    raise ArgumentError, "#{TOOLCHAIN_LOCK_PATH} requires a patched json gem; active #{JSON::VERSION}, install 2.19.2 or newer"
+  end
+
+  options = { object_class: DuplicateRejectingHash, create_additions: false }
+  # New json parsers collapse duplicate keys before invoking object_class.
+  # Older parsers still invoke DuplicateRejectingHash#[]=.
+  options[:allow_duplicate_key] = false if version >= Gem::Version.new("2.13.0")
+  JSON.parse(text, **options)
 rescue JSON::ParserError, DuplicateJsonKeyError => error
-  raise ArgumentError, "#{TOOLCHAIN_LOCK_PATH} is malformed: #{error.message}"
+  message = error.message.sub(/\Aduplicate key\b/, "duplicate JSON key")
+  raise ArgumentError, "#{TOOLCHAIN_LOCK_PATH} is malformed: #{message}"
 end
 
 def safe_https_repository_url?(value)
@@ -1104,6 +1117,29 @@ def run_public_hygiene_self_tests
 
     assertions << label
   end
+  # Check runtime safety before sending any duplicate-key fixtures to JSON.
+  parse_toolchain_lock(fixture_toolchain_lock_bytes)
+  {
+    "top-level" => '{"x":1,"x":2}',
+    "nested" => '{"outer":{"x":1,"x":2}}',
+    "array-nested" => '{"items":[{"x":1,"x":2}]}',
+    "escaped-equivalent" => '{"x":1,"\u0078":2}',
+    "percent-sign" => '{"percent%s":1,"percent%s":2}',
+    "escaped-percent" => '{"%s":1,"\u0025s":2}'
+  }.each do |label, duplicate_json|
+    rejected = false
+    begin
+      parse_toolchain_lock(duplicate_json)
+    rescue ArgumentError => error
+      rejected = error.message.include?("duplicate JSON key")
+    end
+    assert.call(rejected, "rejects #{label} duplicate JSON object keys")
+  end
+  valid_json = '{"x":1,"outer":{"x":2},"percent%s":3}'
+  valid_lock = parse_toolchain_lock(valid_json)
+  assert.call(valid_lock["x"] == 1 && valid_lock["outer"]["x"] == 2 && valid_lock["percent%s"] == 3,
+              "accepts distinct objects and a unique percent-sign key")
+
   token = "gh" + "p_" + ("A" * 36)
 
   assert.call(
@@ -1894,6 +1930,8 @@ def run_public_hygiene_self_tests
 
   puts "Public-hygiene self-test passed: #{assertions.length} isolated content/history/index/worktree fixtures."
 end
+
+puts "Public hygiene runtime: Ruby #{RUBY_VERSION}; json #{JSON::VERSION}"
 
 if ARGV == ["--self-test-public-hygiene"]
   run_public_hygiene_self_tests

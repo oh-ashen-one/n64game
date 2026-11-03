@@ -39,6 +39,12 @@ jobs:
       - name: Install locked libdragon CLI
         run: npm ci --ignore-scripts
 
+      - name: Install patched JSON parser for source validation
+        run: |
+          ruby -rjson -e 'puts "Runner Ruby #{RUBY_VERSION}; initial json #{JSON::VERSION}"'
+          gem install --user-install json --version 2.19.2 --platform ruby --no-document
+          ruby -e 'gem "json", "2.19.2"; require "json"; puts "Pinned json #{JSON::VERSION}"'
+
       - name: Validate source contracts
         run: make validate
 
